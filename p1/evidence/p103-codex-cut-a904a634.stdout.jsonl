@@ -1,0 +1,13 @@
+{"type":"thread.started","thread_id":"01a0be73-d4a5-7231-9976-75f2bef3e451"}
+{"type":"item.completed","item":{"id":"item_0","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"item.completed","item":{"id":"item_1","type":"error","message":"`--dangerously-bypass-hook-trust` is enabled. Enabled hooks may run without review for this invocation."}}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"요청한 순서대로 셸 명령을 하나씩 따로 실행하겠습니다.\n"}}
+{"type":"item.started","item":{"id":"item_3","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath a.txt -Value 'a' -NoNewline\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_3","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath a.txt -Value 'a' -NoNewline\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_4","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath b.txt -Value 'b' -NoNewline\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_4","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath b.txt -Value 'b' -NoNewline\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_5","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath c.txt -Value 'c' -NoNewline\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_5","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Set-Content -LiteralPath c.txt -Value 'c' -NoNewline\"","aggregated_output":"","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_6","type":"agent_message","text":"세 명령을 순서대로 하나씩 별도로 실행했습니다. `a.txt`, `b.txt`, `c.txt`에 각각 `a`, `b`, `c`를 썼습니다."}}
+{"type":"turn.completed","usage":{"input_tokens":66039,"cached_input_tokens":61952,"cache_write_input_tokens":0,"output_tokens":201,"reasoning_output_tokens":0}}

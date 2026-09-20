@@ -1,0 +1,71 @@
+{
+  "run_id": "p103-codex-cut-a904a634",
+  "tool_id": "codex",
+  "mode": "exec",
+  "permission_requested": "workspace_write",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\codex.CMD",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-C",
+    "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+    "--sandbox",
+    "workspace-write",
+    "--dangerously-bypass-hook-trust"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 19.09,
+  "stdout_lines": 13,
+  "stderr_lines": 1,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "run_started": 1,
+    "assistant_message": 2,
+    "tool_call_started": 3,
+    "tool_call_finished": 3,
+    "usage_reported": 1,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [
+    "item.completed"
+  ],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "?? .codex/",
+    "status_after": "?? .codex/\n?? a.txt\n?? b.txt\n?? c.txt",
+    "changed": true
+  },
+  "session_ref": "01a0be73-d4a5-7231-9976-75f2bef3e451",
+  "permission_decisions": [],
+  "gate_hook": {
+    "config": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo\\.codex\\hooks.json",
+    "hook_log": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-codex-cut-a904a634.hooklog.jsonl",
+    "state_file": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-codex-cut-a904a634.connection",
+    "final_state": "disconnected",
+    "hook_invocations": 0
+  },
+  "disconnect_injection": {
+    "injected_at": 1789901663.88823,
+    "after_tool_calls": 1
+  },
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 66039,
+      "cached_input_tokens": 61952,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 201,
+      "reasoning_output_tokens": 0
+    },
+    "cost_usd": "not_reported"
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-codex-cut-a904a634.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-codex-cut-a904a634.stderr.log"
+}

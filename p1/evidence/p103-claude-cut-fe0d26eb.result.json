@@ -1,0 +1,101 @@
+{
+  "run_id": "p103-claude-cut-fe0d26eb",
+  "tool_id": "claude",
+  "mode": "print",
+  "permission_requested": "workspace_write",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "acceptEdits",
+    "--permission-prompts",
+    "none",
+    "--strict-mcp-config",
+    "--settings",
+    "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.settings.json",
+    "--include-hook-events"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 19.2,
+  "stdout_lines": 26,
+  "stderr_lines": 0,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "assistant_message": 2,
+    "tool_call_started": 3,
+    "usage_reported": 2,
+    "tool_call_finished": 3,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [
+    "system:hook_response",
+    "system:hook_started"
+  ],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "",
+    "status_after": "?? a.txt",
+    "changed": true
+  },
+  "session_ref": "502c5c55-0d54-42b6-8e0d-1de3fe142cc4",
+  "permission_decisions": [],
+  "gate_hook": {
+    "config": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.settings.json",
+    "hook_log": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.hooklog.jsonl",
+    "state_file": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.connection",
+    "final_state": "disconnected",
+    "hook_invocations": 3
+  },
+  "disconnect_injection": {
+    "injected_at": 1789901945.0974395,
+    "after_tool_calls": 1
+  },
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 8,
+      "cache_creation_input_tokens": 542,
+      "cache_read_input_tokens": 95654,
+      "output_tokens": 1216,
+      "output_tokens_details": {
+        "thinking_tokens": 485
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 542,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 635,
+          "cache_read_input_tokens": 24084,
+          "cache_creation_input_tokens": 453,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 453
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "cost_usd": 0.083687
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-fe0d26eb.stderr.log"
+}

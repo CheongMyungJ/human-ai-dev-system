@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\p103-claude-cut-3a8561c4.hook.cmd",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

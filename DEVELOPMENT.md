@@ -15,15 +15,15 @@
 | 저장소 | https://github.com/CheongMyungJ/human-ai-dev-system — 비공개 |
 | 기본 작업 디렉터리 | `C:\git\human-ai-dev-system-design` |
 | 설계 기준 | v0.6, 사용자 결정 D-01~58 |
-| 전체 개발 상태 | **제품 코드 미착수**. 설계 문서, 개발 안내서, P1-01 계약 초안, P1-02 실증용 harness와 실행 증거까지 준비됨 |
+| 전체 개발 상태 | **제품 코드 미착수**. 설계 문서, 개발 안내서, P1-01 계약 초안, P1-02·P1-03 실증용 harness와 실행 증거까지 준비됨 |
 | 현재 단계 | **P1 — CLI 연결 검증** |
 | 현재 단계 상태 | `IN_PROGRESS` |
-| 다음 하위 작업 | **P1-03 — 중지·복구 실증** (P1-01·P1-02 완료) |
-| 활성 plan | `P1-PLAN-01` — 아래 [활성 plan](#활성-plan) 참조. 1~14번 완료, P1-03/04는 계획 갱신 후 착수 |
-| 마지막 구현 검증 | 2026-09-20 — Codex 0.154.0·Claude Code 2.1.278로 읽기·쓰기·권한 거절·세션 분리 실행 증거 확보. [P1-02 결과](p1/evidence/P1-02-results.md) |
+| 다음 하위 작업 | **P1-04 — OpenCode 문서 계약·결론** (P1-01~03 완료) |
+| 활성 plan | `P1-PLAN-01` — 아래 [활성 plan](#활성-plan) 참조. 1~15번 완료, 16번(P1-04) 대기 |
+| 마지막 구현 검증 | 2026-09-20 — 읽기·쓰기·권한 거절·세션 분리([P1-02](p1/evidence/P1-02-results.md))와 단절 시 다음 호출 차단([P1-03](p1/evidence/P1-03-results.md))을 두 CLI에서 실제 실행으로 확인 |
 | 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함 |
 | 필요한 사용자 결정 | 현재 없음. 실제 호환성 제약·설치 필요·제품 정책 변경이 드러나면 구체적으로 질문 |
-| 다음 세션 첫 행동 | 시작 절차 → [P1-02 결과](p1/evidence/P1-02-results.md) 8절의 미검증 목록 확인 → `P1-PLAN-01`에 P1-03 실행 순서를 추가한 뒤 중지·복구 실증 |
+| 다음 세션 첫 행동 | 시작 절차 → [P1-03 결과](p1/evidence/P1-03-results.md) 7절의 잔여 항목 확인 → `P1-PLAN-01` 16번(P1-04 OpenCode 문서 계약)을 구체화해 수행 |
 
 위 표는 시작 시점의 기록이다. **이 표만 믿지 말고 실제 Git 상태·코드·검증 증거와 대조한다.** 코드가 이미 있는데 구현 미착수로 표시되거나, 이전 세션이 끝나지 않은 상태면 중복 구현하지 말고 먼저 상태를 복구한다.
 
@@ -54,8 +54,8 @@
 
 ```text
 Plan ID: P1-PLAN-01
-단계 / 이번 세션 하위 작업: P1 — CLI 연결 검증 / P1-01 환경·계약(완료), P1-02 실증(완료)
-작성·수정 시점: 2026-09-20 작성, 같은 날 P1-02 수행 결과로 갱신
+단계 / 이번 세션 하위 작업: P1 — CLI 연결 검증 / P1-01 환경·계약(완료), P1-02 실증(완료), P1-03 중지·복구(완료)
+작성·수정 시점: 2026-09-20 작성, 같은 날 P1-02·P1-03 수행 결과로 갱신
 기준 Git 브랜치·커밋 / 기존 미커밋 변경:
   main / 815f3f3 "docs: add plan-first development guide for staged sessions"
   시작 시 작업 트리 clean. 사용자 미커밋 변경 없음
@@ -68,7 +68,8 @@ Plan ID: P1-PLAN-01
   P1-02 임시 시험 저장소에서의 최소 실행 harness와 실제 호출 증거
 제외 범위:
   제품 UI·업무 엔진·DB 구현(P2), GitHub 쓰기(P5), 사용자 실제 프로젝트 변경,
-  CLI·계정의 설치·로그인·설정 변경, OpenCode 설치, 도구 경계 정지 실증(P1-03)
+  CLI·계정의 설치·로그인·설정 변경, OpenCode 설치, 사용자 전역 CLI 설정 변경,
+  재연결·재개 실증(P2 이후)
 적용 결정·요구사항 ID: FR-28, FR-29(별도 검토 세션), NFR-07, NFR-08, D-42·44(신뢰 모드 한계), D-45(CLI 교체 확인), D-53
 읽은 근거 / 확인한 사실 / 아직 검증할 가정:
   읽음: cli-pause-feasibility.md, review-tech-findings.md, execution-workspace-review.md, FR-28, NFR-07/08
@@ -106,14 +107,28 @@ Plan ID: P1-PLAN-01
  13. [완료] P1-02-f: 권한 경계 확인 — 허용 밖 경로 쓰기를 요청했을 때의 실제 결과 관찰
  14. [완료] P1-02-g: capability 표를 실측으로 갱신(doc_only → verified/unsupported)하고
      실패·거절 사례도 함께 기록
- 15. [대기] P1-03 중지·복구 실증. 착수 전에 아래 순서를 이 plan에 확정해 기록한다.
-     (가) 단절 신호를 harness가 관측할 수 있는 지점 확인 — 현재 harness는 CLI를 한 번 실행하고
-          스트림만 읽으므로 "다음 호출 차단" 제어 지점이 없다. Codex hooks/app-server,
-          Claude PreToolUse 중 어느 경로를 쓸지 먼저 정한다
-     (나) 도구 A 실행 중 단절 → A 결과 보존 → B 미시작을 이벤트 시각으로 확인
-     (다) 강제 종료와 안전 중지 구분, `.cmd` 진입점 경유 프로세스 트리 확인
-     (라) 재연결 후 결과 대조로 중복 실행이 없는지 확인
-     (마) 미지원 경로는 capability 표에 unsupported로 명시하고 기능 지원을 보류
+ 15. [완료] P1-03 중지·복구 실증 — 결과: p1/evidence/P1-03-results.md
+     제어 지점 선택과 근거:
+       Codex  → 저장소 로컬 `<repo>/.codex/hooks.json`의 PreToolUse.
+                사용자 전역 `~/.codex/config.toml`을 바꾸지 않아도 되고,
+                설치 바이너리에 PreToolUse·hooks.json 식별자가 실재함을 확인했다.
+                제약: 비관리 hook은 신뢰 승인이 필요하다. 비대화식에서는
+                `--dangerously-bypass-hook-trust`가 필요한지 실측하고, 필요하면 제약으로 기록한다
+       Claude → `--settings` JSON의 PreToolUse 훅. 세션 한정이라 사용자 설정을 바꾸지 않는다.
+                `--include-hook-events`로 훅 수명주기를 스트림에서 함께 관측한다
+       app-server 경로는 이번에 쓰지 않는다. 두 CLI에 공통으로 적용 가능한 최소 경로를 먼저 검증한다
+     15-a [완료] 연결 상태 파일과 gate hook 구현(p1/harness/gate_hook.py).
+          상태가 disconnected면 PreToolUse에서 거부하고, 모든 호출의 시각·도구·판정을 로그로 남긴다
+     15-b [완료] harness에 실시간 감시 추가 — 이벤트 스트림에서 tool_call_finished를 N회 관측하면
+          연결 상태 파일을 disconnected로 바꾸고 그 시각을 기록한다(단절 주입)
+     15-c [완료] 순차 3단계 작업(a.txt → b.txt → c.txt 생성)을 시키고 1회차 완료 직후 단절 주입.
+          **부수효과로 검증한다: a.txt는 있고 b.txt·c.txt는 없어야 한다**
+     15-d [완료] 훅 없이 같은 작업을 실행해 대조군을 만든다(세 파일 모두 생성되는지)
+     15-e [완료] 강제 종료 대조 — 장시간 실행 중 harness가 자식을 종료했을 때
+          `.cmd` 진입점 아래 실제 CLI 프로세스와 그 자식이 함께 끝나는지 확인.
+          안전 중지와 강제 종료를 같은 지원 수준으로 표시하지 않는다
+     15-f [완료] 결과를 capability 표에 반영. 미지원 경로는 unsupported로 명시하고
+          해당 기능의 지원을 보류한다. 재연결 대조는 범위 밖이면 미검증으로 남긴다
  16. [대기] P1-04 OpenCode 문서 계약·결론. 설치하지 않고 공식 문서 기준의 계약·fixture만 작성
 성공 기준:
   AC-1: 세 CLI의 설치·버전·경로·인증 구성 상태가 확인 방법과 함께 기록되고,
@@ -124,6 +139,9 @@ Plan ID: P1-PLAN-01
   AC-4: P1-02~04의 실증 계획이 이 문서에 남아 다음 세션이 재계획 없이 이어갈 수 있다
   AC-5(P1-02): 두 CLI 각각에 대해 읽기·작은 변경·구조화 결과·세션 분리의 실제 실행 증거가 있고,
         성공/실패/권한 질문이 구분되며 종료 코드만으로 성공을 판정하지 않는다
+  AC-6(P1-03): 단절 주입 후 **다음 도구 호출이 실제로 시작되지 않았음**을 부수효과로 확인한다.
+        이미 시작한 호출의 결과는 보존된다. 지원되지 않는 CLI·경로는 unsupported로 표시하고
+        프롬프트 지시나 프로세스 종료를 안전 중지와 같은 지원 수준으로 적지 않는다
 검증 방법:
   AC-1 → `Get-Command -All`, `<tool> --version`, `npm ls -g --depth=0`, `winget list`,
          `Test-Path` 후보 경로, `codex doctor` / `claude doctor`.
@@ -134,6 +152,9 @@ Plan ID: P1-PLAN-01
   AC-4 → 같은 문서 9절과 이 plan의 15~16번 항목
   AC-5 → 실제 명령·출력·git diff·세션 식별자를 증거로 기록.
          결과: p1/evidence/P1-02-results.md 와 같은 디렉터리의 run별 result.json / stdout.jsonl
+  AC-6 → 시험 저장소에서 파일 존재 여부로 판정(a.txt 있음 / b.txt·c.txt 없음).
+         대조군(훅 없음)에서는 세 파일이 모두 생기는지 확인해 훅이 원인임을 보인다.
+         gate hook 로그의 호출별 시각·도구·판정과 이벤트 스트림 시각을 함께 남긴다
 실패·중단 시 상태 보존과 복구 방법:
   P1-01 산출물은 문서뿐이므로 커밋으로 보존한다. 사용자 작업 트리는 건드리지 않는다.
   P1-02는 시스템 임시 경로의 시험 저장소만 사용하고, 중단 시 그 경로와 남은 프로세스를 인계에 기록한다.
@@ -151,7 +172,7 @@ Plan ID: P1-PLAN-01
 
 | 단계 | 상태 | 다음 하위 작업 | 완료 증거·인계 |
 |---|---|---|---|
-| P1 CLI 연결 검증 | IN_PROGRESS | P1-03 | P1-01·P1-02 완료 — [계약 초안](p1-environment-contract.md), [P1-02 실증 결과](p1/evidence/P1-02-results.md), `P1-PLAN-01` |
+| P1 CLI 연결 검증 | IN_PROGRESS | P1-04 | P1-01~03 완료 — [계약 초안](p1-environment-contract.md), [P1-02 결과](p1/evidence/P1-02-results.md), [P1-03 결과](p1/evidence/P1-03-results.md), `P1-PLAN-01` |
 | P2 최소 업무 흐름 | PENDING | P2-01 | 없음 |
 | P3 기능 개발 흐름 | PENDING | P3-01 | 없음 |
 | P4 품질·다양한 업무 | PENDING | P4-01 | 없음 |
@@ -170,7 +191,7 @@ Plan ID: P1-PLAN-01
 |---|---|---|
 | P1-01 환경·계약 — **DONE** | Python·Git·CLI의 실제 위치/버전/사용 가능 여부 조사, 공통 실행 입력·이벤트·결과·능력표 초안 | PATH 조회 실패와 미설치를 구분. OS/버전/확인 방법 기록. 인증 비밀값 없이 실행 가능 여부 표시. 아래 실증의 plan 작성 → 결과: [p1-environment-contract.md](p1-environment-contract.md), `P1-PLAN-01` |
 | P1-02 Codex·Claude 실증 — **DONE** | 기존 설치·인증을 사용한 최소 실행 harness, 임시 시험 저장소에서 읽기·작은 변경·구조화 결과·별도 세션 확인 | 두 도구 각각 실제 실행 증거. 성공/실패/권한 질문/세션 식별을 구별하고 작성·검토 세션이 분리됨. 명령 반환 코드만으로 성공 판정하지 않음 → 결과: [P1-02 실증 결과](p1/evidence/P1-02-results.md), harness [`p1/harness/run_cli.py`](p1/harness/run_cli.py) |
-| P1-03 중지·복구 실증 | 도구 A 실행 중 단절 감지 → A 종료 → B 호출 보류 → 연결 회복 후 대조. 취소·프로세스 종료·자식 활동도 확인 | 지원 모드에서 B가 시작되지 않는 증거. 미지원 경로는 명확히 표시. 지연 이벤트·응답 유실에서 중복 호출하지 않음. 강제 종료와 안전 중지를 혼동하지 않음 |
+| P1-03 중지·복구 실증 — **DONE(부분)** | 도구 A 실행 중 단절 감지 → A 종료 → B 호출 보류 → 연결 회복 후 대조. 취소·프로세스 종료·자식 활동도 확인 | 지원 모드에서 B가 시작되지 않는 증거. 미지원 경로는 명확히 표시. 지연 이벤트·응답 유실에서 중복 호출하지 않음. 강제 종료와 안전 중지를 혼동하지 않음 → 결과: [P1-03 결과](p1/evidence/P1-03-results.md). **차단·강제 종료 구분은 확인했고 재연결 대조·병렬 호출·훅 적용 공백은 미검증**이다 |
 | P1-04 OpenCode 문서 계약·결론 | 일관된 공식 버전의 어댑터 계약·응답 fixture/계약 시험, 세 도구 capability 표와 P2에서 사용할 연결 방식 | OpenCode를 설치/실행한 것으로 표시하지 않음. 문서 계약 검증과 실증 미완료 분리. 필수 능력의 공백·대안·후속 작업 명시 |
 
 **제외:** 제품 전체 UI·업무 엔진, GitHub 쓰기, 실제 사용자 프로젝트 변경, 계정/도구의 무단 설치·로그인 설정 변경. OpenCode 설치는 현재 범위에 넣지 않는다.
@@ -288,16 +309,20 @@ Plan ID: P1-PLAN-01
 
 ```text
 세션 기록 ID / 수행 시점: S-002 / 2026-09-20
-작업 단계·하위 작업 / 사용한 Plan ID: P1 — CLI 연결 검증 / P1-01 환경·계약 + P1-02 실증 / P1-PLAN-01
+작업 단계·하위 작업 / 사용한 Plan ID: P1 — CLI 연결 검증 / P1-01 + P1-02 + P1-03 / P1-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD 815f3f3.
-  커밋 b642da2(P1-01 문서) 이후 P1-02 커밋 1건. push 없음(origin/main 보다 앞섬)
+  커밋 b642da2(P1-01), 1fbfe51·03b7664(P1-02), 그리고 P1-03 커밋.
+  사용자 승인으로 origin/main 에 push 함(815f3f3..03b7664). 이후 P1-03 커밋은 별도 확인 대상
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함
 구현·변경 내용:
   p1-environment-contract.md 신규 — 환경·CLI·인증 실측, 권한 차이 관측,
     공통 실행 계약 초안 v0(입력·이벤트·결과), capability 표(P1-02 실측 반영)
-  p1/harness/run_cli.py 신규 — P1 실증용 최소 실행 harness(제품 코드 아님)
-  p1/evidence/ 신규 — 실행 증거 12건(result.json, stdout.jsonl, stderr.log)과 P1-02-results.md
+  p1/harness/run_cli.py 신규 — P1 실증용 최소 실행 harness(제품 코드 아님).
+    P1-03에서 gate hook 설치, 단절 주입 감시 스레드, 훅 결정 수집을 추가
+  p1/harness/gate_hook.py 신규 — PreToolUse 훅. 연결 상태를 보고 허용/거부하고 결정을 로그로 남김.
+    상태를 읽지 못하면 거부한다(fail-closed)
+  p1/evidence/ 신규 — 실행 증거 18건과 P1-02-results.md, P1-03-results.md
   DEVELOPMENT.md — 현재 상태표, 활성 plan P1-PLAN-01, 단계 진행표, P1 참조, 인계·이력
 성공 기준별 결과:
   AC-1 통과 — 세 CLI 상태와 확인 방법 기록. OpenCode는 PATH 미조회가 아니라
@@ -307,33 +332,46 @@ Plan ID: P1-PLAN-01
   AC-4 통과 — P1-03/04 실행 순서를 plan 15~16번에 기록
   AC-5 통과 — 두 CLI 각각 읽기·쓰기·권한 거절·세션 분리의 실제 실행 증거 확보.
     종료 코드만으로 완료를 판정하지 않음을 실제 사례(#7·#8)로 확인
+  AC-6 통과(조건부) — 단절 주입 후 두 CLI 모두 a.txt만 생성되고 b·c는 생성되지 않음.
+    대조군(훅 없음)에서는 세 파일 모두 생성. 조건: Codex는 훅 명령에 따옴표가 있으면 조용히
+    실행되지 않고 비대화식에서 --dangerously-bypass-hook-trust 가 필요했으며,
+    Claude는 훅 실패 시 호출이 그대로 진행된다(fail-open).
+    강제 종료는 안전 중지가 아님을 프로세스 잔류로 별도 확인
 실행한 검증 명령·환경·결과·증거 위치:
   PowerShell 7.6.6 / Windows 11 Home 10.0.26200 / Python 3.12.10
   환경 조사: Get-Command -All, --version, py -0, npm ls -g, winget list, Test-Path,
     codex doctor, claude doctor, codex/claude --help
   실증: python p1/harness/run_cli.py --tool {codex|claude} --mode {exec|print}
     --workspace %LOCALAPPDATA%\Temp\hads-p1\testrepo --permission {read_only|workspace_write} ...
-    총 15회 실행(그중 12회 증거 보존). git diff로 실제 코드 변경 확인
-  증거: p1/evidence/P1-02-results.md(요약) + 같은 디렉터리의 run별 원문 파일
+    [--gate-hook --disconnect-after-tool-calls 1] 를 더해 P1-03 수행.
+    P1-02 15회 + P1-03 6회 실행. git diff와 파일 존재 여부로 실제 효과 확인
+  증거: p1/evidence/P1-02-results.md, P1-03-results.md + 같은 디렉터리의 run별 원문 파일
+    (stdout.jsonl, hooklog.jsonl, settings.json, connection, result.json)
 변경 검토 결과 / 남은 위험:
   변경 diff 검토함. 비밀값·토큰·계정 식별자 없음. 증거 파일에는 토큰 수·비용만 포함
   남은 위험 (1) 두 CLI 모두 자동 업데이트가 켜져 있어 실증 결과의 유효 버전이 이동한다
   (2) Claude가 `--permission-mode manual` 요청에 `default`로 보고하는 불일치 미해결
+      (`acceptEdits`는 그대로 보고되므로 manual 고유 문제로 좁혀짐)
   (3) `--tools` 제한이 MCP 도구를 포함하지 않음 — 현재는 `--strict-mcp-config`로 대응
   (4) python(3.12)과 py 런처(3.14)의 기본 버전이 달라 P2-01에서 런타임을 고정해야 한다
-  (5) residual_activity는 전 구간 unknown. 자식·백그라운드 활동 추적은 아직 없음
+  (5) residual_activity는 전 구간 unknown. 강제 종료 시 자식 프로세스가 실제로 잔류함을 확인했고
+      프로세스 트리 단위 종료는 아직 구현하지 않았다
+  (6) 안전 중지가 훅 하나에 의존한다. Claude의 fail-open과 Codex의 훅 신뢰 요구가 모두
+      제품 설계에서 해소되어야 한다
 새 사용자 결정·연결한 설계 변경: 없음. 기존 FR-28·NFR-07/08·D-42/44/45/53 범위 안에서 수행
 남은 프로세스·실험 저장소·외부 게시 상태:
-  남은 프로세스 없음. 외부 게시·push 없음.
+  남은 프로세스 없음. P1-03 강제 종료 시험에서 잔류한 codex.exe(19996)·pwsh.exe(504)는 확인 후 종료함.
+  외부 게시 없음. origin/main push 1회(사용자 승인, 03b7664까지).
   시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 그대로 둠(calc.py에 mul() 미커밋 변경 있음).
   원본 증거는 같은 경로의 evidence\. 임시 경로이므로 필요한 증거는 저장소로 복사해 두었다
 단계 완료 여부와 이유:
-  P1 미완료. P1-01·P1-02는 DONE이나 P1-03(중지·복구)·P1-04(OpenCode 계약)가 남았다.
-  특히 P1의 핵심인 "다음 호출 차단"은 아직 어느 CLI에서도 unknown이다
+  P1 미완료. P1-01·P1-02 DONE, P1-03은 부분 DONE(차단·강제 종료 구분은 확인, 재연결 대조·병렬
+  호출·훅 적용 공백은 미검증), P1-04(OpenCode 문서 계약)는 미착수.
+  핵심 요구인 "다음 호출 차단"은 두 CLI에서 verified가 되었으나 조건부다
 다음 단계·하위 작업 / 다음 세션 첫 명령 또는 읽을 위치:
-  P1-03 중지·복구 실증. p1/evidence/P1-02-results.md 8절과 P1-PLAN-01 15번을 읽고
-  제어 지점(Codex hooks/app-server 또는 Claude PreToolUse)을 먼저 정한 뒤 계획을 확정한다.
-  현재 harness는 CLI를 한 번 실행하고 스트림만 읽으므로 제어 지점이 없다 — 구조 확장이 필요하다
+  P1-04 OpenCode 문서 계약·결론. p1/evidence/P1-03-results.md 7절과 P1-PLAN-01 16번을 읽고
+  공식 문서 기준의 어댑터 계약·응답 fixture·계약 시험을 만든다. **설치·실행하지 않는다.**
+  이어서 P1 전체 완료 조건을 점검하고, 남은 미검증 항목을 P2로 넘길지 사용자에게 제시한다
 막힌 조건과 필요한 사용자 답변: 없음
 ```
 
@@ -362,7 +400,7 @@ Plan ID: P1-PLAN-01
 | 세션 | 시점 | 단계·하위 작업 | 결과 요약 |
 |---|---|---|---|
 | S-001 | 2026-09-20 | 설계 정리 | 설계 v0.6 문서와 이 안내서 준비. 제품 코드·실증 없음 |
-| S-002 | 2026-09-20 | P1-01 환경·계약, P1-02 실증 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0 작성, `P1-PLAN-01` 기록. 이어서 harness로 두 CLI의 읽기·쓰기·권한 거절·세션 분리를 실제 실행해 capability 표를 실측으로 갱신. 중지·복구(P1-03)와 OpenCode 계약(P1-04) 이월 |
+| S-002 | 2026-09-20 | P1-01 환경·계약, P1-02 실증, P1-03 중지·복구 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0와 `P1-PLAN-01` 기록. harness로 두 CLI의 읽기·쓰기·권한 거절·세션 분리를 실제 실행. 이어서 PreToolUse 훅으로 단절 주입 시험을 해 **다음 도구 호출이 실제로 시작되지 않음**을 부수효과로 확인하고, 강제 종료가 안전 중지가 아님을 프로세스 잔류로 확인. OpenCode 계약(P1-04)과 재연결 대조 이월 |
 
 안내서·계약 문서 작성 자체를 P1 완료로 기록하지 않는다.
 

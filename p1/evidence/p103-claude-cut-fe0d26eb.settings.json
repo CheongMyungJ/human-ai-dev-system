@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"C:/Users/USER/AppData/Local/Programs/Python/Python312/python.exe\" \"C:/git/human-ai-dev-system-design/p1/harness/gate_hook.py\" \"C:/Users/USER/AppData/Local/Temp/hads-p1/evidence/p103-claude-cut-fe0d26eb.connection\" \"C:/Users/USER/AppData/Local/Temp/hads-p1/evidence/p103-claude-cut-fe0d26eb.hooklog.jsonl\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

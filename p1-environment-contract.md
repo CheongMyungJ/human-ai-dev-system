@@ -4,9 +4,11 @@
 
 이 문서는 **P1-01(환경·계약)의 결과물**이다. 아래 2~5절은 이 PC에서 실제로 실행한 조회 명령의 결과이며, 6~7절은 그 사실과 공식 문서·CLI 도움말을 근거로 만든 **계약 초안**이다.
 
-8절의 capability 표는 **P1-02 실증 결과(2026-09-20)를 반영해 갱신했다.** 실행 증거는 [P1-02 결과](p1/evidence/P1-02-results.md)에 있다.
+8절의 capability 표는 **P1-02·P1-03 실증 결과(2026-09-20)를 반영해 갱신했다.** 실행 증거는
+[P1-02 결과](p1/evidence/P1-02-results.md)와 [P1-03 결과](p1/evidence/P1-03-results.md)에 있다.
 
-**아직 하지 않은 것:** 도구 경계 정지 시험, 연결 단절·복구 시험, 세션 재개 시험, OpenCode 설치·실행. 9절에 미검증으로 남겨 둔다.
+**아직 하지 않은 것:** 재연결·재개 시험, 병렬 호출 경계, 훅 적용 범위의 공백 확인, OpenCode 설치·실행.
+9절에 미검증으로 남겨 둔다.
 
 ## 1. 조사 방법과 판정 규칙
 
@@ -156,28 +158,42 @@ CLI가 어떤 종류를 제공하지 않으면 **비어 있는 것으로 두고 
 | 구조화 출력 스키마 | `doc_only` — `--output-schema <FILE>` | `doc_only` — `--json-schema <schema>` | `unknown` | `--help` |
 | 세션 재개 | `doc_only` — `codex exec resume`, `fork` | `doc_only` — `--resume`, `--session-id`, `--fork-session` | `unknown` | `--help` |
 | 승인 요청 노출 | `doc_only` — 최상위 `codex`에만 `--ask-for-approval`. **`exec`는 거부** | `doc_only` — `--permission-prompts host` | `unknown` | P1-02 2절 |
-| **다음 호출 차단** | `unknown` — hooks·app-server가 후보 | `unknown` — PreToolUse·권한 훅이 후보 | `unknown` | `cli-pause-feasibility.md` |
-| 취소·종료 확인 | `unknown` | `doc_only` — `claude stop <id>`(백그라운드 세션) | `unknown` | `--help` |
+| **다음 호출 차단** | `verified` — 저장소 로컬 `.codex/hooks.json`의 PreToolUse. **단 `--dangerously-bypass-hook-trust` 필요** | `verified` — `--settings`의 PreToolUse | `unknown` | [P1-03 1절](p1/evidence/P1-03-results.md) |
+| 훅 실패 시 동작 | `unknown` — 이번 경로에서는 훅 미발화가 곧 무통제였다 | `verified` — **fail-open.** 훅이 exit 127로 실패해도 호출이 진행됨 | `unknown` | P1-03 2절 C |
+| 훅 거부의 이벤트 노출 | `unsupported` — 거부를 알리는 이벤트가 없다. 훅 로그가 정본 | `verified` — `system/hook_response`(+ `tool_result` 오류) | `unknown` | P1-03 5절 |
+| 호출 요청과 실행의 구분 | `verified` — 거부 시 `command_execution` 항목이 생기지 않음 | `verified` — `tool_use`는 요청일 뿐 실행이 아님 | `unknown` | P1-03 5절 |
+| 훅 입력의 호출 식별자 | `verified` — `tool_use_id`, `session_id`, `turn_id` | `verified` — `tool_use_id`, `session_id`, `prompt_id` | `unknown` | P1-03 4절 |
+| 취소·종료 확인 | `unsupported`(현재 실행 방식) — 진입점 종료 후 `codex.exe`·command-runner·자식 셸이 잔류 | `doc_only` — `claude stop <id>`(백그라운드 세션) | `unknown` | P1-03 3절 |
 | 자식·병렬 활동 추적 | `unknown` | `unknown` | `unknown` | 미확인 |
 | 재연결 결과 대조 | `unknown` | `unknown` | `unknown` | 미확인 |
 
 **`doc_only`는 "지원함"이 아니다.** P1-02에서 실제로 두 건이 뒤집혔다: 최상위 도움말의 `--ask-for-approval`은
 `codex exec`에서 거부되고, `--tools` 뒤의 위치 인자는 옵션 값으로 흡수된다([P1-02 결과 2절](p1/evidence/P1-02-results.md)).
 
-**다음 호출 차단**은 P1의 핵심 요구인데 아직 어느 CLI에서도 `unknown`이다. 여기에 필요한 통제가 없으면
-해당 기능의 지원을 보류한다. P1-03에서 확인한다.
+**다음 호출 차단**은 P1의 핵심 요구이며 P1-03에서 두 CLI 모두 `verified`가 되었다. 다만 조건부다.
+
+- Codex는 훅 명령에 따옴표가 들어가면 **오류 없이 실행되지 않는다.** 설정했다는 것과 돌았다는 것이 다르다
+- Codex 비대화식에서는 `--dangerously-bypass-hook-trust`가 필요했다. 제품이 이 플래그에 의존해선 안 된다
+- Claude는 **훅이 실패하면 호출을 그대로 진행한다(fail-open).** 훅 실행 성공 여부를 확인하지 않은 실행은
+  안전 경계가 성립한 것으로 보지 않는다
+- **강제 종료는 안전 중지가 아니다.** 진입점을 종료해도 CLI와 자식 셸이 살아남는다
+
+자세한 근거와 남은 공백은 [P1-03 결과](p1/evidence/P1-03-results.md)에 있다.
 
 ## 9. 남은 미검증 항목
 
-P1-02에서 해소한 항목(실제 호출·이벤트 스키마·세션 분리·권한 경계 실동작)은 [P1-02 결과](p1/evidence/P1-02-results.md)로 옮겼다. 아래는 아직 남은 것이다.
+P1-02에서 해소한 항목(실제 호출·이벤트 스키마·세션 분리·권한 경계 실동작)과 P1-03에서 해소한 항목
+(다음 호출 차단, 강제 종료의 프로세스 잔류)은 각 결과 문서로 옮겼다. 아래는 아직 남은 것이다.
 
 | 항목 | 넘긴 하위 작업 | 확인해야 할 것 |
 |---|---|---|
-| 도구 경계 정지 | P1-03 | 단절 감지 → 현재 호출 종료 → 다음 호출 미시작의 증거 |
-| `--permission-mode` 요청값·보고값 불일치 | P1-03 | Claude가 `manual` 요청에 `default`로 보고하는 이유와 실제 적용값 |
-| `.cmd` 진입점 경유 프로세스 트리 | P1-03 | 강제 종료 시 자식 CLI 프로세스가 함께 끝나는지 |
-| 취소·프로세스 종료·자식 활동 | P1-03 | 요청 수신과 실제 종료 확인의 구분 |
-| 재연결 대조·중복 방지 | P1-03 | 지연 이벤트·응답 유실에서 중복 실행이 없는지 |
+| 재연결·재개와 결과 대조 | P1-03 잔여 또는 P2 | 회복 경로에서 이미 한 작업을 다시 하지 않는지 |
+| 병렬 도구 호출에서의 경계 | P1-03 잔여 | 순차 실행을 프롬프트로 요구하지 않은 경우의 차단 범위 |
+| 훅 적용 범위의 공백 | P1-03 잔여 | 자동 허용·MCP·하위 에이전트 경로가 PreToolUse를 거치는지 |
+| 훅 timeout 초과 시 동작 | P1-03 잔여 | Claude의 fail-open이 timeout에도 적용되는지 |
+| 프로세스 트리 단위 종료 | P2 | job object 등으로 자식까지 끝내고 종료를 확인하는 방법 |
+| 훅 신뢰의 영속화 | P2 | `--dangerously-bypass-hook-trust` 없이 훅을 돌리는 방법 |
+| `--permission-mode` 요청값·보고값 불일치 | 부분 해소 | `acceptEdits`는 그대로 보고됨. `manual`만 `default`로 보고된다 |
 | Python 런타임 고정 | P2-01 | 3.12 / 3.14 중 사용할 버전과 실행 스크립트 반영 |
 | OpenCode | P1-04 | 공식 문서 계약·fixture·계약 시험만. 설치·실행으로 표시하지 않음 |
 | CLI 버전 변동 | 상시 | 자동 업데이트로 버전이 바뀌면 해당 실증의 유효 범위를 다시 표시 |

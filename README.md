@@ -44,6 +44,7 @@ GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMy
 | [최종 문서 검토](design-review-report.md) | 요구사항 추적, 일관성 점검, 남은 기술 검증 |
 | [P1-01 환경 실측·계약 초안](p1-environment-contract.md) | 이 PC의 실측 환경·CLI·인증 상태, 공통 실행 계약과 capability 표 |
 | [P1-02 CLI 실증 결과](p1/evidence/P1-02-results.md) | Codex·Claude 실제 실행 증거, 권한 경계·이벤트 스키마·완료 판정에서 확인한 것 |
+| [P1-03 중지·복구 실증 결과](p1/evidence/P1-03-results.md) | 단절 시 다음 도구 호출 차단, 훅 fail-open, 강제 종료의 프로세스 잔류 |
 
 ## 검토 결과의 경계
 

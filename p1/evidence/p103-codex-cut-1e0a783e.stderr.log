@@ -1,0 +1,3 @@
+Reading prompt from stdin...
+2026-09-20T10:57:30.851191Z ERROR codex_core::tools::router: error=Command blocked by PreToolUse hook: 제어 서버 연결이 끊어졌습니다. 재연결 후 다음 도구 호출을 재개합니다.. Command: Set-Content -LiteralPath b.txt -Value 'b' -NoNewline
+2026-09-20T10:57:36.961989Z ERROR codex_core::tools::router: error=Command blocked by PreToolUse hook: 제어 서버 연결이 끊어졌습니다. 재연결 후 다음 도구 호출을 재개합니다.. Command: Set-Content -LiteralPath b.txt -Value 'b' -NoNewline

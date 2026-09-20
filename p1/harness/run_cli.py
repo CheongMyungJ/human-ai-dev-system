@@ -83,6 +83,10 @@ def build_command(tool: str, mode: str, args: argparse.Namespace) -> list[str]:
     if tool == "codex" and mode == "exec":
         cmd = [exe, "exec", "--json", "--skip-git-repo-check", "-C", args.workspace]
         cmd += perms[args.permission]
+        if args.gate_hook:
+            # 비관리 hook은 신뢰 승인이 필요하다. 비대화식 실증에서는 이 플래그의 필요
+            # 여부 자체가 관측 대상이며, 필요했다는 사실을 제약으로 기록한다.
+            cmd.append("--dangerously-bypass-hook-trust")
         if args.model:
             cmd += ["-m", args.model]
         if args.output_last_message:
@@ -92,6 +96,8 @@ def build_command(tool: str, mode: str, args: argparse.Namespace) -> list[str]:
     if tool == "claude" and mode == "print":
         cmd = [exe, "-p", "--output-format", "stream-json", "--verbose"]
         cmd += perms[args.permission]
+        if args.gate_hook:
+            cmd += ["--settings", str(args.gate_hook["config"]), "--include-hook-events"]
         if args.model:
             cmd += ["--model", args.model]
         if args.session_id:
@@ -99,6 +105,60 @@ def build_command(tool: str, mode: str, args: argparse.Namespace) -> list[str]:
         return cmd
 
     raise SystemExit(f"지원하지 않는 조합: tool={tool} mode={mode}")
+
+
+HOOK_SCRIPT = Path(__file__).with_name("gate_hook.py")
+
+
+def install_gate_hook(tool: str, workspace: Path, evidence: Path, run_id: str) -> dict:
+    """PreToolUse 훅을 **세션/저장소 한정으로** 설치한다.
+
+    사용자 전역 설정(`~/.codex/config.toml`, `~/.claude/settings.json`)은 바꾸지 않는다.
+    Codex는 저장소 로컬 `<repo>/.codex/hooks.json`, Claude는 `--settings <file>` 을 쓴다.
+    """
+    state_file = evidence / f"{run_id}.connection"
+    hook_log = evidence / f"{run_id}.hooklog.jsonl"
+    state_file.write_text("connected", encoding="utf-8")
+
+    # 훅 명령의 실행 방식이 두 CLI에서 다르다(2026-09-20 관측).
+    #  - Codex 0.154.0: 따옴표로 감싼 경로를 넣으면 훅이 **오류 없이 조용히 실행되지 않는다**.
+    #    공백 없는 단일 토큰이어야 해서 인자를 박아 둔 .cmd 래퍼 경로만 넘긴다.
+    #  - Claude Code 2.1.278: 훅을 **bash로 실행**한다. Windows 경로의 역슬래시가
+    #    이스케이프로 먹혀 `C:UsersUSER...: command not found`(127)가 된다.
+    #    슬래시 경로 + 따옴표로 준다.
+    if tool == "codex":
+        wrapper = evidence / f"{run_id}.hook.cmd"
+        wrapper.write_text(
+            "@echo off\r\n"
+            f'"{sys.executable}" "{HOOK_SCRIPT}" "{state_file}" "{hook_log}"\r\n',
+            encoding="ascii",
+        )
+        command = str(wrapper)
+    else:
+        def posix(p: object) -> str:
+            return str(p).replace("\\", "/")
+
+        command = (
+            f'"{posix(sys.executable)}" "{posix(HOOK_SCRIPT)}" '
+            f'"{posix(state_file)}" "{posix(hook_log)}"'
+        )
+    entry = {
+        "hooks": {
+            "PreToolUse": [
+                {"hooks": [{"type": "command", "command": command, "timeout": 30}]}
+            ]
+        }
+    }
+
+    if tool == "codex":
+        target = workspace / ".codex" / "hooks.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
+    else:
+        target = evidence / f"{run_id}.settings.json"
+        target.write_text(json.dumps(entry, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return {"state_file": state_file, "hook_log": hook_log, "config": target}
 
 
 def resolve_executable(tool: str, override: str | None) -> str:
@@ -227,6 +287,8 @@ def classify_codex(obj: dict, native: str) -> list[str] | None:
             )
         if item_type == "agent_message":
             return ["assistant_message"] if native == "item.completed" else []
+        if item_type == "error":
+            return ["error"] if native == "item.completed" else []
         if item_type in {"reasoning", "todo_list"}:
             return []
         return None  # 모르는 item 종류. 경계 의미를 추정하지 않는다
@@ -240,7 +302,11 @@ def classify_claude(obj: dict, native: str) -> list[str] | None:
             return ["session_identified"]
         if subtype == "permission_denied":
             return ["permission_decided"]
-        if subtype in {"thinking_tokens", "compact_boundary"}:
+        if subtype == "hook_response":
+            # 관측(2026-09-20): 훅 거부는 permission_denied 가 아니라 hook_response 로 온다.
+            # 도구 결과에는 오류로 표시된다. 두 경로를 같은 정규화 종류로 모은다.
+            return ["permission_decided"] if '"permissionDecision"' in (obj.get("stdout") or "") else []
+        if subtype in {"thinking_tokens", "compact_boundary", "hook_started"}:
             return []
         return None
     if native == "assistant":
@@ -277,15 +343,79 @@ def collect_derived(tool: str, obj: dict, native: str, derived: dict) -> None:
             derived["permission_decisions"].append(
                 {
                     "decision": "denied",
+                    "source": "permission_denied",
                     "tool_name": obj.get("tool_name"),
                     "reason_type": obj.get("decision_reason_type"),
                 }
             )
+        if native == "system" and obj.get("subtype") == "hook_response":
+            stdout = obj.get("stdout") or ""
+            if '"permissionDecision"' in stdout:
+                try:
+                    decision = json.loads(stdout)["hookSpecificOutput"]["permissionDecision"]
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    decision = "unparsed"
+                derived["permission_decisions"].append(
+                    {
+                        "decision": decision,
+                        "source": "hook_response",
+                        "tool_name": obj.get("hook_name"),
+                        "hook_exit_code": obj.get("exit_code"),
+                    }
+                )
+            elif obj.get("outcome") == "error":
+                # 훅이 실패해도 호출이 계속되는 것을 관측했다(fail-open). 사실로 남긴다.
+                derived["permission_decisions"].append(
+                    {
+                        "decision": "hook_failed_not_enforced",
+                        "source": "hook_response",
+                        "tool_name": obj.get("hook_name"),
+                        "hook_exit_code": obj.get("exit_code"),
+                    }
+                )
         if native == "result" and obj.get("usage"):
             derived["usage"] = {
                 "tokens": obj["usage"],
                 "cost_usd": obj.get("total_cost_usd", "not_reported"),
             }
+
+
+def inject_disconnect(
+    tool: str,
+    out_cap: "StreamCapture",
+    after_n: int,
+    state_file: Path,
+    marker: dict,
+    proc: subprocess.Popen,
+) -> None:
+    """이벤트 스트림을 실시간으로 보다가 도구 호출 N회 완료 시점에 단절을 주입한다.
+
+    제어 서버 연결이 끊긴 상황을 모사한다. 프로세스를 죽이지 않는다 — 강제 종료가 아니라
+    "다음 호출을 시작하지 않는" 안전 경계가 성립하는지 보는 것이 목적이다.
+    """
+    seen = 0
+    cursor = 0
+    while proc.poll() is None:
+        raw_lines = out_cap.raw_lines
+        while cursor < len(raw_lines):
+            line = raw_lines[cursor].decode("utf-8", errors="replace").strip()
+            cursor += 1
+            if not line.startswith("{"):
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            native = obj.get("type", "")
+            kinds = classify_codex(obj, native) if tool == "codex" else classify_claude(obj, native)
+            if kinds and "tool_call_finished" in kinds:
+                seen += 1
+                if seen >= after_n:
+                    state_file.write_text("disconnected", encoding="utf-8")
+                    marker["injected_at"] = time.time()
+                    marker["after_tool_calls"] = seen
+                    return
+        time.sleep(0.05)
 
 
 def main() -> int:
@@ -302,6 +432,18 @@ def main() -> int:
     ap.add_argument("--output-last-message", default=None)
     ap.add_argument("--executable", default=None)
     ap.add_argument("--timeout", type=float, default=300.0)
+    ap.add_argument(
+        "--gate-hook",
+        action="store_true",
+        help="PreToolUse 훅으로 연결 상태를 확인하게 한다(세션/저장소 한정 설정)",
+    )
+    ap.add_argument(
+        "--disconnect-after-tool-calls",
+        type=int,
+        default=None,
+        metavar="N",
+        help="도구 호출 N회 완료를 관측하면 연결 상태를 disconnected로 바꾼다",
+    )
     args = ap.parse_args()
 
     workspace = Path(args.workspace).resolve()
@@ -309,6 +451,11 @@ def main() -> int:
     evidence.mkdir(parents=True, exist_ok=True)
 
     run_id = f"{args.label}-{uuid.uuid4().hex[:8]}"
+
+    if args.disconnect_after_tool_calls is not None and not args.gate_hook:
+        raise SystemExit("--disconnect-after-tool-calls 는 --gate-hook 과 함께 써야 한다")
+
+    args.gate_hook = install_gate_hook(args.tool, workspace, evidence, run_id) if args.gate_hook else None
     cmd = build_command(args.tool, args.mode, args)
 
     before = git_snapshot(workspace)
@@ -351,6 +498,22 @@ def main() -> int:
         threading.Thread(target=out_cap.consume, args=(proc.stdout,), daemon=True),
         threading.Thread(target=err_cap.consume, args=(proc.stderr,), daemon=True),
     ]
+    disconnect_marker: dict = {}
+    if args.disconnect_after_tool_calls is not None:
+        threads.append(
+            threading.Thread(
+                target=inject_disconnect,
+                args=(
+                    args.tool,
+                    out_cap,
+                    args.disconnect_after_tool_calls,
+                    args.gate_hook["state_file"],
+                    disconnect_marker,
+                    proc,
+                ),
+                daemon=True,
+            )
+        )
     for t in threads:
         t.start()
 
@@ -414,6 +577,18 @@ def main() -> int:
         },
         "session_ref": derived["session_ref"],
         "permission_decisions": derived["permission_decisions"],
+        "gate_hook": (
+            {
+                "config": str(args.gate_hook["config"]),
+                "hook_log": str(args.gate_hook["hook_log"]),
+                "state_file": str(args.gate_hook["state_file"]),
+                "final_state": args.gate_hook["state_file"].read_text(encoding="utf-8"),
+                "hook_invocations": count_lines(args.gate_hook["hook_log"]),
+            }
+            if args.gate_hook
+            else None
+        ),
+        "disconnect_injection": disconnect_marker or None,
         "residual_activity": "unknown",
         "usage": derived["usage"],
         "raw_stdout": str(out_cap.path),
@@ -424,6 +599,13 @@ def main() -> int:
     result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
+
+
+def count_lines(path: Path) -> int:
+    try:
+        return sum(1 for _ in path.open(encoding="utf-8"))
+    except OSError:
+        return 0
 
 
 def summarize(events: list[dict]) -> dict:
