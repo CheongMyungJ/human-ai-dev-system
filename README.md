@@ -6,6 +6,12 @@ GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMy
 
 정본 위치는 `C:\git\human-ai-dev-system-design`이다. 이 디렉터리의 문서가 이후 설계·구현의 기준이다. 주요 제품 결정 58건을 통합했으며 구현과 실제 CLI·복구·성능 시험은 아직 수행하지 않았다.
 
+## 개발을 시작하는 새 세션
+
+[개발 진행 안내서 DEVELOPMENT.md](DEVELOPMENT.md)를 읽고 현재 단계를 수행한다. 이 문서에 현재 상태, 6단계별 범위·성공 기준, 코드 변경 전 필수 plan, 검증·인계 절차가 있다. 시작 단계는 P1 CLI 연결 검증이며 아직 제품 구현을 시작하지 않았다.
+
+새 세션 요청 예시: `DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘.`
+
 ## 먼저 읽을 문서
 
 1. [전체 설계](design-draft.md): 첫 버전 범위, 업무 흐름, 구성도, 실행·저장 모델.
