@@ -290,8 +290,9 @@ AI 작성자를 부를 수단이 없었기 때문이며, plan의 제외 범위�
 작업 단계·하위 작업 / 사용한 Plan ID: P2 — 최소 업무 흐름 / P2-02 의도·피드백 / P2-PLAN-02
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD 21e568f(작업 트리 clean, origin/main과 동기).
-  이 세션의 커밋 2건: e17a582(P2-02 구현)과 e10aabd(P2-03 이월 항목 인계).
-  **push 하지 않았다** — 외부 반영 허용을 이번에 받지 않았다. origin/main 은 21e568f 그대로다.
+  이 세션의 커밋: e17a582(P2-02 구현), e10aabd(P2-03 이월 항목 인계),
+  그리고 이 인계를 고친 커밋. **push 하지 않았다** — 외부 반영 허용을 이번에 받지 않았다.
+  origin/main 은 21e568f 그대로다. 정확한 목록은 `git log --oneline 21e568f..HEAD` 로 본다.
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
   var\, .venv\, web\node_modules\, web\dist\ 는 .gitignore 대상이며 커밋하지 않았다.
   단 web\dist 는 빌드 산출물이므로 다음 세션에서 bootstrap 또는 npm run build 로 다시 만든다
@@ -387,7 +388,7 @@ AI 작성자를 부를 수단이 없었기 때문이며, plan의 제외 범위�
   남은 프로세스 없음(uvicorn/runner 프로세스 0 확인). 포트 8766 에 TimeWait 소켓 2개가
   남아 있었으나 소유 프로세스가 없는 정상적인 TCP 종료 상태다.
   GitHub 이슈·PR 등 외부 게시는 없다. **이번 세션은 push 하지 않았다** —
-  원격 main 은 21e568f 상태이고 로컬이 커밋 2개만큼 앞서 있다(e17a582, e10aabd).
+  원격 main 은 21e568f 상태이고 로컬이 그보다 앞서 있다(`git log --oneline 21e568f..HEAD`).
   라이브 시험 데이터 %LOCALAPPDATA%\Temp\hads-p2-02-live 와 검증용 가상환경
   %LOCALAPPDATA%\Temp\hads-playwright 는 지워도 된다(저장소 밖).
   P1 시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 이전 세션 상태 그대로 두었다
