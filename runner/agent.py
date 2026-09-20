@@ -65,6 +65,9 @@ def local_executor_capabilities() -> list[dict[str, Any]]:
         }
         for capability, state in (
             ("installed", CapabilityState.VERIFIED),
+            # **이것은 코딩 CLI가 아니다.** 실행은 되지만 AI가 글을 쓰지 않는다.
+            # 의도 초안 작성·의미 검토에 배정되지 않도록 사실대로 보고한다.
+            ("coding_cli", CapabilityState.UNSUPPORTED),
             (f"permission:{Permission.READ_ONLY.value}", CapabilityState.VERIFIED),
             ("structured_events", CapabilityState.VERIFIED),
             ("session_identity", CapabilityState.UNSUPPORTED),

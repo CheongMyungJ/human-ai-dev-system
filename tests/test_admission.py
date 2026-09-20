@@ -448,3 +448,76 @@ def test_the_runner_is_named_as_the_artifact_owner(harness):
     """배정은 등록된 Runner에게만 간다."""
     runners = harness.client.get("/api/runners").json()
     assert [r["id"] for r in runners] == [RUNNER_ID]
+
+
+def test_the_skeleton_executor_cannot_author_or_review_an_intent(harness):
+    """AC-6: 골격 실행기에 초안 작성·의미 검토를 배정하지 않는다.
+
+    **이 시험은 화면 결함에서 나왔다.** 화면이 `tool_id` 를 빠뜨리면 서버 기본값인
+    `local-echo` 로 배정되는데, 그 실행기는 정상 종료하면서 아무 것도 쓰지 않는다.
+    사람에게는 "요청했다"고 보이고 실제로는 초안이 생기지 않는다.
+
+    화면을 고치는 것만으로는 부족하다 — 같은 실수가 API 직접 호출로 돌아온다.
+    그래서 **도구가 스스로 코딩 CLI인지 보고하고 제어부가 그것을 본다.**
+    """
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    instruction = harness.submit_artifact(case["id"], "초안을 써 주세요.")
+
+    # 화면이 도구를 빠뜨렸을 때와 같은 요청 — 서버 기본값은 골격 실행기다.
+    response = harness.client.post(
+        f"/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-echo-author",
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": "intent_authoring",
+            "role": "author",
+            "permission": "read_only",
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert "tool_is_not_a_coding_cli" in _refusals(response)
+
+    # 의미 검토도 마찬가지다.
+    harness.ai_draft(case["id"])
+    intent = harness.latest_intent(case["id"])
+    review = harness.client.post(
+        f"/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-echo-review",
+            "instruction_artifact_id": intent["artifact_id"],
+            "instruction_artifact_rev": intent["artifact_rev"],
+            "purpose": "intent_gate_review",
+            "role": "reviewer",
+            "tool_id": "local-echo",
+            "mode": "p2-01-local",
+            "permission": "read_only",
+        },
+    )
+    assert review.status_code == 409
+    assert "tool_is_not_a_coding_cli" in _refusals(review)
+
+    # 아무 것도 만들어지지 않았다. 조용히 완료된 실행이 남지 않는다.
+    runs = harness.client.get(f"/api/cases/{case['id']}").json()["runs"]
+    assert not [r for r in runs if r["run_id"].startswith("run-echo-")]
+
+
+def test_the_skeleton_executor_is_still_fine_for_plain_analysis(harness):
+    """골격 실행기를 금지한 것이 아니다. **초안을 쓰는 일에만** 배정하지 않는다."""
+    project = harness.create_project()
+    case = harness.create_case(project["id"], kind="analysis")
+    instruction = harness.submit_artifact(case["id"], "읽고 요약해 주세요.")
+
+    response = harness.client.post(
+        f"/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-echo-analysis",
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": "limited_analysis",
+            "role": "author",
+            "tool_id": "local-echo",
+            "mode": "p2-01-local",
+            "permission": "read_only",
+        },
+    )
+    assert response.status_code == 201, response.text

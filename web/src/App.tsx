@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from 'react'
 import {
   api,
   ApiError,
+  codingCliTools,
   gateApi,
   GATE_VERDICT_LABEL,
   REFUSAL_LABEL,
@@ -124,7 +125,7 @@ export function App() {
       <header>
         <h1>사람–AI 개발 협업 시스템</h1>
         <p className="sub">
-          P2-02 의도·피드백 · 제어부는 상태와 참조만 보관하고 원문은 Runner에 있다
+          P2-03 진입 제어·제한 실행 · 제어부는 상태와 참조만 보관하고 원문은 Runner에 있다
         </p>
       </header>
 
@@ -161,6 +162,7 @@ export function App() {
             key={selectedCase.id}
             caseId={selectedCase.id}
             runnerId={runners[0]?.id}
+            runners={runners}
             onChanged={() => openCase(selectedCase.id)}
           />
         )}
@@ -296,7 +298,7 @@ function CaseDetailPanel(props: {
   const runnerId = props.runners[0]?.id
   // 사용 가능하다고 **보고된** 도구만 고를 수 있다. 목록에 없는 도구를 골라도
   // 서버가 거부하지만, 없는 선택지를 보여 주지 않는 편이 정직하다.
-  const toolOptions = Array.from(
+  const installedTools = Array.from(
     new Set(
       props.runners
         .flatMap((runner) => runner.capabilities)
@@ -304,7 +306,14 @@ function CaseDetailPanel(props: {
         .map((cap) => cap.tool_id),
     ),
   )
+  // 의미 검토는 AI가 글을 써야 하므로 코딩 CLI만 고를 수 있다. 제한 작업은
+  // 골격 실행기로도 할 수 있으므로 설치된 도구를 모두 보여 준다.
+  const cliTools = codingCliTools(props.runners).map((t) => t.tool_id)
+  const toolOptions = purpose === 'intent_gate_review' ? cliTools : installedTools
   const [toolId, setToolId] = useState(toolOptions[0] ?? 'codex')
+  useEffect(() => {
+    if (toolOptions.length > 0 && !toolOptions.includes(toolId)) setToolId(toolOptions[0])
+  }, [purpose, toolOptions, toolId])
   const runnableArtifacts = detail.artifacts.filter(
     (artifact) => artifact.availability === 'available' && artifact.kind !== 'run_output',
   )

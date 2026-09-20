@@ -1,0 +1,14 @@
+[22:34:09] runner registered: ['runner-ui-p203']
+[22:34:10] title='사람-AI 개발 협업 시스템'
+[22:34:12] project created and opened
+[22:34:14] case opened: case-994c097281673fd6
+[22:34:14] AI 초안 요청의 도구 선택지: ['claude (print)', 'codex (exec)']
+[22:34:14] 게이트 패널 초기 표시:  / 종합 판정	미적용 / 규칙 검사	미적용 / AI 의미 검토	미적용 / 규칙 검사 다시 실행 / 
+[22:34:20] 진입 거부 표시: 진입 조건 미충족 — Run을 만들지 않았다. |  | 적용한 조건표: feature_intent · 의도 동의: no_intent · QG-01: not_applicable |  | 최신 의도에 대한 사람의 동의가 없다 | 최신 의도에 대한 동의가 없다(현재 no_intent)
+[22:34:20] 초안 요청 클릭 — 실제 codex 실행을 기다린다
+[22:34:42] 의도 v1 생성됨 authoring_mode=ai_drafted author_run=draft-1789911261498
+[22:34:46] 화면에 '작성 주체: AI가 작성해 제시한 초안' 표시 확인
+[22:34:46] 규칙 검사 후 게이트: verdict=not_run rule=pass ai=not_run
+[22:34:46] 브라우저 오류: ['console.error: Failed to load resource: the server responded with a status of 404 (Not Found)', 'console.error: Failed to load resource: the server responded with a status of 409 (Conflict)']
+[22:34:46] stopped controller
+[22:34:46] stopped runner

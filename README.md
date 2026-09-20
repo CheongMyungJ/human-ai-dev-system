@@ -28,7 +28,7 @@ scripts\run-controller.ps1
 # 3) 다른 창에서 로컬 Runner
 scripts\run-runner.ps1
 
-# 4) 전체 시험 (제품 pytest 77건 + P1 OpenCode 문서 계약 unittest 18건)
+# 4) 전체 시험 (제품 pytest 79건 + P1 OpenCode 문서 계약 unittest 18건)
 scripts\run-tests.ps1
 ```
 
@@ -107,9 +107,9 @@ P2-03부터 **기능 개발 Case의 실행은 서버가 조건을 검사한 뒤�
 **QG-01이 AI가 쓴 초안을 두 번 연속 실패시켰고**(모순·확인 불가능한 성공 기준·빠진 질문)
 게이트를 느슨하게 고치는 대신 피드백 → 새 버전 → 재검토로 통과시켰다.
 
-**주의:** 위 화면 절차는 API 계약과 빌드까지 확인한 것이고, P2-03에서 추가한 화면을
-사람이 직접 클릭해 확인하지는 않았다(P2-04에서 함께 확인한다). 같은 흐름을 API로
-확인한 기록은 [P2-03-live-run.log](p2/evidence/P2-03-live-run.log)에 있다.
+화면은 실제 브라우저로 1~2와 6의 거부 표시까지 확인했다
+([캡처](p2/evidence/P2-03-ui-ai-draft.png), [기록](p2/evidence/P2-03-ui-check.log)).
+**3~6을 화면에서 누르는 경로는 아직 API로만 확인했다**(P2-04에서 함께 확인한다).
 
 ## 먼저 읽을 문서
 

@@ -22,6 +22,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   api,
+  codingCliTools,
   INTENT_FIELDS,
   intentApi,
   type ContentOrigin,
@@ -31,6 +32,7 @@ import {
   type IntentDiff,
   type IntentStateView,
   type IntentVersionDetail,
+  type RunnerInfo,
 } from './api'
 
 const ORIGIN_LABEL: Record<ContentOrigin, string> = {
@@ -89,6 +91,7 @@ function emptyFields(): Record<string, FieldDraft> {
 export function IntentPanel(props: {
   caseId: string
   runnerId: string | undefined
+  runners: RunnerInfo[]
   onChanged: () => void
 }) {
   const { caseId, runnerId } = props
@@ -139,7 +142,13 @@ export function IntentPanel(props: {
 
       <AgreementBanner state={state} />
 
-      <AiDraftRequest caseId={caseId} runnerId={runnerId} onNotice={setNotice} onAction={guard} />
+      <AiDraftRequest
+        caseId={caseId}
+        runnerId={runnerId}
+        runners={props.runners}
+        onNotice={setNotice}
+        onAction={guard}
+      />
 
       {latest && (
         <LatestVersion
@@ -204,11 +213,17 @@ function AgreementBanner(props: { state: IntentStateView | null }) {
 function AiDraftRequest(props: {
   caseId: string
   runnerId: string | undefined
+  runners: RunnerInfo[]
   onNotice: (text: string | null) => void
   onAction: (fn: () => Promise<void>) => Promise<void>
 }) {
   const [request, setRequest] = useState('')
   const [busy, setBusy] = useState(false)
+  // **실제로 글을 쓰는 도구만 고른다.** 골격 실행기를 배정하면 실행은 정상 종료하고
+  // 초안은 생기지 않는다. 서버도 같은 조건으로 거부한다.
+  const tools = codingCliTools(props.runners)
+  const [tool, setTool] = useState(tools[0]?.tool_id ?? '')
+  const selected = tools.find((t) => t.tool_id === tool) ?? tools[0]
 
   return (
     <div className="subpanel">
@@ -218,14 +233,21 @@ function AiDraftRequest(props: {
         초안을 써서 새 의도 버전을 만든다. 이 요청은 동의가 아니다 — 초안이 오면 원문을
         읽고 피드백하거나 동의한다.
       </p>
+      {tools.length === 0 && (
+        <p className="notice">
+          사용 가능한 코딩 CLI가 없다. Runner가 <span className="mono">coding_cli</span> 능력을
+          보고해야 초안을 요청할 수 있다. 그동안에도 아래에서 사람이 직접 쓸 수 있다.
+        </p>
+      )}
       <form
         onSubmit={(event) => {
           event.preventDefault()
-          if (!request.trim() || !props.runnerId) {
-            props.onNotice('요청 내용과 등록된 Runner가 모두 필요하다.')
+          if (!request.trim() || !props.runnerId || !selected) {
+            props.onNotice('요청 내용 · 등록된 Runner · 코딩 CLI가 모두 필요하다.')
             return
           }
           const runnerId = props.runnerId
+          const chosen = selected
           void props.onAction(async () => {
             setBusy(true)
             try {
@@ -258,10 +280,15 @@ function AiDraftRequest(props: {
                 purpose: 'intent_authoring',
                 role: 'author',
                 permission: 'read_only',
+                // **도구를 반드시 지정한다.** 빠뜨리면 서버 기본값인 골격 실행기로
+                // 배정돼 실행은 끝나는데 초안이 생기지 않는다.
+                tool_id: chosen.tool_id,
+                mode: chosen.mode,
               })
               setRequest('')
               props.onNotice(
-                `초안 작성을 요청했다(${runId}). Runner가 실행을 마치면 새 의도 버전이 나타난다.`,
+                `${chosen.tool_id} 에 초안 작성을 요청했다(${runId}).` +
+                  ' 실행이 끝나면 새 의도 버전이 나타난다 — 새로 고쳐 확인한다.',
               )
             } finally {
               setBusy(false)
@@ -275,7 +302,14 @@ function AiDraftRequest(props: {
           placeholder="무엇을 만들고 싶은지 — 이 본문은 제어부에 저장되지 않는다"
           onChange={(e) => setRequest(e.target.value)}
         />
-        <button type="submit" disabled={busy}>
+        <select value={tool} onChange={(e) => setTool(e.target.value)} disabled={tools.length === 0}>
+          {tools.map((t) => (
+            <option key={t.tool_id} value={t.tool_id}>
+              {t.tool_id} ({t.mode})
+            </option>
+          ))}
+        </select>
+        <button type="submit" disabled={busy || tools.length === 0}>
           {busy ? '요청 중…' : 'AI에게 초안 요청'}
         </button>
       </form>

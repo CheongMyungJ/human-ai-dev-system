@@ -71,6 +71,8 @@ class AdmissionRequest:
     target_intent_version_id: str | None
     tool_installed: bool
     permission_mapped: bool
+    #: 이 도구가 실제 코딩 CLI인가. P2-01의 골격 실행기는 실행은 되지만 글을 쓰지 않는다.
+    tool_is_coding_cli: bool = False
     author_session_refs: list[str] = field(default_factory=list)
     requested_session_ref: str | None = None
 
@@ -170,6 +172,17 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     gate_verdict = request.gate_state.get("verdict")
 
     # --- 목적별 조건 ---------------------------------------------------------
+
+    # 초안 작성과 의미 검토는 **AI가 글을 써야** 성립한다. 골격 실행기로 배정하면
+    # 실행은 정상 종료하는데 산출물이 없어 아무 일도 일어나지 않은 것처럼 보인다.
+    # 그 조합을 화면이 아니라 여기서 막는다.
+    if request.purpose in (RunPurpose.INTENT_AUTHORING, RunPurpose.INTENT_GATE_REVIEW):
+        if request.tool_installed and not request.tool_is_coding_cli:
+            refuse(
+                AdmissionRefusal.TOOL_IS_NOT_A_CODING_CLI,
+                f"{request.tool_id} 는 코딩 CLI가 아니다."
+                f" {request.purpose.value} 는 실제 AI 실행이 필요하다",
+            )
 
     if request.purpose is RunPurpose.INTENT_GATE_REVIEW:
         target = request.target_intent_version_id or (latest or {}).get("id")

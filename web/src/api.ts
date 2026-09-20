@@ -101,13 +101,41 @@ export interface CaseDetail extends Case {
   admission_checks: AdmissionCheck[]
 }
 
+export interface RunnerCapability {
+  tool_id: string
+  mode: string
+  capability: string
+  state: string
+  source: string
+}
+
 export interface RunnerInfo {
   id: string
   name: string
   host: string
   status: string
   last_heartbeat_at: string | null
-  capabilities: { tool_id: string; mode: string; capability: string; state: string }[]
+  capabilities: RunnerCapability[]
+}
+
+/**
+ * 실제로 **AI가 글을 쓰는** 도구만 고른다.
+ *
+ * 골격 실행기(`local-echo`)도 `installed` 는 `verified` 지만 초안을 쓰지 못한다.
+ * 그것을 초안 작성에 배정하면 실행이 정상 종료하면서 아무 것도 만들어지지 않아
+ * "요청했는데 아무 일도 없는" 상태가 된다. 서버도 같은 조건으로 거부하지만
+ * (`tool_is_not_a_coding_cli`), 화면이 고를 수 없는 것을 보여 주지 않는 편이 낫다.
+ */
+export function codingCliTools(runners: RunnerInfo[]): { tool_id: string; mode: string }[] {
+  const seen = new Map<string, string>()
+  for (const runner of runners) {
+    for (const cap of runner.capabilities) {
+      if (cap.capability === 'coding_cli' && cap.state === 'verified') {
+        seen.set(cap.tool_id, cap.mode)
+      }
+    }
+  }
+  return [...seen].map(([tool_id, mode]) => ({ tool_id, mode }))
 }
 
 // 서버가 구조화된 거절 사유를 주는 경우가 있다(의도 동의 거절, 진입 조건 거부).
@@ -531,6 +559,7 @@ export const REFUSAL_LABEL: Record<string, string> = {
   role_mismatch: '목적에 맞지 않는 역할이다',
   prerequisite_not_implemented: '선행 조건(설계·계획 검토)이 아직 구현되지 않았다',
   tool_not_available: '사용 가능하다고 보고된 도구가 아니다',
+  tool_is_not_a_coding_cli: '이 도구는 코딩 CLI가 아니다 — AI가 글을 쓰지 않는다',
   review_session_not_separate: '검토가 작성과 별도 세션이 아니다',
   intent_version_missing: '검토할 의도 버전이 없다',
 }

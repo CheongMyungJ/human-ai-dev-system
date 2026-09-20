@@ -167,6 +167,7 @@ def fake_capabilities() -> list[dict[str, Any]]:
     rows = local_executor_capabilities()
     for capability, state in (
         ("installed", CapabilityState.VERIFIED),
+        ("coding_cli", CapabilityState.VERIFIED),
         (f"permission:{Permission.READ_ONLY.value}", CapabilityState.VERIFIED),
         (f"permission:{Permission.WORKSPACE_WRITE.value}", CapabilityState.VERIFIED),
         ("structured_events", CapabilityState.VERIFIED),

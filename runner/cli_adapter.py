@@ -154,7 +154,15 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
             "installed",
             CapabilityState.VERIFIED if installed else CapabilityState.UNSUPPORTED,
             here,
-        )
+        ),
+        # **이 도구가 코딩 CLI인가.** P2-01의 골격 실행기와 구별하기 위해 둔다.
+        # 의도 초안 작성과 의미 검토는 실제 AI가 해야 하고, 그 판단을 화면이 아니라
+        # 제어부가 이 보고를 보고 한다(controller/admission.py).
+        cap(
+            "coding_cli",
+            CapabilityState.VERIFIED if installed else CapabilityState.UNSUPPORTED,
+            here,
+        ),
     ]
     if not installed:
         # 미설치를 사용 가능으로 표시하지 않는다. 다른 능력은 지금 확인할 수 없다.

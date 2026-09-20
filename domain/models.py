@@ -406,6 +406,7 @@ class AdmissionRefusal(str, Enum):
     ROLE_MISMATCH = "role_mismatch"
     PREREQUISITE_NOT_IMPLEMENTED = "prerequisite_not_implemented"
     TOOL_NOT_AVAILABLE = "tool_not_available"
+    TOOL_IS_NOT_A_CODING_CLI = "tool_is_not_a_coding_cli"
     REVIEW_SESSION_NOT_SEPARATE = "review_session_not_separate"
     INTENT_VERSION_MISSING = "intent_version_missing"
 

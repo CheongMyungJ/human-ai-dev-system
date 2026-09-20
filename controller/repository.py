@@ -1695,6 +1695,9 @@ class Repository:
             target_intent_version_id=target_intent_version_id,
             tool_installed=self.tool_installed(tool_id),
             permission_mapped=self.permission_mapped(tool_id, permission),
+            tool_is_coding_cli=(
+                self.tool_capability(tool_id, "coding_cli") == CapabilityState.VERIFIED.value
+            ),
             author_session_refs=author_sessions,
         )
         return evaluate_admission(request)
