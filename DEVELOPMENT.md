@@ -22,8 +22,8 @@
 | 활성 plan | 없음. `P3-PLAN-01`은 성공 기준 AC-1~15를 모두 통과해 완료로 종료했고 원문은 [plans/P3-PLAN-01.md](plans/P3-PLAN-01.md)에 있다(수정 기록 1건). 다음 세션이 `P3-PLAN-02`를 작성해야 함. `P2-PLAN-04`는 AC-1~14를 모두 통과해 완료로 종료했고 원문은 [plans/P2-PLAN-04.md](plans/P2-PLAN-04.md)에 있다 |
 | 마지막 구현 검증 | 2026-09-21 — P3-01: **실제 codex·claude 를 7회 실행**해 의도 초안·수준 판단·QG-01 검토·설계안·개발계획을 만들고, 준비가 갖춰지자 **`feature_implementation` 이 처음으로 허용됐다**(쓰기 권한은 계속 거부). **codex 가 제안한 `simple` 을 축에서 도출한 `standard` 가 덮었고**(두 번 반복) 별도 세션의 claude 가 같은 문제를 독립적으로 지적했다. 제어부 강제 종료 후 수준·조정 이력·검토 모드·검토 기록이 복원됐고, 바이트 검사로 본문 비보관을 확인했다. **라이브에서 결함 3건을 찾아 고쳤다.** pytest 169 + P1 계약 unittest 18 통과([P3-01 결과](p3/evidence/P3-01-results.md)). 이전 P2-04 결과는 [P2-04 결과](p2/evidence/P2-04-results.md)에 있다 |
 | 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 어댑터가 없어 능력을 보고하지 않으며 그 도구를 요청하면 `tool_not_available` 로 거부된다. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함. **코드를 바꾸는 쓰기 권한(`workspace_write`)은 여전히 열지 않았다** — 설계·계획 검토를 마쳐도 `permission_not_allowed_in_stage` 로 거부한다. Case별 branch/worktree 와 기준 커밋 없이 쓰기를 열면 사용자의 미커밋 변경을 보호할 수단이 없어서이며(FR-08·FR-26) **P3-03에서 작업공간과 함께 연다.** 그래서 **배정이 허용된 `feature_implementation` 실행은 CLI를 부르지 않고 `failed` 로 보고된다** — 진입 조건과 실행 경로는 다른 것이다. **시스템은 산출물의 내용이 충분한지 판정하지 않는다** — 수준이 요구하는 항목이 미정인지까지만 본다(P4의 QG-02·QG-03). **이월 질문의 `blocks` 는 자유 문자열**이며 Task 로 잇는 것은 P3-02. **`residual_activity` 는 항상 `unknown`** — 자식 프로세스 잔류 확인 수단이 없다(P1-03 이월). **안전 중지(다음 호출 차단)는 제품 경로에 연결하지 않았다** — capability로 보고만 한다. **시스템은 근거가 판정을 뒷받침하는지까지는 강제하지 못한다** — 그것은 사람의 판단이다([P2-04 결과](p2/evidence/P2-04-results.md) 9.2절) |
-| 필요한 사용자 결정 | **이번 세션(P3-01) 커밋의 origin/main push 허용 여부.** 이전 세션의 push 허용은 그 커밋들에만 적용되며 이후 push 로 확대되지 않는다(원격 main = `e2e4b50`) |
-| 다음 세션 첫 행동 | 시작 절차 → `scripts\bootstrap.ps1` · `scripts\run-tests.ps1` 로 현재 코드가 실제로 도는지 먼저 확인(**169 + 18이 기준선**) → [P3-01 결과](p3/evidence/P3-01-results.md)와 FR-07/13, [작업 수준·UX](sizing-and-review-ux.md) 읽기 → `P3-PLAN-02` 작성·공유 → P3-02 구현 |
+| 필요한 사용자 결정 | 현재 없음. 2026-09-21에 이번 세션 커밋의 origin/main push 를 승인받아 완료했다(원격 main = `8c8db82`). **이 허용은 그 커밋들에만 적용되며 이후 push·PR 로 확대되지 않는다** |
+| 다음 세션 첫 행동 | 시작 절차 → 이 checkout 을 그대로 이어서 쓴다(원격과 동기, `git pull` 불필요) → `scripts\bootstrap.ps1` · `scripts\run-tests.ps1` 로 현재 코드가 실제로 도는지 먼저 확인(**169 + 18이 기준선**. bootstrap 이 `web\dist` 를 다시 만든다) → [P3-01 결과](p3/evidence/P3-01-results.md)와 FR-07/13, [작업 수준·UX](sizing-and-review-ux.md) 읽기 → `P3-PLAN-02` 작성·공유 → P3-02 구현 |
 
 위 표는 시작 시점의 기록이다. **이 표만 믿지 말고 실제 Git 상태·코드·검증 증거와 대조한다.** 코드가 이미 있는데 구현 미착수로 표시되거나, 이전 세션이 끝나지 않은 상태면 중복 구현하지 말고 먼저 상태를 복구한다.
 
@@ -367,8 +367,9 @@ P2-02는 의도 초안을 사람이 화면에서 입력하게 만들었고, FR-0
 작업 단계·하위 작업 / 사용한 Plan ID: P3 — 기능 개발 흐름 / P3-01 수준·설계·계획 / P3-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD e2e4b50(작업 트리 clean, origin/main과 동기).
-  이 세션의 커밋 목록은 `git log --oneline e2e4b50..HEAD` 로 본다(문서 커밋 포함 네 건).
-  **push 하지 않았다.** 원격 main 은 e2e4b50 이며 로컬이 앞서 있다.
+  이 세션의 커밋 목록은 `git log --oneline e2e4b50..HEAD` 로 본다(문서 커밋 포함 다섯 건).
+  **사용자 승인으로 origin/main 에 push 했다.** 원격 main 은 8c8db82 이며 로컬과 같다.
+  이 허용은 이번 커밋들에만 적용되며 이후 push·PR 로 확대되지 않는다.
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
   var\, .venv\, web\node_modules\, web\dist\ 는 .gitignore 대상이며 커밋하지 않았다.
   web\dist 는 빌드 산출물이므로 다음 세션에서 bootstrap 또는 npm run build 로 다시 만든다
@@ -469,7 +470,8 @@ P2-02는 의도 초안을 사람이 화면에서 입력하게 만들었고, FR-0
   이 세션이 띄운 CLI 자식 프로세스도 0개다
   (claude 2개와 codex 1개가 이 PC에 떠 있으나 셋 다 라이브 시작 전부터 있던 것이며
   시작 시각이 2026-09-20 22:56 / 2026-09-21 00:17 / 2026-09-15 19:20 이다).
-  GitHub 이슈·PR 등 외부 게시는 없다. **push 하지 않았다.**
+  GitHub 이슈·PR 등 외부 게시는 없다. **사용자 승인으로 origin/main 에 push 했고**
+  원격 main 은 8c8db82 다.
   **외부 AI 전송은 있었다** — 사용자 계정의 codex 3회·claude 4회를 실행했고 각 CLI의
   기존 사용자 설정을 따랐다.
   라이브 시험 데이터 %LOCALAPPDATA%\Temp\hads-p3-01-live 는 지워도 된다(저장소 밖).
@@ -500,9 +502,8 @@ P2-02는 의도 초안을 사람이 화면에서 입력하게 만들었고, FR-0
   - 게이트 ON/OFF 설정과 수정 2회 한도는 P4다. P3에서 앞당기지 않는다
   - 쓰기 권한·작업공간은 P3-03이다. P3-02에서 열지 않는다
 막힌 조건과 필요한 사용자 답변:
-  **origin/main push 허용 여부를 받아야 한다.** 이전 세션의 허용은 그 커밋들에만
-  적용되며 이후 push 로 확대되지 않는다. 허용이 없으면 로컬 커밋만 유지하고
-  다음 세션이 이 checkout 을 그대로 이어서 쓴다
+  없음. push 까지 마쳤다. 다음 세션은 `git pull` 없이 이 checkout 을 그대로 이어서 쓰면 된다
+  (원격과 동기 상태). 다른 PC에서 시작한다면 clone 후 `scripts\bootstrap.ps1` 부터 한다
 ```
 
 - **주의:** OpenCode는 조사 범위에서 설치 흔적이 없어 문서 계약만 다룬다(P1-04). 기존 CLI 로그인 정보·비밀값을 원문 로그로 기록하지 않는다.
