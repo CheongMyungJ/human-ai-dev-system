@@ -253,7 +253,7 @@ P2 이후 해당 기능을 구현할 때 확인한다.
 작업 단계·하위 작업 / 사용한 Plan ID: P2 — 최소 업무 흐름 / P2-01 최소 골격·영속 상태 / P2-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD 3c8f122(작업 트리 clean, origin/main과 동기).
-  이 세션의 커밋은 아래 "구현·변경 내용"의 파일을 담은 P2-01 커밋 1건. push 하지 않았다
+  이 세션의 커밋은 P2-01 커밋 7d1cbe0 과 이 인계를 고친 커밋. 사용자 승인으로 origin/main 에 push 함
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
   var\ (제어부 DB·Runner 원문·로그), .venv\, web\node_modules\, web\dist\ 는
   .gitignore 대상이며 커밋하지 않았다. 지워도 bootstrap 으로 다시 만들어진다
@@ -320,7 +320,8 @@ P2 이후 해당 기능을 구현할 때 확인한다.
   requirements.txt 에 없다. 같은 확인을 사람이 직접 클릭해 재현할 수 있다
 남은 프로세스·실험 저장소·외부 게시 상태:
   남은 프로세스 없음(포트 8765 잔여 연결 0, uvicorn/runner 프로세스 0 확인).
-  외부 게시 없음. **이 세션은 push 하지 않았다.** origin/main 은 3c8f122 그대로다.
+  GitHub 이슈·PR 등 외부 게시는 없다. 사용자 승인으로 origin/main 에 push 했고
+  원격 main 은 7d1cbe0(P2-01) 이후 상태다.
   P1 시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 이전 세션 상태 그대로 두었다.
   P2 런타임 데이터는 저장소 안 var\ 이며 커밋하지 않았다
 단계 완료 여부와 이유:
