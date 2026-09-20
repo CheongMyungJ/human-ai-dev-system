@@ -1,0 +1,17 @@
+{
+  "id": "gate-3bc45c4783ac12ce",
+  "case_id": "case-9175c1382bb53489",
+  "gate": "QG-01",
+  "intent_version_id": "intent-a7dc81e871d84487",
+  "subject_content_hash": "sha256:66c2ee806004a2eb8fa760fdc03d5f703ff1ceb147445f79ef045fb0b14e0470",
+  "verdict": "pass",
+  "rule_verdict": "pass",
+  "ai_verdict": "pass",
+  "ai_run_id": "live-review-3",
+  "ai_session_ref": "03b0528d-229a-4bcd-bc84-b44debf3f466",
+  "author_session_ref": null,
+  "evaluated_at": "2026-09-20T13:18:12.870137+00:00",
+  "reviewed_at": "2026-09-20T13:18:37.999326+00:00",
+  "superseded_at": null,
+  "findings": []
+}

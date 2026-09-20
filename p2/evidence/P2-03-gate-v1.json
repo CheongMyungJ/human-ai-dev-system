@@ -1,0 +1,70 @@
+{
+  "id": "gate-68612e692fb63bec",
+  "case_id": "case-9175c1382bb53489",
+  "gate": "QG-01",
+  "intent_version_id": "intent-f13d05f7744899ba",
+  "subject_content_hash": "sha256:ddc80e27d50af5a1d61c1cc7f2f6705b05fe8ce782663d240d4db5180a06947a",
+  "verdict": "fail",
+  "rule_verdict": "pass",
+  "ai_verdict": "fail",
+  "ai_run_id": "live-review-1",
+  "ai_session_ref": "b344d179-0d3e-4582-a7c6-c15da386fbbd",
+  "author_session_ref": "01a0bef1-3769-70b3-a138-cbf06d74754f",
+  "evaluated_at": "2026-09-20T13:12:47.088218+00:00",
+  "reviewed_at": "2026-09-20T13:13:23.743352+00:00",
+  "superseded_at": null,
+  "findings": [
+    {
+      "id": "finding-d17bf577b6e8c3e9",
+      "gate_result_id": "gate-68612e692fb63bec",
+      "source": "ai",
+      "criterion": "important_open_question_unlisted",
+      "severity": "required",
+      "blocking": 1,
+      "certainty": "confirmed",
+      "target": "questions",
+      "summary": "저장소에 구현·빌드 설정이 전혀 없어 언어/실행 방식을 사람이 정해야 하는데 질문에 없다.",
+      "evidence_artifact_id": null,
+      "created_at": "2026-09-20T13:13:23.743352+00:00"
+    },
+    {
+      "id": "finding-4b33c2fc4e831989",
+      "gate_result_id": "gate-68612e692fb63bec",
+      "source": "ai",
+      "criterion": "other",
+      "severity": "advisory",
+      "blocking": 0,
+      "certainty": "confirmed",
+      "target": "open_questions",
+      "summary": "q1이 미결인데 open_questions 필드는 빈 값/undecided로 남아 문서 내에서 불일치한다.",
+      "evidence_artifact_id": null,
+      "created_at": "2026-09-20T13:13:23.743352+00:00"
+    },
+    {
+      "id": "finding-56f70953dabac046",
+      "gate_result_id": "gate-68612e692fb63bec",
+      "source": "ai",
+      "criterion": "other",
+      "severity": "advisory",
+      "blocking": 0,
+      "certainty": "suspected",
+      "target": "exclusions",
+      "summary": "exclusions가 goal 재진술뿐이어서 대소문자·다른 로그 파일 등 경계 구분에 쓸 정보가 없다.",
+      "evidence_artifact_id": null,
+      "created_at": "2026-09-20T13:13:23.743352+00:00"
+    },
+    {
+      "id": "finding-90ed2d03285d2923",
+      "gate_result_id": "gate-68612e692fb63bec",
+      "source": "ai",
+      "criterion": "request_missing_or_contradictory",
+      "severity": "required",
+      "blocking": 1,
+      "certainty": "confirmed",
+      "target": "constraints",
+      "summary": "goal/scope는 기능을 만들라 하는데 constraints는 코드 수정·파일 생성 금지로 서로 모순된다.",
+      "evidence_artifact_id": null,
+      "created_at": "2026-09-20T13:13:23.743352+00:00"
+    }
+  ]
+}

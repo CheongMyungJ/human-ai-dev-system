@@ -7,6 +7,7 @@
   --accent: #6aa2ff;
   --warn: #ffb020;
   --error: #ff6b6b;
+  --ok: #4ade80;
   color-scheme: dark;
 }
 
@@ -251,4 +252,53 @@ th {
   align-self: flex-start;
   width: auto;
   min-width: 160px;
+}
+
+/* P2-03 게이트·진입 제어 */
+
+/* 한 패널 안에서 별도 관심사를 구분한다. 게이트와 진입 검사는 실행과 다른 판단이다. */
+.subpanel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin: 16px 0;
+}
+
+.subpanel h3,
+.subpanel h4 {
+  margin-top: 0;
+}
+
+/* 판정은 색으로 **구별**하되 색만으로 의미를 전하지 않는다. 글자도 함께 바뀐다
+   (통과 / 실패 / 판단 보류 / 검토 안 함 …). */
+.verdict-pass {
+  color: var(--ok);
+}
+
+.verdict-fail {
+  color: var(--error);
+}
+
+.verdict-hold,
+.verdict-needs_recheck,
+.verdict-blocked {
+  color: var(--warn);
+}
+
+.verdict-not_run,
+.verdict-not_applicable {
+  color: var(--muted);
+}
+
+.required {
+  color: var(--warn);
+}
+
+.notice.refusal {
+  border-color: var(--error);
+  color: inherit;
+}
+
+.notice.refusal strong {
+  color: var(--error);
 }

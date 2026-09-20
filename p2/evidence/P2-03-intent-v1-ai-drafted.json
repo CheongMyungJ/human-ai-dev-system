@@ -1,0 +1,50 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 1,
+  "case_id": "case-9175c1382bb53489",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "live-draft-1",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "fields": {
+    "goal": {
+      "text": "app.log에서 ERROR로 시작하는 줄만 뽑아 보여 주는 기능을 만든다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "현재 저장소의 app.log에서 조건에 해당하는 줄은 'ERROR disk full'과 'ERROR timeout'이다.",
+      "state": "proposed",
+      "origin": "observation"
+    },
+    "scope": {
+      "text": "app.log 읽기, ERROR로 시작하는 줄 선별, 선별한 줄 표시.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "ERROR로 시작하지 않는 줄은 표시 결과에서 제외한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "이번 작업에서는 저장소를 읽고 의도 초안만 작성하며, 코드를 수정하거나 파일을 만들지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "저장소에는 README.md와 app.log만 있고 기존 구현은 없습니다. 추출한 줄을 터미널에 출력할지, 별도 화면에 표시할지 어떤 방식을 원하시나요?",
+      "summary": "결과 제공 방식 결정",
+      "decide_at": "design",
+      "blocks": []
+    }
+  ]
+}

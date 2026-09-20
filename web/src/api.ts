@@ -46,6 +46,9 @@ export interface IntentVersion {
   artifact_id: string
   status: string
   created_at: string
+  // **누가 실제로 썼는가.** 기록되지 않은 옛 버전은 null 이다.
+  authoring_mode: 'human_typed' | 'ai_drafted' | null
+  author_run_id: string | null
 }
 
 export interface Decision {
@@ -69,6 +72,8 @@ export interface Run {
   run_id: string
   case_id: string
   task_id: string
+  purpose: RunPurpose | null
+  session_ref: string | null
   role: string
   tool_id: string
   mode: string
@@ -92,6 +97,8 @@ export interface CaseDetail extends Case {
   intent_versions: IntentVersion[]
   decisions: Decision[]
   runs: Run[]
+  gate: GateResult
+  admission_checks: AdmissionCheck[]
 }
 
 export interface RunnerInfo {
@@ -103,14 +110,33 @@ export interface RunnerInfo {
   capabilities: { tool_id: string; mode: string; capability: string; state: string }[]
 }
 
+// 서버가 구조화된 거절 사유를 주는 경우가 있다(의도 동의 거절, 진입 조건 거부).
+// 화면이 그 사유를 사람에게 그대로 보여 줄 수 있도록 본문을 붙여 던진다.
+export class ApiError extends Error {
+  readonly status: number
+  readonly detail: unknown
+
+  constructor(status: number, detail: unknown, text: string) {
+    super(`${status} ${text}`)
+    this.status = status
+    this.detail = detail
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
   })
   if (!response.ok) {
-    const detail = await response.text()
-    throw new Error(`${response.status} ${detail}`)
+    const text = await response.text()
+    let detail: unknown = text
+    try {
+      detail = (JSON.parse(text) as { detail?: unknown }).detail ?? text
+    } catch {
+      // JSON이 아니면 원문 그대로 둔다.
+    }
+    throw new ApiError(response.status, detail, text)
   }
   return (await response.json()) as T
 }
@@ -140,7 +166,12 @@ export const api = {
 
   // 원문 제출. 응답은 접수 확인이며 저장 완료가 아니다.
   submitArtifact: (caseId: string, kind: string, content: string, summary: string, runnerId: string) =>
-    request<{ intake_id: string; artifact_id: string; availability: Availability }>(
+    request<{
+      intake_id: string
+      artifact_id: string
+      revision: number
+      availability: Availability
+    }>(
       `/api/cases/${caseId}/artifacts`,
       {
         method: 'POST',
@@ -155,13 +186,43 @@ export const api = {
     }),
 
   // run_id 를 화면이 만들어 보낸다. 같은 값으로 다시 눌러도 새 실행은 생기지 않는다.
-  createRun: (caseId: string, artifactId: string, runId: string) =>
-    request<{ run: Run; created: boolean }>(`/api/cases/${caseId}/runs`, {
-      method: 'POST',
-      body: JSON.stringify({ run_id: runId, instruction_artifact_id: artifactId }),
-    }),
+  //
+  // P2-03: 목적·역할·도구·권한을 함께 보낸다. **서버가 진입 조건을 검사하며**
+  // 조건을 못 갖추면 409와 사유 코드가 돌아온다. 화면에서 버튼을 감추는 것은
+  // 조건이 아니므로 이 호출은 언제든 할 수 있고, 답은 서버가 한다.
+  createRun: (
+    caseId: string,
+    artifactId: string,
+    runId: string,
+    options?: {
+      purpose?: RunPurpose
+      role?: 'author' | 'reviewer'
+      tool_id?: string
+      mode?: string
+      permission?: 'read_only' | 'workspace_write' | 'explicit_escalated'
+      task_id?: string
+      instruction_artifact_rev?: number
+    },
+  ) =>
+    request<{ run: Run; created: boolean; admission: AdmissionView | null }>(
+      `/api/cases/${caseId}/runs`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          run_id: runId,
+          instruction_artifact_id: artifactId,
+          ...options,
+        }),
+      },
+    ),
 
   getRun: (runId: string) => request<Run>(`/api/runs/${runId}`),
+
+  // 접수 상태 조회. 202 응답은 저장 완료가 아니므로 화면이 여기서 확인한다.
+  getIntake: (intakeId: string) =>
+    request<{ id: string; state: string; artifact_id: string; revision: number }>(
+      `/api/intakes/${intakeId}`,
+    ),
 }
 
 // ===================================================================== P2-02
@@ -372,4 +433,119 @@ export const intentApi = {
     request<{ request: ReadRequest; content: string | null }>(
       `/api/read-requests/${requestId}`,
     ),
+}
+
+// ===================================================================== P2-03
+//
+// QG-01 게이트 · FR-29 진입 조건 검사 · AI 작성 경로.
+//
+// 화면이 하는 일은 **보여 주는 것**이다. 조건 판단은 전부 서버에 있다.
+// 여기서 버튼을 감추더라도 그것이 조건이 아니며, 서버가 같은 요청을 거부한다.
+
+export type RunPurpose =
+  | 'intent_authoring'
+  | 'intent_gate_review'
+  | 'limited_analysis'
+  | 'feature_implementation'
+
+export type GateVerdict =
+  | 'pass'
+  | 'fail'
+  | 'hold'
+  | 'not_run'
+  | 'needs_recheck'
+  | 'blocked'
+  | 'not_applicable'
+
+export interface GateFinding {
+  id: string
+  source: 'rule' | 'ai'
+  criterion: string
+  severity: 'required' | 'advisory'
+  blocking: number
+  certainty: 'confirmed' | 'suspected'
+  target: string
+  summary: string
+}
+
+export interface GateResult {
+  gate: string
+  intent_version_id: string | null
+  verdict: GateVerdict
+  rule_verdict: GateVerdict
+  ai_verdict: GateVerdict
+  findings: GateFinding[]
+  ai_run_id?: string | null
+  ai_session_ref?: string | null
+  author_session_ref?: string | null
+  reviewed_at?: string | null
+  superseded_at?: string | null
+}
+
+export interface AdmissionView {
+  outcome: 'admitted' | 'refused'
+  profile: string
+  refusals: string[]
+  reasons: Record<string, string>
+  intent_version_id: string | null
+  intent_agreement_state: string | null
+  gate_verdict: string | null
+}
+
+export interface AdmissionCheck {
+  id: string
+  run_id: string | null
+  requested_run_id: string
+  requested_purpose: RunPurpose
+  requested_role: string
+  requested_permission: string
+  requested_task_id: string
+  requested_tool_id: string
+  profile: string
+  outcome: 'admitted' | 'refused'
+  refusals: string[]
+  intent_agreement_state: string | null
+  gate_verdict: string | null
+  checked_at: string
+}
+
+//: 판정을 사람 말로. 값을 합치지 않는다 — `not_run` 과 `pass` 는 다른 상태다.
+export const GATE_VERDICT_LABEL: Record<GateVerdict, string> = {
+  pass: '통과',
+  fail: '실패',
+  hold: '판단 보류',
+  not_run: '검토 안 함',
+  needs_recheck: '재검토 필요',
+  blocked: '실행 불가',
+  not_applicable: '미적용',
+}
+
+export const REFUSAL_LABEL: Record<string, string> = {
+  intent_not_agreed: '최신 의도에 대한 사람의 동의가 없다',
+  open_intent_questions: '의도 단계에서 결정할 질문이 남아 있다',
+  intent_gate_not_passed: 'QG-01 의도 품질 게이트를 통과하지 않았다',
+  intent_original_not_available: '의도 원문을 지금 읽을 수 없다',
+  instruction_not_available: '지시 원문을 실행자가 읽을 수 없다',
+  permission_not_allowed_in_stage: '이 단계에서 배정하지 않는 권한이다',
+  permission_not_mapped: '이 도구에 해당 권한 매핑이 확인되지 않았다',
+  role_mismatch: '목적에 맞지 않는 역할이다',
+  prerequisite_not_implemented: '선행 조건(설계·계획 검토)이 아직 구현되지 않았다',
+  tool_not_available: '사용 가능하다고 보고된 도구가 아니다',
+  review_session_not_separate: '검토가 작성과 별도 세션이 아니다',
+  intent_version_missing: '검토할 의도 버전이 없다',
+}
+
+export const gateApi = {
+  state: (caseId: string) => request<GateResult>(`/api/cases/${caseId}/gate`),
+
+  results: (caseId: string) => request<GateResult[]>(`/api/cases/${caseId}/gate-results`),
+
+  // 규칙 검사만 다시 돌린다. **AI 검토 결과는 그대로 둔다.**
+  runRules: (caseId: string, intentId: string) =>
+    request<GateResult>(`/api/cases/${caseId}/intent-versions/${intentId}/gate-rules`, {
+      method: 'POST',
+    }),
+
+  admissionChecks: (caseId: string) =>
+    request<AdmissionCheck[]>(`/api/cases/${caseId}/admission-checks`),
 }

@@ -1,17 +1,45 @@
-// P2-01 최소 화면 + P2-02 의도 흐름.
+// P2-01 최소 화면 + P2-02 의도 흐름 + P2-03 게이트·진입 제어.
 //
 // 제어부에서 오는 것은 상태 · 요약 · 원문 참조뿐이다. 원문 본문은 의도 화면의
 // 열람 경로(일시중계)로만 나타나며 제어부에 보관되지 않는다.
+//
+// **이 화면은 조건을 판단하지 않는다.** 실행 버튼을 감추는 것은 조건이 아니므로
+// 여기서는 서버가 돌려준 판정과 사유를 보여 주기만 한다. 같은 요청을 브라우저
+// 밖에서 보내도 서버가 같은 답을 한다(FR-29).
 
 import { useCallback, useEffect, useState } from 'react'
 import {
   api,
+  ApiError,
+  gateApi,
+  GATE_VERDICT_LABEL,
+  REFUSAL_LABEL,
+  type AdmissionCheck,
+  type AdmissionView,
   type ArtifactRef,
   type CaseDetail,
+  type GateResult,
   type Project,
   type RunnerInfo,
+  type RunPurpose,
 } from './api'
 import { IntentPanel } from './IntentPanel'
+
+//: 화면에서 고를 수 있는 목적. `feature_implementation` 도 **일부러 남겨 둔다** —
+//: 고르면 서버가 "선행 조건이 아직 구현되지 않았다"고 거부하는 것을 볼 수 있어야
+//: 한다. 목록에서 지우면 그 사실이 화면에서 사라진다.
+const PURPOSE_OPTIONS: { value: RunPurpose; label: string }[] = [
+  { value: 'limited_analysis', label: '제한 작업 (읽기·결과 작성)' },
+  { value: 'intent_gate_review', label: 'QG-01 의미 검토 (별도 세션)' },
+  { value: 'feature_implementation', label: '기능 구현 (아직 열리지 않음)' },
+]
+
+function describeAdmission(detail: unknown): AdmissionView | null {
+  if (detail && typeof detail === 'object' && 'admission' in detail) {
+    return (detail as { admission: AdmissionView }).admission
+  }
+  return null
+}
 
 const AVAILABILITY_LABEL: Record<string, string> = {
   pending: '저장 대기 (아직 저장 완료 아님)',
@@ -261,8 +289,22 @@ function CaseDetailPanel(props: {
   const [summary, setSummary] = useState('')
   const [runId, setRunId] = useState('')
   const [notice, setNotice] = useState<string | null>(null)
+  const [purpose, setPurpose] = useState<RunPurpose>('limited_analysis')
+  const [permission, setPermission] = useState<'read_only' | 'workspace_write'>('read_only')
+  const [refusal, setRefusal] = useState<AdmissionView | null>(null)
 
   const runnerId = props.runners[0]?.id
+  // 사용 가능하다고 **보고된** 도구만 고를 수 있다. 목록에 없는 도구를 골라도
+  // 서버가 거부하지만, 없는 선택지를 보여 주지 않는 편이 정직하다.
+  const toolOptions = Array.from(
+    new Set(
+      props.runners
+        .flatMap((runner) => runner.capabilities)
+        .filter((cap) => cap.capability === 'installed' && cap.state === 'verified')
+        .map((cap) => cap.tool_id),
+    ),
+  )
+  const [toolId, setToolId] = useState(toolOptions[0] ?? 'codex')
   const runnableArtifacts = detail.artifacts.filter(
     (artifact) => artifact.availability === 'available' && artifact.kind !== 'run_output',
   )
@@ -277,7 +319,8 @@ function CaseDetailPanel(props: {
 
       <h3>원문 참조</h3>
       <p className="muted small">
-        제어부는 참조만 보관한다. 본문은 소유 Runner에 있다. 본문 열람(일시중계)은 P2-04 범위다.
+        제어부는 참조만 보관한다. 본문은 소유 Runner에 있고, 아래 의도 화면의
+        원문 열람(일시중계)으로만 한 번씩 지나간다.
       </p>
       <table>
         <thead>
@@ -372,43 +415,118 @@ function CaseDetailPanel(props: {
         ))}
       </ul>
 
+      <GatePanel detail={detail} onChanged={props.onChanged} />
+
       <h3>실행</h3>
+      <p className="muted small">
+        실행 요청은 언제든 보낼 수 있다. <strong>조건은 서버가 검사한다</strong> —
+        갖추지 못하면 아래에 사유가 나오고 Run은 만들어지지 않는다(FR-29).
+      </p>
       <form
         onSubmit={async (event) => {
           event.preventDefault()
-          const artifact = runnableArtifacts[0]
+          const artifact =
+            purpose === 'intent_gate_review'
+              ? detail.artifacts.find(
+                  (a) => a.kind === 'intent' && a.availability === 'available',
+                )
+              : runnableArtifacts.find((a) => a.kind !== 'intent')
           if (!artifact) {
-            setNotice('저장 완료된 지시 원문이 없다.')
+            setNotice('이 목적에 쓸 저장 완료된 원문이 없다.')
             return
           }
           const id = runId.trim() || `run-${Date.now()}`
-          const created = await api.createRun(detail.id, artifact.artifact_id, id)
-          setRunId(id)
-          setNotice(
-            created.created
-              ? `Run ${id} 를 새로 만들었다.`
-              : `Run ${id} 는 이미 있다. 같은 run_id 는 새 실행을 만들지 않는다.`,
-          )
+          setRefusal(null)
+          try {
+            const created = await api.createRun(detail.id, artifact.artifact_id, id, {
+              purpose,
+              role: purpose === 'intent_gate_review' ? 'reviewer' : 'author',
+              tool_id: toolId,
+              mode: toolId === 'claude' ? 'print' : 'exec',
+              permission,
+              instruction_artifact_rev: artifact.revision,
+            })
+            setRunId(id)
+            setNotice(
+              created.created
+                ? `Run ${id} 를 만들었다. 진입 조건을 통과했다(${created.admission?.profile}).`
+                : `Run ${id} 는 이미 있다. 같은 run_id 는 새 실행도 새 검사도 만들지 않는다.`,
+            )
+          } catch (err) {
+            if (err instanceof ApiError && err.status === 409) {
+              const admission = describeAdmission(err.detail)
+              if (admission) {
+                setRefusal(admission)
+                setNotice(null)
+              } else {
+                setNotice(err.message)
+              }
+            } else {
+              setNotice(err instanceof Error ? err.message : String(err))
+            }
+          }
           props.onChanged()
         }}
       >
+        <select value={purpose} onChange={(e) => setPurpose(e.target.value as RunPurpose)}>
+          {PURPOSE_OPTIONS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <select value={toolId} onChange={(e) => setToolId(e.target.value)}>
+          {toolOptions.map((tool) => (
+            <option key={tool} value={tool}>
+              {tool}
+            </option>
+          ))}
+        </select>
+        <select
+          value={permission}
+          onChange={(e) => setPermission(e.target.value as 'read_only' | 'workspace_write')}
+        >
+          <option value="read_only">read_only</option>
+          <option value="workspace_write">workspace_write (이 단계에서 거부됨)</option>
+        </select>
         <input
           value={runId}
           placeholder="run_id (비워 두면 자동 생성)"
           onChange={(e) => setRunId(e.target.value)}
         />
-        <button type="submit" disabled={runnableArtifacts.length === 0}>
-          실행 요청
-        </button>
+        <button type="submit">실행 요청</button>
       </form>
+
+      {refusal && (
+        <div className="notice refusal">
+          <strong>진입 조건 미충족 — Run을 만들지 않았다.</strong>
+          <p className="small">
+            적용한 조건표: {refusal.profile} · 의도 동의:{' '}
+            {refusal.intent_agreement_state ?? '—'} · QG-01: {refusal.gate_verdict ?? '—'}
+          </p>
+          <ul className="list">
+            {refusal.refusals.map((code) => (
+              <li key={code} className="small">
+                <strong>{REFUSAL_LABEL[code] ?? code}</strong>
+                <br />
+                <span className="muted">{refusal.reasons[code]}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <AdmissionLog checks={detail.admission_checks} />
 
       <table>
         <thead>
           <tr>
             <th>run_id</th>
+            <th>목적</th>
+            <th>도구</th>
             <th>상태</th>
             <th>결과</th>
-            <th>세대</th>
+            <th>세션</th>
             <th>사용량</th>
             <th>잔여 활동</th>
           </tr>
@@ -417,9 +535,15 @@ function CaseDetailPanel(props: {
           {detail.runs.map((run) => (
             <tr key={run.run_id}>
               <td className="mono small">{run.run_id}</td>
+              {/* 목적이 없는 행은 P2-03 이전에 만들어진 것이다. 지금 값을 지어내지 않는다. */}
+              <td className="small">{run.purpose ?? '기록 없음'}</td>
+              <td className="small">
+                {run.tool_id}
+                {run.observed_tool_version ? ` (${run.observed_tool_version})` : ''}
+              </td>
               <td>{run.status}</td>
               <td>{run.outcome ?? '—'}</td>
-              <td>{run.assignment_generation}</td>
+              <td className="mono small">{run.session_ref ?? 'not_reported'}</td>
               <td className="small">
                 {typeof run.usage === 'string' ? run.usage : JSON.stringify(run.usage)}
               </td>
@@ -428,7 +552,7 @@ function CaseDetailPanel(props: {
           ))}
           {detail.runs.length === 0 && (
             <tr>
-              <td colSpan={6} className="muted">
+              <td colSpan={8} className="muted">
                 아직 없음
               </td>
             </tr>
@@ -436,6 +560,162 @@ function CaseDetailPanel(props: {
         </tbody>
       </table>
     </section>
+  )
+}
+
+function GatePanel(props: { detail: CaseDetail; onChanged: () => void }) {
+  const gate: GateResult = props.detail.gate
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState<string | null>(null)
+
+  const ruleFindings = gate.findings.filter((f) => f.source === 'rule')
+  const aiFindings = gate.findings.filter((f) => f.source === 'ai')
+
+  return (
+    <section className="subpanel">
+      <h3>QG-01 의도 초안 품질 게이트</h3>
+      <p className="muted small">
+        기능 개발의 <strong>필수 게이트</strong>이며 끌 수 없다. 이 게이트가 보는 것은
+        “사람에게 검토를 요청할 준비가 됐는가”이고, 의도에 부합한다는 판정은 사람의
+        명시적 동의로 <strong>따로</strong> 충족한다.
+      </p>
+
+      <table>
+        <tbody>
+          <tr>
+            <th>종합 판정</th>
+            <td>
+              <strong className={`verdict verdict-${gate.verdict}`}>
+                {GATE_VERDICT_LABEL[gate.verdict]}
+              </strong>
+            </td>
+          </tr>
+          <tr>
+            <th>규칙 검사</th>
+            <td>{GATE_VERDICT_LABEL[gate.rule_verdict]}</td>
+          </tr>
+          <tr>
+            <th>AI 의미 검토</th>
+            <td>
+              {GATE_VERDICT_LABEL[gate.ai_verdict]}
+              {gate.ai_verdict === 'not_run' && (
+                <span className="muted small">
+                  {' '}
+                  — 규칙만 통과한 것은 통과가 아니다. 별도 세션 검토가 필요하다
+                </span>
+              )}
+            </td>
+          </tr>
+          {gate.ai_session_ref && (
+            <tr>
+              <th>세션 분리</th>
+              <td className="mono small">
+                작성 {gate.author_session_ref ?? '사람이 작성(실행 없음)'} · 검토{' '}
+                {gate.ai_session_ref}
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      {note && <div className="notice">{note}</div>}
+
+      <button
+        type="button"
+        disabled={busy || !gate.intent_version_id}
+        onClick={async () => {
+          if (!gate.intent_version_id) return
+          setBusy(true)
+          try {
+            const result = await gateApi.runRules(props.detail.id, gate.intent_version_id)
+            setNote(
+              `규칙 검사를 다시 돌렸다: ${GATE_VERDICT_LABEL[result.rule_verdict]}.` +
+                ' AI 검토 결과는 그대로 둔다.',
+            )
+          } catch (err) {
+            setNote(err instanceof Error ? err.message : String(err))
+          } finally {
+            setBusy(false)
+            props.onChanged()
+          }
+        }}
+      >
+        규칙 검사 다시 실행
+      </button>
+      <p className="muted small">
+        AI 의미 검토는 아래 실행에서 목적을 “QG-01 의미 검토”로 골라 시작한다.
+        작성과 다른 세션에서 수행되며, 그 사실이 위 표에 기록된다.
+      </p>
+
+      <h4>발견 사항</h4>
+      {gate.findings.length === 0 && <p className="muted small">아직 없음</p>}
+      {[
+        { label: '규칙', items: ruleFindings },
+        { label: 'AI 의미 검토', items: aiFindings },
+      ].map((group) =>
+        group.items.length === 0 ? null : (
+          <div key={group.label}>
+            <p className="small">
+              <strong>{group.label}</strong>
+            </p>
+            <ul className="list">
+              {group.items.map((finding) => (
+                <li key={finding.id} className="small">
+                  <span className={finding.severity === 'required' ? 'required' : 'muted'}>
+                    [{finding.severity === 'required' ? '필수' : '권고'}
+                    {finding.blocking ? ' · 차단' : ''} · {finding.certainty === 'confirmed' ? '확정' : '의심'}]
+                  </span>{' '}
+                  <span className="mono">{finding.criterion}</span> · {finding.target}
+                  <br />
+                  <span className="muted">{finding.summary}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ),
+      )}
+    </section>
+  )
+}
+
+function AdmissionLog(props: { checks: AdmissionCheck[] }) {
+  if (props.checks.length === 0) return null
+  return (
+    <>
+      <h4>진입 검사 기록</h4>
+      <p className="muted small">
+        통과도 거부도 남는다. 왜 실행이 시작되지 않았는지 다른 화면을 찾아다니지 않고
+        알 수 있어야 한다.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>요청 run_id</th>
+            <th>목적</th>
+            <th>권한</th>
+            <th>결과</th>
+            <th>사유</th>
+            <th>시각</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.checks.map((check) => (
+            <tr key={check.id}>
+              <td className="mono small">{check.requested_run_id}</td>
+              <td className="small">{check.requested_purpose}</td>
+              <td className="small">{check.requested_permission}</td>
+              <td className="small">
+                {check.outcome === 'admitted' ? '허용' : '거부'}
+              </td>
+              <td className="small">
+                {check.refusals.map((code) => REFUSAL_LABEL[code] ?? code).join(' / ') || '—'}
+              </td>
+              <td className="muted small">{check.checked_at}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
   )
 }
 
