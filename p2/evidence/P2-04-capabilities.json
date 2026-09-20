@@ -1,0 +1,268 @@
+[
+  {
+    "id": "runner-p204-1",
+    "name": "runner-p204-1",
+    "host": "DESKTOP-2U080FC",
+    "status": "registered",
+    "registered_at": "2026-09-20T23:33:26.963547+09:00",
+    "last_heartbeat_at": "2026-09-21T00:04:16.926633+09:00",
+    "capabilities": [
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "cancel_confirmed",
+        "state": "unknown",
+        "source": "P1-03 실증 결과 (p1/evidence/P1-03-results.md): 프로세스 잔류 관측",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "coding_cli",
+        "state": "verified",
+        "source": "P2-03 Runner 기동 시 확인: 2.1.278 (Claude Code)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "installed",
+        "state": "verified",
+        "source": "P2-03 Runner 기동 시 확인: 2.1.278 (Claude Code)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "permission:explicit_escalated",
+        "state": "unsupported",
+        "source": "이 어댑터에 매핑이 없다",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "permission:read_only",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "permission:workspace_write",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "safe_stop_next_call",
+        "state": "verified",
+        "source": "P1-03 실증 결과 (p1/evidence/P1-03-results.md) (조건부)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "session_identity",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "session_resume",
+        "state": "doc_only",
+        "source": "--help 만 확인",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "structured_events",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "tool_boundary_observed",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "claude",
+        "mode": "print",
+        "capability": "usage_reporting",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md) — 토큰 + 비용",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "cancel_confirmed",
+        "state": "unknown",
+        "source": "P1-03 실증 결과 (p1/evidence/P1-03-results.md): 프로세스 잔류 관측",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "coding_cli",
+        "state": "verified",
+        "source": "P2-03 Runner 기동 시 확인: codex-cli 0.154.0",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "installed",
+        "state": "verified",
+        "source": "P2-03 Runner 기동 시 확인: codex-cli 0.154.0",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "permission:explicit_escalated",
+        "state": "unsupported",
+        "source": "이 어댑터에 매핑이 없다",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "permission:read_only",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "permission:workspace_write",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "safe_stop_next_call",
+        "state": "verified",
+        "source": "P1-03 실증 결과 (p1/evidence/P1-03-results.md) (조건부)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "session_identity",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "session_resume",
+        "state": "doc_only",
+        "source": "--help 만 확인",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "structured_events",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "tool_boundary_observed",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "codex",
+        "mode": "exec",
+        "capability": "usage_reporting",
+        "state": "verified",
+        "source": "P1-02 실증 결과 (p1/evidence/P1-02-results.md) — 토큰만, 비용 없음",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "coding_cli",
+        "state": "unsupported",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "installed",
+        "state": "verified",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "permission:read_only",
+        "state": "verified",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "safe_stop_next_call",
+        "state": "unsupported",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "session_identity",
+        "state": "unsupported",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "structured_events",
+        "state": "verified",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "tool_boundary_observed",
+        "state": "unsupported",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      },
+      {
+        "tool_id": "local-echo",
+        "mode": "p2-01-local",
+        "capability": "usage_reporting",
+        "state": "unsupported",
+        "source": "P2-01 local executor (not a coding CLI)",
+        "observed_at": "2026-09-20T23:47:58.564679+09:00"
+      }
+    ]
+  }
+]

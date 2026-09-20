@@ -58,6 +58,8 @@ class AdmissionRequest:
 
     case_id: str
     case_kind: CaseKind
+    #: 이미 종료된 Case 인가. 종료 뒤에는 새 실행을 받지 않는다(D-33).
+    case_closed: bool
     run_id: str
     task_id: str
     purpose: RunPurpose
@@ -135,6 +137,15 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
 
     # --- 모든 목적에 공통인 조건 --------------------------------------------
 
+    # 종료된 Case 는 조건을 갖춰도 열리지 않는다. 완료 후 수정은 기존 Case 재개가
+    # 아니라 연결된 새 Case 다(D-33). **검사 기록으로 남기려고** 여기서 본다 —
+    # 앞단에서 예외로 던지면 "왜 실행이 열리지 않았는가"가 진입 검사 표에 없다.
+    if request.case_closed:
+        refuse(
+            AdmissionRefusal.CASE_ALREADY_CLOSED,
+            "이미 종료된 업무다. 수정은 연결된 새 Case 로 한다",
+        )
+
     expected_role = EXPECTED_ROLE[request.purpose]
     if request.role is not expected_role:
         refuse(
@@ -190,6 +201,15 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
             refuse(
                 AdmissionRefusal.INTENT_VERSION_MISSING,
                 "검토할 의도 버전이 없다",
+            )
+        elif target != (latest or {}).get("id"):
+            # **대체된 버전을 검토하지 않는다.** 검토가 끝나도 최신 버전의 게이트는
+            # 그대로 `not_run` 이라 아무 것도 진척되지 않고, 화면에는 옛 버전의
+            # 판정이 새 결과처럼 보인다. 실제 CLI를 부르기 전에 여기서 막는다.
+            refuse(
+                AdmissionRefusal.INTENT_VERSION_NOT_LATEST,
+                "검토 대상이 최신 의도 버전이 아니다."
+                " 최신 버전의 의도 원문을 지시로 지정한다",
             )
         elif (latest or {}).get("availability") != "available":
             refuse(

@@ -1763,9 +1763,20 @@ class Repository:
             if session_ref:
                 author_sessions.append(session_ref)
 
+        # **실제 검토 대상은 지시 원문이 정한다.** 배정 내용과 같은 방식으로 여기서도
+        # 끌어낸다. 이것을 최신 버전으로 가정하면, 옛 의도 원문을 지시로 준 요청이
+        # 검사를 통과한 뒤 엉뚱한 버전을 검토하게 된다(라이브에서 실제로 났던 일).
+        if target_intent_version_id is None:
+            target = self.intent_version_for_artifact(
+                instruction_artifact_id, instruction_artifact_rev
+            )
+            target_intent_version_id = target["id"] if target else None
+
         request = AdmissionRequest(
             case_id=case_id,
             case_kind=CaseKind(case["kind"]),
+            case_closed=case["status"]
+            in (CaseStatus.CLOSED.value, CaseStatus.CANCELLED.value),
             run_id=run_id,
             task_id=task_id,
             purpose=purpose,
@@ -1878,11 +1889,9 @@ class Repository:
         if existing is not None:
             return self.get_run(run_id), False, None, None
 
-        # 종료된 Case 는 새 실행을 받지 않는다. 완료 후 수정은 연결된 새 Case 다(D-33).
-        # 진입 조건표보다 앞에 두는 이유는, 이것이 "조건을 갖추면 열린다"가 아니라
-        # "이 Case 에서는 더 이상 실행하지 않는다"이기 때문이다.
-        self.guard_open_case(case_id)
-
+        # 종료된 Case 도 **진입 검사를 거쳐** 거부된다(`case_already_closed`).
+        # 앞단에서 예외로 던지면 "왜 실행이 열리지 않았는가"가 진입 검사 기록에
+        # 남지 않는다. 허용도 거부도 같은 표에 남기는 것이 FR-29의 요구다.
         result = self.check_admission(
             case_id=case_id,
             run_id=run_id,
@@ -2212,6 +2221,9 @@ class Repository:
         후보에 대한 인수는 새 후보의 인수가 되지 않는다(completion-lifecycle 3절
         "후보가 의미 있게 바뀌면 이전 확인을 새 결과의 인수로 사용하지 않는다").
         """
+        # 종료된 Case 는 새 후보를 만들지 않는다. 만들면 인수된 후보를 대체해
+        # "무엇을 인수했는가"가 흐려진다.
+        self.guard_open_case(case_id)
         snapshot = self._candidate_snapshot(case_id)
         open_row = self.conn.execute(
             "SELECT * FROM completion_candidate WHERE case_id = ? AND state = ?"
@@ -2442,14 +2454,20 @@ class Repository:
             if candidate["criteria_total"] == 0:
                 refusals.append(AcceptanceRefusal.NO_SUCCESS_CRITERIA)
 
+        # 남은 항목을 **종류별로** 구별해 사유를 붙인다. 미해결 피드백을
+        # "기준 미충족"이라고 적으면 사람이 엉뚱한 곳을 고치게 된다.
         excepted = {e["target_id"] for e in candidate["exceptions"]}
-        unresolved = [
-            item
-            for item in candidate["unresolved"]
-            if not (item["kind"] == "criterion" and item["id"] in excepted)
-        ]
-        if unresolved:
-            refusals.append(AcceptanceRefusal.UNRESOLVED_CRITERIA)
+        by_kind = {
+            "criterion": AcceptanceRefusal.UNRESOLVED_CRITERIA,
+            "open_intent_question": AcceptanceRefusal.OPEN_INTENT_QUESTIONS,
+            "unresolved_feedback": AcceptanceRefusal.UNRESOLVED_FEEDBACK,
+        }
+        for item in candidate["unresolved"]:
+            if item["kind"] == "criterion" and item["id"] in excepted:
+                continue  # 사람이 예외로 수용한 기준은 남은 항목이 아니다
+            reason = by_kind.get(item["kind"], AcceptanceRefusal.UNRESOLVED_CRITERIA)
+            if reason not in refusals:
+                refusals.append(reason)
 
         # 미정리 실행은 인수를 막지 않는다 — 인수는 기록하고 **종료 확정만** 보류한다.
         # 다만 자동 완료는 미정리 실행이 있으면 아예 완료하지 않는다.

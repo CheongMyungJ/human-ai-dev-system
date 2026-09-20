@@ -521,3 +521,45 @@ def test_the_skeleton_executor_is_still_fine_for_plain_analysis(harness):
         },
     )
     assert response.status_code == 201, response.text
+
+
+def test_a_gate_review_of_a_superseded_intent_version_is_refused(harness):
+    """대체된 의도 버전을 검토하려는 요청은 거부한다.
+
+    라이브 검증에서 실제로 났던 일이다. 화면이 목록의 **첫** 의도 원문을 지시로
+    지정하는 바람에, v2 가 있는데도 v1 을 검토했다. 검토는 정상 종료하지만 최신
+    버전의 게이트는 `not_run` 그대로여서 아무 것도 진척되지 않고, 화면에는 옛
+    버전의 판정이 새 결과처럼 보인다.
+
+    검토 대상은 **지시 원문이 정한다.** 그래서 진입 검사도 최신 버전을 가정하지 않고
+    지시 원문에서 대상을 끌어내 대조한다. 화면도 함께 고쳤지만, 화면만 고치면 같은
+    실수가 API 로 돌아온다.
+    """
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    harness.submit_intent_draft(case["id"], GOOD_FIELDS, summary="v1")
+    v1 = harness.latest_intent(case["id"])
+    harness.submit_intent_draft(case["id"], GOOD_FIELDS, summary="v2")
+    v2 = harness.latest_intent(case["id"])
+    assert v1["id"] != v2["id"]
+
+    refused = harness.client.post(
+        f"/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "review-old-version",
+            "instruction_artifact_id": v1["artifact_id"],
+            "instruction_artifact_rev": v1["artifact_rev"],
+            "purpose": "intent_gate_review",
+            "role": "reviewer",
+            "tool_id": "codex",
+            "mode": "exec",
+            "permission": "read_only",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert "intent_version_not_latest" in refused.json()["detail"]["admission"]["refusals"]
+
+    # 최신 버전을 지정하면 열린다. 검토 자체를 막는 것이 아니다.
+    allowed = harness.ai_gate_review(case["id"], v2, run_id="review-current-version")
+    assert allowed.status_code == 201, allowed.text
+    assert harness.gate(case["id"])["ai_verdict"] != "not_run"

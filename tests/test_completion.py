@@ -524,3 +524,64 @@ def test_auto_completion_refuses_while_a_run_is_unsettled(harness, agreed_case):
     assert result["applied"] is False
     assert "unsettled_runs_present" in result["refusals"]
     assert result["closure"] is None
+
+
+# ------------------------------------- 남은 항목의 사유를 종류별로 구별한다
+
+
+def test_open_questions_and_unresolved_feedback_get_their_own_refusal(harness, agreed_case):
+    """미해결 피드백을 "기준 미충족"이라고 적지 않는다.
+
+    사유 코드가 뭉뚱그려지면 사람이 엉뚱한 곳을 고친다. 항목 종류마다 다른 코드를
+    붙이고, 피드백은 **사람이** 반영/미반영으로 닫아야 사라진다
+    (intent-artifacts 3절 — AI가 스스로 "반영했다"고 선언하지 않는다).
+    """
+    case, intent = agreed_case
+    harness.mark_all_criteria_met(case["id"])
+
+    submitted = harness.submit_feedback(case["id"], intent["id"], "이 부분을 바꿔 주세요")
+    candidate = harness.build_candidate(case["id"])
+    response = harness.accept(case["id"], candidate["id"])
+    assert response.status_code == 409
+    codes = _refusals(response)
+    assert "unresolved_feedback" in codes
+    # 기준은 전부 충족이므로 기준 사유는 붙지 않는다.
+    assert "unresolved_criteria" not in codes
+
+    # 미반영으로 닫으려면 이유가 있어야 한다.
+    feedback_id = submitted["feedback"]["id"]
+    silent = harness.client.post(
+        f"/api/cases/{case['id']}/feedback/{feedback_id}/disposition",
+        json={"reflected": False},
+    )
+    assert silent.status_code == 409
+    assert "needs a reason" in silent.json()["detail"]
+
+    closed = harness.client.post(
+        f"/api/cases/{case['id']}/feedback/{feedback_id}/disposition",
+        json={"reflected": False, "reason": "이번 범위 밖이라 후속 Case 로 넘긴다"},
+    )
+    assert closed.status_code == 200, closed.text
+    assert closed.json()["state"] == "not_reflected"
+    assert closed.json()["disposition_note"].startswith("이번 범위 밖")
+
+    # 닫고 나면 후보가 바뀌고, 새 후보로는 인수할 수 있다.
+    candidate = harness.build_candidate(case["id"])
+    assert harness.accept(case["id"], candidate["id"]).status_code == 201
+
+
+def test_a_closed_case_does_not_get_a_new_candidate(harness, agreed_case):
+    """종료된 Case 에 새 후보를 만들지 않는다.
+
+    만들면 인수된 후보를 대체해 "무엇을 인수했는가"가 흐려진다.
+    """
+    case, _intent = agreed_case
+    harness.mark_all_criteria_met(case["id"])
+    candidate = harness.build_candidate(case["id"])
+    assert harness.accept(case["id"], candidate["id"]).status_code == 201
+
+    response = harness.client.post(f"/api/cases/{case['id']}/completion-candidates")
+    assert response.status_code == 409
+    assert "case_already_closed" in response.json()["detail"]
+    # 인수된 후보는 그대로 남는다.
+    assert harness.result(case["id"])["candidate"]["id"] == candidate["id"]

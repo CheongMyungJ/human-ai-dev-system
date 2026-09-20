@@ -1,0 +1,142 @@
+[
+  {
+    "id": "gate-481907b4b62a5fbb",
+    "case_id": "case-480ffa89250dd9c2",
+    "gate": "QG-01",
+    "intent_version_id": "intent-3ae94f1aefeb167d",
+    "subject_content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+    "verdict": "pass",
+    "rule_verdict": "pass",
+    "ai_verdict": "pass",
+    "ai_run_id": "ui-review-s2",
+    "ai_session_ref": "3bd4e1fe-eeb8-473b-9bc7-7ffad980ff6b",
+    "author_session_ref": null,
+    "evaluated_at": "2026-09-21T00:02:33.004619+09:00",
+    "reviewed_at": "2026-09-21T00:03:13.275978+09:00",
+    "superseded_at": null,
+    "findings": [
+      {
+        "id": "finding-05c83cab9e5a0024",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "important_open_question_unlisted",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "open_questions",
+        "summary": "수준 필드만 볼지 줄 전체를 볼지 미정인데(C-01 은 수준 필드, 목표·기대는 '줄'), 질문은 '없음'으로 닫혀 있다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:03:13.275978+09:00"
+      },
+      {
+        "id": "finding-b457e8b0794de353",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "other",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "scope",
+        "summary": "확장 대상인 이전 Case 의 오류 줄 조회 구현이 현재 작업공간(sample.log 뿐)에 없어 출발점이 불확실하다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:03:13.275978+09:00"
+      },
+      {
+        "id": "finding-2a4d82c1b8ba8658",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "unverifiable_success_criteria",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "confirmed",
+        "target": "expected_outcome",
+        "summary": "기대 결과에 든 혼합 표기 Error 는 C-01·C-02 어디서도 확인하지 않는다(표본도 소문자 error 만 명시).",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:03:13.275978+09:00"
+      }
+    ]
+  },
+  {
+    "id": "gate-4e130cfa93c25d2f",
+    "case_id": "case-480ffa89250dd9c2",
+    "gate": "QG-01",
+    "intent_version_id": "intent-1fdebd3bace9b80d",
+    "subject_content_hash": "sha256:7d688cc45c4f0a7b43c05fbee5df8cb457b873f21942792157ab180e591b85d4",
+    "verdict": "needs_recheck",
+    "rule_verdict": "pass",
+    "ai_verdict": "fail",
+    "ai_run_id": "ui-review-s1",
+    "ai_session_ref": "314ab658-3517-4c3c-8a6d-3e7a2b65cde4",
+    "author_session_ref": null,
+    "evaluated_at": "2026-09-21T00:00:02.490352+09:00",
+    "reviewed_at": "2026-09-21T00:00:53.079072+09:00",
+    "superseded_at": "2026-09-21T00:02:32.566838+09:00",
+    "findings": [
+      {
+        "id": "finding-0ecf9cfa1a3e9460",
+        "gate_result_id": "gate-4e130cfa93c25d2f",
+        "source": "ai",
+        "criterion": "other",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "open_questions",
+        "summary": "옵션 이름 --ignore-case의 통상적 의미가 초안이 기술한 켜짐/꺼짐 동작과 반대 방향이다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:00:53.079072+09:00"
+      },
+      {
+        "id": "finding-573e6e816eb30612",
+        "gate_result_id": "gate-4e130cfa93c25d2f",
+        "source": "ai",
+        "criterion": "request_missing_or_contradictory",
+        "severity": "required",
+        "blocking": 1,
+        "certainty": "confirmed",
+        "target": "expected_outcome",
+        "summary": "옵션 끈 상태가 대소문자 무시로 적혀 있어 '기본값=대소문자 구분'(constraints·C-01)과 정반대이며 C-01과 C-02도 서로 충돌한다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:00:53.079072+09:00"
+      },
+      {
+        "id": "finding-551c37aea93504e0",
+        "gate_result_id": "gate-4e130cfa93c25d2f",
+        "source": "ai",
+        "criterion": "request_missing_or_contradictory",
+        "severity": "required",
+        "blocking": 1,
+        "certainty": "confirmed",
+        "target": "constraints",
+        "summary": "'파일을 만들거나 바꾸지 않는다'는 제약과 '표본 파일을 만들어 대조한다'는 C-02 검증 방법이 정면으로 충돌한다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:00:53.079072+09:00"
+      },
+      {
+        "id": "finding-754ed0ac93d6a319",
+        "gate_result_id": "gate-4e130cfa93c25d2f",
+        "source": "ai",
+        "criterion": "request_missing_or_contradictory",
+        "severity": "required",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "scope",
+        "summary": "기존 조회에 옵션을 추가하는 작업인데 파일 생성·수정 금지 제약과 양립 가능한지 드러나 있지 않다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:00:53.079072+09:00"
+      },
+      {
+        "id": "finding-b8f42caa9b8da1c0",
+        "gate_result_id": "gate-4e130cfa93c25d2f",
+        "source": "ai",
+        "criterion": "unverifiable_success_criteria",
+        "severity": "required",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "criteria",
+        "summary": "C-02는 제약상 만들 수 없는 표본 파일에 의존해 실행 가능한 확인 경로가 남지 않는다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T00:00:53.079072+09:00"
+      }
+    ]
+  }
+]

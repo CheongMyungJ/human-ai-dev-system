@@ -1,0 +1,784 @@
+{
+  "id": "case-480ffa89250dd9c2",
+  "project_id": "prj-b2145002c9031c1a",
+  "title": "대소문자 구분 옵션 추가",
+  "kind": "feature",
+  "status": "closed",
+  "created_at": "2026-09-20T14:57:32.174222+00:00",
+  "updated_at": "2026-09-20T15:03:30.058704+00:00",
+  "artifacts": [
+    {
+      "artifact_id": "art-c9a6fbe77f0e4fb4",
+      "revision": 1,
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "intent",
+      "content_hash": "sha256:7d688cc45c4f0a7b43c05fbee5df8cb457b873f21942792157ab180e591b85d4",
+      "byte_size": 2489,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "사람이 쓴 의도 v1",
+      "created_at": "2026-09-20T15:00:02.211004+00:00"
+    },
+    {
+      "artifact_id": "art-68d5fad80427cc58",
+      "revision": 1,
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "run_output",
+      "content_hash": "sha256:0caaf9a5b5f9e6ba218b51e384354d86481c22943a408a3f89eb857655c7a904",
+      "byte_size": 1898,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for ui-review-s1",
+      "created_at": "2026-09-20T15:00:53.070164+00:00"
+    },
+    {
+      "artifact_id": "art-5778006ff22e05ed",
+      "revision": 1,
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "intent",
+      "content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+      "byte_size": 2855,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "사람이 쓴 의도 v2 — QG-01 지적 반영",
+      "created_at": "2026-09-20T15:02:32.557888+00:00"
+    },
+    {
+      "artifact_id": "art-3434d39cf36369c2",
+      "revision": 1,
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "run_output",
+      "content_hash": "sha256:a8b497a555a990f241099d6058502be631184b99417f09369b06c7484807f9e8",
+      "byte_size": 1273,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for ui-review-s2",
+      "created_at": "2026-09-20T15:03:13.273202+00:00"
+    }
+  ],
+  "intent_versions": [
+    {
+      "id": "intent-3ae94f1aefeb167d",
+      "case_id": "case-480ffa89250dd9c2",
+      "revision": 2,
+      "artifact_id": "art-5778006ff22e05ed",
+      "artifact_rev": 1,
+      "status": "agreed",
+      "created_at": "2026-09-20T15:02:32.566838+00:00",
+      "superseded_by": null,
+      "authoring_mode": "human_typed",
+      "author_run_id": null,
+      "fields": [
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "goal",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "unchanged"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "expected_outcome",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "scope",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "exclusions",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "constraints",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "open_questions",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        }
+      ],
+      "questions": [],
+      "criteria": [
+        {
+          "id": "crit-3d16e02cd98ae7a1",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "criterion_key": "C-01",
+          "summary": "옵션 없이 실행하면 대문자 ERROR 만 나온다",
+          "method_summary": "sample.log 를 옵션 없이 조회해 기본 동작 확인",
+          "relates_to": "constraints",
+          "state": "user_confirmed",
+          "created_at": "2026-09-20T15:02:33.004619+00:00",
+          "verdict": "met",
+          "evidence_kind": "human_judgement",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "옵션 없이 실행해 기본이 구분임을 확인했다",
+          "recorded_by": "owner",
+          "recorded_at": "2026-09-20T15:03:20.065930+00:00"
+        },
+        {
+          "id": "crit-6cdc59a2c490edcb",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "criterion_key": "C-02",
+          "summary": "--ignore-case 를 주면 소문자 error 줄도 나온다",
+          "method_summary": "임시 경로의 표본 파일로 옵션을 켜고 끄고 두 번 대조",
+          "relates_to": "expected_outcome",
+          "state": "user_confirmed",
+          "created_at": "2026-09-20T15:02:33.004619+00:00",
+          "verdict": "not_met",
+          "evidence_kind": "human_judgement",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "옵션을 켰을 때 소문자 error 줄이 나오지 않았다",
+          "recorded_by": "owner",
+          "recorded_at": "2026-09-20T15:03:21.606645+00:00"
+        }
+      ],
+      "content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+      "availability": "available",
+      "summary": "사람이 쓴 의도 v2 — QG-01 지적 반영"
+    },
+    {
+      "id": "intent-1fdebd3bace9b80d",
+      "case_id": "case-480ffa89250dd9c2",
+      "revision": 1,
+      "artifact_id": "art-c9a6fbe77f0e4fb4",
+      "artifact_rev": 1,
+      "status": "superseded",
+      "created_at": "2026-09-20T15:00:02.212283+00:00",
+      "superseded_by": "intent-3ae94f1aefeb167d",
+      "authoring_mode": "human_typed",
+      "author_run_id": null,
+      "fields": [
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "goal",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "expected_outcome",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "scope",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "exclusions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "constraints",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "field": "open_questions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        }
+      ],
+      "questions": [],
+      "criteria": [
+        {
+          "id": "crit-95329a702800aa61",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "criterion_key": "C-01",
+          "summary": "기본값이 대소문자 구분이다",
+          "method_summary": "옵션 없이 실행해 기본 동작을 확인",
+          "relates_to": "constraints",
+          "state": "superseded",
+          "created_at": "2026-09-20T15:00:02.489352+00:00",
+          "verdict": "needs_recheck",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T15:02:32.566838+00:00"
+        },
+        {
+          "id": "crit-94b8402f20e44e39",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-1fdebd3bace9b80d",
+          "criterion_key": "C-02",
+          "summary": "소문자 error 가 섞인 표본에서 옵션이 동작한다",
+          "method_summary": "소문자 error 가 든 표본 파일로 두 번 실행해 대조",
+          "relates_to": "expected_outcome",
+          "state": "superseded",
+          "created_at": "2026-09-20T15:00:02.489352+00:00",
+          "verdict": "needs_recheck",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T15:02:32.566838+00:00"
+        }
+      ],
+      "content_hash": "sha256:7d688cc45c4f0a7b43c05fbee5df8cb457b873f21942792157ab180e591b85d4",
+      "availability": "available",
+      "summary": "사람이 쓴 의도 v1"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "dec-0ed2ef4ebdffbe3b",
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "final_acceptance",
+      "subject_type": "completion_candidate",
+      "subject_id": "cand-cb1d3aabddfc45cf",
+      "subject_revision": 1,
+      "actor": "owner",
+      "decided_at": "2026-09-20T15:03:30.058704+00:00",
+      "evidence_ref": null,
+      "revoked_at": null,
+      "subject_content_hash": "sha256:72690a42ffd211bd89bca5a5af4c348c854edc81c3ec16fb787411f310a8369f"
+    },
+    {
+      "id": "dec-089b31ac858acd07",
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "exception_closure",
+      "subject_type": "success_criterion",
+      "subject_id": "crit-6cdc59a2c490edcb",
+      "subject_revision": 1,
+      "actor": "owner",
+      "decided_at": "2026-09-20T15:03:27.827470+00:00",
+      "evidence_ref": null,
+      "revoked_at": null,
+      "subject_content_hash": "sha256:72690a42ffd211bd89bca5a5af4c348c854edc81c3ec16fb787411f310a8369f"
+    },
+    {
+      "id": "dec-a61cee98fa73a40c",
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "intent_agreement",
+      "subject_type": "intent_version",
+      "subject_id": "intent-3ae94f1aefeb167d",
+      "subject_revision": 2,
+      "actor": "owner",
+      "decided_at": "2026-09-20T15:03:16.515478+00:00",
+      "evidence_ref": null,
+      "revoked_at": null,
+      "subject_content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83"
+    }
+  ],
+  "feedback": [],
+  "intent_state": {
+    "case_id": "case-480ffa89250dd9c2",
+    "latest_intent_version": {
+      "id": "intent-3ae94f1aefeb167d",
+      "case_id": "case-480ffa89250dd9c2",
+      "revision": 2,
+      "artifact_id": "art-5778006ff22e05ed",
+      "artifact_rev": 1,
+      "status": "agreed",
+      "created_at": "2026-09-20T15:02:32.566838+00:00",
+      "superseded_by": null,
+      "authoring_mode": "human_typed",
+      "author_run_id": null,
+      "fields": [
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "goal",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "unchanged"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "expected_outcome",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "scope",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "exclusions",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "constraints",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "field": "open_questions",
+          "state": "user_confirmed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        }
+      ],
+      "questions": [],
+      "criteria": [
+        {
+          "id": "crit-3d16e02cd98ae7a1",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "criterion_key": "C-01",
+          "summary": "옵션 없이 실행하면 대문자 ERROR 만 나온다",
+          "method_summary": "sample.log 를 옵션 없이 조회해 기본 동작 확인",
+          "relates_to": "constraints",
+          "state": "user_confirmed",
+          "created_at": "2026-09-20T15:02:33.004619+00:00",
+          "verdict": "met",
+          "evidence_kind": "human_judgement",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "옵션 없이 실행해 기본이 구분임을 확인했다",
+          "recorded_by": "owner",
+          "recorded_at": "2026-09-20T15:03:20.065930+00:00"
+        },
+        {
+          "id": "crit-6cdc59a2c490edcb",
+          "case_id": "case-480ffa89250dd9c2",
+          "intent_version_id": "intent-3ae94f1aefeb167d",
+          "criterion_key": "C-02",
+          "summary": "--ignore-case 를 주면 소문자 error 줄도 나온다",
+          "method_summary": "임시 경로의 표본 파일로 옵션을 켜고 끄고 두 번 대조",
+          "relates_to": "expected_outcome",
+          "state": "user_confirmed",
+          "created_at": "2026-09-20T15:02:33.004619+00:00",
+          "verdict": "not_met",
+          "evidence_kind": "human_judgement",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "옵션을 켰을 때 소문자 error 줄이 나오지 않았다",
+          "recorded_by": "owner",
+          "recorded_at": "2026-09-20T15:03:21.606645+00:00"
+        }
+      ],
+      "content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+      "availability": "available",
+      "summary": "사람이 쓴 의도 v2 — QG-01 지적 반영"
+    },
+    "agreement_state": "agreed_current",
+    "agreed_version": {
+      "id": "dec-a61cee98fa73a40c",
+      "case_id": "case-480ffa89250dd9c2",
+      "kind": "intent_agreement",
+      "subject_type": "intent_version",
+      "subject_id": "intent-3ae94f1aefeb167d",
+      "subject_revision": 2,
+      "actor": "owner",
+      "decided_at": "2026-09-20T15:03:16.515478+00:00",
+      "evidence_ref": null,
+      "revoked_at": null,
+      "subject_content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83"
+    },
+    "open_intent_questions": [],
+    "unresolved_feedback": [],
+    "views": [
+      {
+        "id": "view-2b5f0fdbe2ea69c2",
+        "case_id": "case-480ffa89250dd9c2",
+        "intent_version_id": "intent-3ae94f1aefeb167d",
+        "actor": "owner",
+        "content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+        "viewed_at": "2026-09-20T15:03:16.362601+00:00"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "run_id": "ui-review-s2",
+      "case_id": "case-480ffa89250dd9c2",
+      "task_id": "task-1",
+      "role": "reviewer",
+      "tool_id": "claude",
+      "mode": "print",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-5778006ff22e05ed",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-3434d39cf36369c2",
+      "output_artifact_rev": 1,
+      "session_ref": "3bd4e1fe-eeb8-473b-9bc7-7ffad980ff6b",
+      "residual_activity": "unknown",
+      "observed_tool_version": "2.1.278 (Claude Code)",
+      "created_at": "2026-09-20T15:02:36.658788+00:00",
+      "assigned_at": "2026-09-20T15:02:37.046899+00:00",
+      "finished_at": "2026-09-20T15:03:13.275978+00:00",
+      "purpose": "intent_gate_review",
+      "usage": {
+        "tokens": {
+          "input_tokens": 6,
+          "cache_creation_input_tokens": 3537,
+          "cache_read_input_tokens": 22682,
+          "output_tokens": 2787,
+          "output_tokens_details": {
+            "thinking_tokens": 2196
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 3537,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 2371,
+              "cache_read_input_tokens": 8941,
+              "cache_creation_input_tokens": 244,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 244
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "cost_usd": 0.11641599999999999
+      },
+      "workspace_effect": null
+    },
+    {
+      "run_id": "ui-review-s1",
+      "case_id": "case-480ffa89250dd9c2",
+      "task_id": "task-1",
+      "role": "reviewer",
+      "tool_id": "claude",
+      "mode": "print",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-c9a6fbe77f0e4fb4",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-68d5fad80427cc58",
+      "output_artifact_rev": 1,
+      "session_ref": "314ab658-3517-4c3c-8a6d-3e7a2b65cde4",
+      "residual_activity": "unknown",
+      "observed_tool_version": "2.1.278 (Claude Code)",
+      "created_at": "2026-09-20T15:00:06.093210+00:00",
+      "assigned_at": "2026-09-20T15:00:06.538759+00:00",
+      "finished_at": "2026-09-20T15:00:53.079072+00:00",
+      "purpose": "intent_gate_review",
+      "usage": {
+        "tokens": {
+          "input_tokens": 2,
+          "cache_creation_input_tokens": 2275,
+          "cache_read_input_tokens": 5648,
+          "output_tokens": 3654,
+          "output_tokens_details": {
+            "thinking_tokens": 3014
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 2275,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 3654,
+              "cache_read_input_tokens": 5648,
+              "cache_creation_input_tokens": 2275,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 2275
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "cost_usd": 0.11693399999999998
+      },
+      "workspace_effect": null
+    }
+  ],
+  "gate": {
+    "id": "gate-481907b4b62a5fbb",
+    "case_id": "case-480ffa89250dd9c2",
+    "gate": "QG-01",
+    "intent_version_id": "intent-3ae94f1aefeb167d",
+    "subject_content_hash": "sha256:d11c97757f3eee7189d5ea19424248172d3fde43bb9c1ca7c4748a8c8cc83e83",
+    "verdict": "pass",
+    "rule_verdict": "pass",
+    "ai_verdict": "pass",
+    "ai_run_id": "ui-review-s2",
+    "ai_session_ref": "3bd4e1fe-eeb8-473b-9bc7-7ffad980ff6b",
+    "author_session_ref": null,
+    "evaluated_at": "2026-09-20T15:02:33.004619+00:00",
+    "reviewed_at": "2026-09-20T15:03:13.275978+00:00",
+    "superseded_at": null,
+    "findings": [
+      {
+        "id": "finding-05c83cab9e5a0024",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "important_open_question_unlisted",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "open_questions",
+        "summary": "수준 필드만 볼지 줄 전체를 볼지 미정인데(C-01 은 수준 필드, 목표·기대는 '줄'), 질문은 '없음'으로 닫혀 있다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-20T15:03:13.275978+00:00"
+      },
+      {
+        "id": "finding-b457e8b0794de353",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "other",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "suspected",
+        "target": "scope",
+        "summary": "확장 대상인 이전 Case 의 오류 줄 조회 구현이 현재 작업공간(sample.log 뿐)에 없어 출발점이 불확실하다.",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-20T15:03:13.275978+00:00"
+      },
+      {
+        "id": "finding-2a4d82c1b8ba8658",
+        "gate_result_id": "gate-481907b4b62a5fbb",
+        "source": "ai",
+        "criterion": "unverifiable_success_criteria",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "confirmed",
+        "target": "expected_outcome",
+        "summary": "기대 결과에 든 혼합 표기 Error 는 C-01·C-02 어디서도 확인하지 않는다(표본도 소문자 error 만 명시).",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-20T15:03:13.275978+00:00"
+      }
+    ]
+  },
+  "admission_checks": [
+    {
+      "id": "admission-f7927162fb1cbaad",
+      "case_id": "case-480ffa89250dd9c2",
+      "run_id": "ui-review-s2",
+      "requested_run_id": "ui-review-s2",
+      "requested_purpose": "intent_gate_review",
+      "requested_role": "reviewer",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "claude",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": "intent-3ae94f1aefeb167d",
+      "intent_agreement_state": "never_agreed",
+      "gate_verdict": "not_run",
+      "checked_at": "2026-09-20T15:02:36.667150+00:00",
+      "refusals": []
+    },
+    {
+      "id": "admission-e2ffe40523b12d1f",
+      "case_id": "case-480ffa89250dd9c2",
+      "run_id": "ui-review-s1",
+      "requested_run_id": "ui-review-s1",
+      "requested_purpose": "intent_gate_review",
+      "requested_role": "reviewer",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "claude",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": "intent-1fdebd3bace9b80d",
+      "intent_agreement_state": "never_agreed",
+      "gate_verdict": "not_run",
+      "checked_at": "2026-09-20T15:00:06.093210+00:00",
+      "refusals": []
+    }
+  ],
+  "result": {
+    "case_id": "case-480ffa89250dd9c2",
+    "completion_mode": "human_acceptance",
+    "criteria": [
+      {
+        "id": "crit-3d16e02cd98ae7a1",
+        "case_id": "case-480ffa89250dd9c2",
+        "intent_version_id": "intent-3ae94f1aefeb167d",
+        "criterion_key": "C-01",
+        "summary": "옵션 없이 실행하면 대문자 ERROR 만 나온다",
+        "method_summary": "sample.log 를 옵션 없이 조회해 기본 동작 확인",
+        "relates_to": "constraints",
+        "state": "user_confirmed",
+        "created_at": "2026-09-20T15:02:33.004619+00:00",
+        "verdict": "met",
+        "evidence_kind": "human_judgement",
+        "evidence_run_id": null,
+        "evidence_artifact_id": null,
+        "evidence_artifact_rev": null,
+        "result_summary": "옵션 없이 실행해 기본이 구분임을 확인했다",
+        "recorded_by": "owner",
+        "recorded_at": "2026-09-20T15:03:20.065930+00:00"
+      },
+      {
+        "id": "crit-6cdc59a2c490edcb",
+        "case_id": "case-480ffa89250dd9c2",
+        "intent_version_id": "intent-3ae94f1aefeb167d",
+        "criterion_key": "C-02",
+        "summary": "--ignore-case 를 주면 소문자 error 줄도 나온다",
+        "method_summary": "임시 경로의 표본 파일로 옵션을 켜고 끄고 두 번 대조",
+        "relates_to": "expected_outcome",
+        "state": "user_confirmed",
+        "created_at": "2026-09-20T15:02:33.004619+00:00",
+        "verdict": "not_met",
+        "evidence_kind": "human_judgement",
+        "evidence_run_id": null,
+        "evidence_artifact_id": null,
+        "evidence_artifact_rev": null,
+        "result_summary": "옵션을 켰을 때 소문자 error 줄이 나오지 않았다",
+        "recorded_by": "owner",
+        "recorded_at": "2026-09-20T15:03:21.606645+00:00"
+      }
+    ],
+    "unsettled_runs": [],
+    "candidate": {
+      "id": "cand-cb1d3aabddfc45cf",
+      "case_id": "case-480ffa89250dd9c2",
+      "revision": 1,
+      "intent_version_id": "intent-3ae94f1aefeb167d",
+      "intent_agreement_state": "agreed_current",
+      "gate_verdict": "pass",
+      "criteria_total": 2,
+      "criteria_met": 1,
+      "snapshot_hash": "sha256:72690a42ffd211bd89bca5a5af4c348c854edc81c3ec16fb787411f310a8369f",
+      "state": "open",
+      "created_at": "2026-09-20T15:03:23.325552+00:00",
+      "superseded_at": null,
+      "unresolved": [
+        {
+          "kind": "criterion",
+          "id": "crit-6cdc59a2c490edcb",
+          "key": "C-02",
+          "verdict": "not_met"
+        }
+      ],
+      "unsettled_runs": [],
+      "criteria": [
+        {
+          "criterion_id": "crit-3d16e02cd98ae7a1",
+          "verdict": "met",
+          "criterion_key": "C-01",
+          "summary": "옵션 없이 실행하면 대문자 ERROR 만 나온다",
+          "method_summary": "sample.log 를 옵션 없이 조회해 기본 동작 확인",
+          "relates_to": "constraints",
+          "state": "user_confirmed"
+        },
+        {
+          "criterion_id": "crit-6cdc59a2c490edcb",
+          "verdict": "not_met",
+          "criterion_key": "C-02",
+          "summary": "--ignore-case 를 주면 소문자 error 줄도 나온다",
+          "method_summary": "임시 경로의 표본 파일로 옵션을 켜고 끄고 두 번 대조",
+          "relates_to": "expected_outcome",
+          "state": "user_confirmed"
+        }
+      ],
+      "exceptions": [
+        {
+          "id": "exc-57355919df5fcc6c",
+          "case_id": "case-480ffa89250dd9c2",
+          "candidate_id": "cand-cb1d3aabddfc45cf",
+          "decision_id": "dec-089b31ac858acd07",
+          "target_type": "criterion",
+          "target_id": "crit-6cdc59a2c490edcb",
+          "original_verdict": "not_met",
+          "scope_summary": "이번 종료에만 적용. 소문자 표본 확인은 후속 Case 로 넘긴다",
+          "actor": "owner",
+          "decided_at": "2026-09-20T15:03:27.827470+00:00"
+        }
+      ],
+      "acceptance": {
+        "id": "accept-ebd70cf52e039672",
+        "case_id": "case-480ffa89250dd9c2",
+        "candidate_id": "cand-cb1d3aabddfc45cf",
+        "decision_id": "dec-0ed2ef4ebdffbe3b",
+        "mode": "human",
+        "actor": "owner",
+        "statement_artifact_id": null,
+        "accepted_at": "2026-09-20T15:03:30.058704+00:00"
+      }
+    },
+    "closure": {
+      "id": "closure-258364ec1f1b05d7",
+      "case_id": "case-480ffa89250dd9c2",
+      "candidate_id": "cand-cb1d3aabddfc45cf",
+      "final_acceptance_id": "accept-ebd70cf52e039672",
+      "closure_kind": "closed_with_exceptions",
+      "exception_count": 1,
+      "confirmed_at": "2026-09-20T15:03:30.058704+00:00"
+    },
+    "relations": [
+      {
+        "id": "rel-983f74fa5cc4b533",
+        "from_case_id": "case-b55ee0ec6964eccb",
+        "to_case_id": "case-480ffa89250dd9c2",
+        "relation": "follow_up_change",
+        "reason_summary": "완료 후 추가 요청",
+        "created_at": "2026-09-20T14:57:32.181902+00:00"
+      }
+    ]
+  }
+}

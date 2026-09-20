@@ -439,10 +439,18 @@ function CaseDetailPanel(props: {
       <form
         onSubmit={async (event) => {
           event.preventDefault()
+          // **최신 의도 버전의 원문**을 지정한다. 목록에서 첫 intent 원문을 집으면
+          // 새 버전이 생긴 뒤에도 v1을 검토하게 된다 — 라이브에서 실제로 났던 일이다.
+          // 검토가 끝나도 최신 버전의 게이트는 `not_run` 그대로라 아무 것도
+          // 진척되지 않는다. 서버도 같은 조합을 거부한다(intent_version_not_latest).
+          const latestIntent = detail.intent_versions[0]
           const artifact =
             purpose === 'intent_gate_review'
               ? detail.artifacts.find(
-                  (a) => a.kind === 'intent' && a.availability === 'available',
+                  (a) =>
+                    a.kind === 'intent' &&
+                    a.availability === 'available' &&
+                    a.artifact_id === latestIntent?.artifact_id,
                 )
               : runnableArtifacts.find((a) => a.kind !== 'intent')
           if (!artifact) {

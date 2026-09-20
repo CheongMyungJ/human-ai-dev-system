@@ -165,6 +165,7 @@ export function IntentPanel(props: {
           intent={latest}
           diff={diff}
           runnerId={runnerId}
+          unresolvedFeedback={state?.unresolved_feedback ?? []}
           onNotice={setNotice}
           onAction={guard}
         />
@@ -331,6 +332,7 @@ function LatestVersion(props: {
   intent: IntentVersionDetail
   diff: IntentDiff | null
   runnerId: string | undefined
+  unresolvedFeedback: { id: string; summary: string }[]
   onNotice: (text: string | null) => void
   onAction: (fn: () => Promise<void>) => Promise<void>
 }) {
@@ -341,6 +343,7 @@ function LatestVersion(props: {
   const [statement, setStatement] = useState('')
   const [feedback, setFeedback] = useState({ summary: '', content: '' })
   const [answer, setAnswer] = useState<Record<string, string>>({})
+  const [disposition, setDisposition] = useState<Record<string, string>>({})
 
   // 버전이 바뀌면 이전에 읽은 원문을 그대로 쓰지 않는다(FR-23: 대상이 바뀌면 재확인).
   useEffect(() => {
@@ -574,6 +577,64 @@ function LatestVersion(props: {
           피드백 보내기
         </button>
       </form>
+
+      {/* 피드백의 처리 결과는 **사람이** 정한다. AI가 새 버전을 쓴 뒤 스스로
+          "반영했다"고 선언하게 두지 않는다(intent-artifacts 3절). 닫지 않은
+          피드백이 남으면 최종 인수가 `unresolved_feedback` 으로 거부된다. */}
+      {props.unresolvedFeedback.length > 0 && (
+        <>
+          <h4>아직 닫지 않은 피드백</h4>
+          <p className="muted small">
+            새 버전이 이 피드백을 반영했는지 <strong>사람이</strong> 판단한다. 반영하지
+            않기로 했다면 이유를 남긴다 — 조용히 닫지 않는다.
+          </p>
+          <ul className="list">
+            {props.unresolvedFeedback.map((item) => (
+              <li key={item.id} className="small">
+                <strong>{item.summary}</strong>
+                <br />
+                <button
+                  type="button"
+                  onClick={() =>
+                    void props.onAction(async () => {
+                      await intentApi.resolveFeedback(caseId, item.id, {
+                        reflected: true,
+                        reflected_in_version_id: intent.id,
+                      })
+                      props.onNotice(`피드백을 의도 v${intent.revision} 에 반영된 것으로 닫았다.`)
+                    })
+                  }
+                >
+                  의도 v{intent.revision} 이 반영함
+                </button>
+                <input
+                  value={disposition[item.id] ?? ''}
+                  placeholder="미반영 이유 (짧게)"
+                  onChange={(e) =>
+                    setDisposition((prev) => ({ ...prev, [item.id]: e.target.value }))
+                  }
+                />
+                <button
+                  type="button"
+                  disabled={!(disposition[item.id] ?? '').trim()}
+                  onClick={() =>
+                    void props.onAction(async () => {
+                      await intentApi.resolveFeedback(caseId, item.id, {
+                        reflected: false,
+                        reason: (disposition[item.id] ?? '').trim(),
+                      })
+                      setDisposition((prev) => ({ ...prev, [item.id]: '' }))
+                      props.onNotice('피드백을 미반영으로 닫았다. 이유가 함께 남는다.')
+                    })
+                  }
+                >
+                  반영하지 않음
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <h4>이 버전에 동의</h4>
       {!canAgree && (

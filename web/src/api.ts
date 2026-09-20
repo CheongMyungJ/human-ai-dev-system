@@ -472,6 +472,18 @@ export const intentApi = {
       },
     ),
 
+  // 피드백의 처리 결과는 **사람이** 정한다. AI가 새 버전을 쓴 뒤 스스로
+  // "반영했다"고 선언하게 두지 않는다. 미반영은 이유와 함께 닫는다.
+  resolveFeedback: (
+    caseId: string,
+    feedbackId: string,
+    payload: { reflected: boolean; reflected_in_version_id?: string; reason?: string },
+  ) =>
+    request<FeedbackRecord>(`/api/cases/${caseId}/feedback/${feedbackId}/disposition`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+
   openRead: (artifactId: string, revision: number) =>
     request<ReadRequest>(`/api/artifacts/${artifactId}/${revision}/read-requests`, {
       method: 'POST',
@@ -584,6 +596,8 @@ export const REFUSAL_LABEL: Record<string, string> = {
   tool_is_not_a_coding_cli: '이 도구는 코딩 CLI가 아니다 — AI가 글을 쓰지 않는다',
   review_session_not_separate: '검토가 작성과 별도 세션이 아니다',
   intent_version_missing: '검토할 의도 버전이 없다',
+  intent_version_not_latest: '검토 대상이 최신 의도 버전이 아니다',
+  case_already_closed: '이미 종료된 업무다 — 수정은 연결된 새 Case 로 한다',
 }
 
 export const gateApi = {
@@ -638,6 +652,21 @@ export interface SuccessCriterion {
   evidence_artifact_id: string | null
   evidence_artifact_rev: number | null
   result_summary: string
+  recorded_by: string
+  recorded_at: string
+}
+
+/** `criterion_result` 한 행. 기준 정의가 아니라 **판정**만 담는다. */
+export interface CriterionResultRow {
+  id: string
+  criterion_id: string
+  case_id: string
+  verdict: CriterionVerdict
+  evidence_kind: EvidenceKind
+  evidence_run_id: string | null
+  evidence_artifact_id: string | null
+  evidence_artifact_rev: number | null
+  summary: string
   recorded_by: string
   recorded_at: string
 }
@@ -754,6 +783,8 @@ export const ACCEPTANCE_REFUSAL_LABEL: Record<string, string> = {
   not_explicit: '대상이 분명한 인수 문구가 아니다',
   candidate_superseded: '그 사이 결과 후보가 바뀌었다 — 지금 후보를 다시 본다',
   unresolved_criteria: '충족되지 않은 기준이 남아 있다 (예외를 수용하거나 채워야 한다)',
+  open_intent_questions: '의도 단계에서 결정할 질문이 남아 있다',
+  unresolved_feedback: '아직 반영도 미반영도 정해지지 않은 피드백이 남아 있다',
   no_success_criteria: '합의한 성공 기준이 0건이다 — 견줄 기준 없이 인수할 수 없다',
   unsettled_runs_present: '결과를 확정할 수 없는 실행이 남아 있다',
   intent_not_agreed: '최신 의도에 대한 사람의 동의가 없다',
@@ -781,7 +812,7 @@ export const resultApi = {
       evidence_artifact_rev?: number | null
     },
   ) =>
-    request<SuccessCriterion>(`/api/cases/${caseId}/criteria/${criterionId}/result`, {
+    request<CriterionResultRow>(`/api/cases/${caseId}/criteria/${criterionId}/result`, {
       method: 'POST',
       body: JSON.stringify({ recorded_by: 'owner', ...payload }),
     }),

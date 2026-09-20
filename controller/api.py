@@ -953,6 +953,55 @@ def list_feedback(request: Request, case_id: str) -> list[dict[str, Any]]:
     return _repo(request).list_feedback(case_id)
 
 
+class FeedbackDispositionIn(BaseModel):
+    """피드백의 처리 결과를 **사람이** 정한다(P2-04).
+
+    AI가 새 버전을 쓴 뒤 스스로 "반영했다"고 선언하게 두지 않는다. 반영 여부는
+    피드백을 준 사람이 새 버전을 보고 판단하는 것이며, 미반영은 이유와 함께
+    남는다(intent-artifacts 3절). 이 판단이 없으면 결과 인수가
+    `unresolved_feedback` 로 거부된다 — 조용히 닫히지 않는다.
+    """
+
+    reflected: bool
+    #: 반영으로 닫을 때 그것을 반영한 의도 버전. 미반영이면 비운다.
+    reflected_in_version_id: str | None = None
+    #: 미반영으로 닫을 때의 이유. 짧은 요약이며 원문이 아니다.
+    reason: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/api/cases/{case_id}/feedback/{feedback_id}/disposition")
+def resolve_feedback(
+    request: Request, case_id: str, feedback_id: str, payload: FeedbackDispositionIn
+) -> dict[str, Any]:
+    """피드백을 반영됨 또는 미반영으로 닫는다. **미반영은 이유가 필요하다.**"""
+    repo = _repo(request)
+    try:
+        repo.guard_open_case(case_id)
+        feedback = repo.get_feedback(feedback_id)
+        if feedback["case_id"] != case_id:
+            raise ConflictError("feedback belongs to another case")
+        if feedback["state"] != "received":
+            raise ConflictError(f"feedback is already {feedback['state']}")
+        if payload.reflected:
+            version_id = payload.reflected_in_version_id
+            if version_id is None:
+                latest = repo.latest_intent_version(case_id)
+                if latest is None:
+                    raise ConflictError("no intent version to attribute the reflection to")
+                version_id = latest["id"]
+            repo.get_intent_version(version_id)
+            resolved = repo.resolve_feedback([feedback_id], version_id)
+        else:
+            if not (payload.reason or "").strip():
+                raise ConflictError(
+                    "a feedback left unreflected needs a reason; it is not closed silently"
+                )
+            resolved = repo.resolve_feedback([], None, {feedback_id: payload.reason or ""})
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return resolved[0]
+
+
 @router.post("/api/cases/{case_id}/questions/{question_id}/answer", status_code=202)
 def answer_question(
     request: Request, case_id: str, question_id: str, payload: AnswerIn

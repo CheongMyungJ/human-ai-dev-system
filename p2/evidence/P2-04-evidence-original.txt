@@ -1,0 +1,21 @@
+run_id=ui-work-1
+case_id=case-b55ee0ec6964eccb
+tool=codex/exec permission=read_only
+observed_tool_version=codex-cli 0.154.0
+session_ref=01a0bf51-6700-7ed2-92d2-1a7f454e5698
+exit_code=0
+outcome=completed
+normalized_events=16 unmapped=0
+executed_at=2026-09-20T14:57:16.776620+00:00
+--- final message ---
+`sample.log`의 5줄을 확인했습니다. 모두 타임스탬프로 시작하므로 **`ERROR`로 시작하는 줄은 0개**입니다. 대소문자를 구분하거나 무시해도 출력은 없습니다.
+
+사용할 PowerShell 명령은 다음과 같습니다.
+
+```powershell
+Get-Content -LiteralPath .\sample.log | Where-Object { $_ -cmatch '^ERROR' }
+```
+
+대소문자를 무시하려면 `-cmatch`를 `-imatch`로 바꾸면 됩니다.
+
+타임스탬프 뒤에 `ERROR`가 있는 줄은 2개지만, 현재 요청한 “줄 시작” 조건에는 해당하지 않습니다. 파일 생성이나 코드 변경은 하지 않았습니다.

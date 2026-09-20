@@ -409,6 +409,8 @@ class AdmissionRefusal(str, Enum):
     TOOL_IS_NOT_A_CODING_CLI = "tool_is_not_a_coding_cli"
     REVIEW_SESSION_NOT_SEPARATE = "review_session_not_separate"
     INTENT_VERSION_MISSING = "intent_version_missing"
+    INTENT_VERSION_NOT_LATEST = "intent_version_not_latest"
+    CASE_ALREADY_CLOSED = "case_already_closed"
 
 
 class GateId(str, Enum):
@@ -555,6 +557,8 @@ class AcceptanceRefusal(str, Enum):
     CANDIDATE_SUPERSEDED = "candidate_superseded"
     UNRESOLVED_CRITERIA = "unresolved_criteria"
     NO_SUCCESS_CRITERIA = "no_success_criteria"
+    OPEN_INTENT_QUESTIONS = "open_intent_questions"
+    UNRESOLVED_FEEDBACK = "unresolved_feedback"
     UNSETTLED_RUNS_PRESENT = "unsettled_runs_present"
     INTENT_NOT_AGREED = "intent_not_agreed"
     CASE_ALREADY_CLOSED = "case_already_closed"

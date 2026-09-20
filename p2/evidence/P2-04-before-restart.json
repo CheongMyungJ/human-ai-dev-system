@@ -1,0 +1,985 @@
+{
+  "id": "case-b55ee0ec6964eccb",
+  "project_id": "prj-b2145002c9031c1a",
+  "title": "ERROR 줄만 뽑아 보기",
+  "kind": "feature",
+  "status": "received",
+  "created_at": "2026-09-20T23:37:07.554459+09:00",
+  "updated_at": "2026-09-20T23:37:07.554459+09:00",
+  "artifacts": [
+    {
+      "artifact_id": "art-c59bffd9dc4ee6e6",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "instruction",
+      "content_hash": "sha256:3903d36e06e197d93a51eece321e323005ff8770236d0470707f175f13e186b3",
+      "byte_size": 301,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "초안 작성 요청",
+      "created_at": "2026-09-20T23:37:08.445352+09:00"
+    },
+    {
+      "artifact_id": "art-b39ecf381691bde6",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "intent",
+      "content_hash": "sha256:60a217a269f281171c6b166f6b35dfadb9613394c715ba1feedc39bf81bc102a",
+      "byte_size": 3369,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "AI 작성 의도 초안 (codex, run draft-1789915029470)",
+      "created_at": "2026-09-20T23:38:04.044918+09:00"
+    },
+    {
+      "artifact_id": "art-047c0fda5c1598d7",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "run_output",
+      "content_hash": "sha256:da362169051ea5290fe0a8ea57c8071c01b001d9fdc95baf790f92a56d522941",
+      "byte_size": 3196,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for draft-1789915029470",
+      "created_at": "2026-09-20T23:38:04.044918+09:00"
+    },
+    {
+      "artifact_id": "art-ca263d97a29efbb6",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "run_output",
+      "content_hash": "sha256:4750116bcf59b7962efc5326db087d0488742237b831536e998b731a605c9307",
+      "byte_size": 1330,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for ui-review-1",
+      "created_at": "2026-09-20T23:38:34.801046+09:00"
+    },
+    {
+      "artifact_id": "art-38657fec71a22453",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "feedback",
+      "content_hash": "sha256:2fd583548e5c27b295304493a2150b6bc63f2351cd9743e720671268a843d2d1",
+      "byte_size": 877,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "QG-01 지적 2건 반영 요청",
+      "created_at": "2026-09-20T23:38:37.261793+09:00"
+    },
+    {
+      "artifact_id": "art-724f5ea27403f2bf",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "instruction",
+      "content_hash": "sha256:2fd583548e5c27b295304493a2150b6bc63f2351cd9743e720671268a843d2d1",
+      "byte_size": 877,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "초안 작성 요청",
+      "created_at": "2026-09-20T23:38:38.991644+09:00"
+    },
+    {
+      "artifact_id": "art-972986ee3e2204b2",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "intent",
+      "content_hash": "sha256:a0d3c42ab9a4943868d9e179a0716ebae049b3d0cde31d8f657ab112de50b031",
+      "byte_size": 3986,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "AI 작성 의도 초안 (codex, run draft-1789915120020)",
+      "created_at": "2026-09-20T23:39:55.622085+09:00"
+    },
+    {
+      "artifact_id": "art-f673db450e98cce5",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "run_output",
+      "content_hash": "sha256:b24425cd496bc736b869e4dcae3a74d807e903e2ca03bc3318285260ae07fd58",
+      "byte_size": 3793,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for draft-1789915120020",
+      "created_at": "2026-09-20T23:39:55.630926+09:00"
+    },
+    {
+      "artifact_id": "art-40f9f604c54889aa",
+      "revision": 1,
+      "case_id": "case-b55ee0ec6964eccb",
+      "kind": "run_output",
+      "content_hash": "sha256:c22cea80bd153ea152bf65574b9158c5334d98d522ae02537e8465cbb6864d8c",
+      "byte_size": 1904,
+      "owner_runner_id": "runner-p204-1",
+      "availability": "available",
+      "summary": "run output for ui-review-2",
+      "created_at": "2026-09-20T23:40:31.869718+09:00"
+    }
+  ],
+  "intent_versions": [
+    {
+      "id": "intent-c8b073978a920db5",
+      "case_id": "case-b55ee0ec6964eccb",
+      "revision": 2,
+      "artifact_id": "art-972986ee3e2204b2",
+      "artifact_rev": 1,
+      "status": "draft",
+      "created_at": "2026-09-20T23:39:55.623705+09:00",
+      "superseded_by": null,
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "draft-1789915120020",
+      "fields": [
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "goal",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "expected_outcome",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "scope",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "unchanged"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "exclusions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "constraints",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "open_questions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        }
+      ],
+      "questions": [
+        {
+          "id": "q-f913e7703c19a1a3",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "question_key": "q1",
+          "summary": "오류 줄의 선별 의미 결정",
+          "decide_at": "intent",
+          "state": "open",
+          "answered_by": null,
+          "answered_at": null,
+          "answer_artifact_id": null,
+          "created_at": "2026-09-20T23:39:55.629034+09:00"
+        },
+        {
+          "id": "q-9f2d4ffe04f596df",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "question_key": "q2",
+          "summary": "대소문자 처리 정책 결정",
+          "decide_at": "intent",
+          "state": "open",
+          "answered_by": null,
+          "answered_at": null,
+          "answer_artifact_id": null,
+          "created_at": "2026-09-20T23:39:55.629034+09:00"
+        }
+      ],
+      "criteria": [
+        {
+          "id": "crit-f230551784c2d03f",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-01",
+          "summary": "확정된 선별 조건에 따른 출력",
+          "method_summary": "기대 목록과 실행 결과 대조",
+          "relates_to": "expected_outcome",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        },
+        {
+          "id": "crit-23730ab3d4276b5c",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-02",
+          "summary": "단일 로그 파일로 대상 제한",
+          "method_summary": "입력 경로와 파일 접근 코드 검토",
+          "relates_to": "scope",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        },
+        {
+          "id": "crit-fa7e430b97283b76",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-03",
+          "summary": "원본 로그 보존",
+          "method_summary": "접근 방식 검토 및 실행 전후 비교",
+          "relates_to": "constraints",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        }
+      ],
+      "content_hash": "sha256:a0d3c42ab9a4943868d9e179a0716ebae049b3d0cde31d8f657ab112de50b031",
+      "availability": "available",
+      "summary": "AI 작성 의도 초안 (codex, run draft-1789915120020)"
+    },
+    {
+      "id": "intent-590ca22a4edddc65",
+      "case_id": "case-b55ee0ec6964eccb",
+      "revision": 1,
+      "artifact_id": "art-b39ecf381691bde6",
+      "artifact_rev": 1,
+      "status": "superseded",
+      "created_at": "2026-09-20T23:38:04.044918+09:00",
+      "superseded_by": "intent-c8b073978a920db5",
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "draft-1789915029470",
+      "fields": [
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "goal",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "expected_outcome",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "scope",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "exclusions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "constraints",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        },
+        {
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "field": "open_questions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "initial"
+        }
+      ],
+      "questions": [
+        {
+          "id": "q-ae00161c1ff6dea5",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "question_key": "q1",
+          "summary": "접두어 대소문자 정책",
+          "decide_at": "intent",
+          "state": "open",
+          "answered_by": null,
+          "answered_at": null,
+          "answer_artifact_id": null,
+          "created_at": "2026-09-20T23:38:04.044918+09:00"
+        }
+      ],
+      "criteria": [
+        {
+          "id": "crit-e70fe3bddf858136",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "criterion_key": "C-01",
+          "summary": "조건에 맞는 로그만 표시",
+          "method_summary": "입력 사례별 출력 대조",
+          "relates_to": "expected_outcome",
+          "state": "superseded",
+          "created_at": "2026-09-20T23:38:04.044918+09:00",
+          "verdict": "needs_recheck",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.623705+09:00"
+        },
+        {
+          "id": "crit-fbe6c77575595eeb",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "criterion_key": "C-02",
+          "summary": "단일 로그 파일로 범위 제한",
+          "method_summary": "대상 경로와 읽기 코드 검토",
+          "relates_to": "scope",
+          "state": "superseded",
+          "created_at": "2026-09-20T23:38:04.044918+09:00",
+          "verdict": "needs_recheck",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.623705+09:00"
+        },
+        {
+          "id": "crit-731048435ce8ed02",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-590ca22a4edddc65",
+          "criterion_key": "C-03",
+          "summary": "읽기 전용 동작 유지",
+          "method_summary": "변경 동작 검토 및 실행 전후 비교",
+          "relates_to": "constraints",
+          "state": "superseded",
+          "created_at": "2026-09-20T23:38:04.044918+09:00",
+          "verdict": "needs_recheck",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.623705+09:00"
+        }
+      ],
+      "content_hash": "sha256:60a217a269f281171c6b166f6b35dfadb9613394c715ba1feedc39bf81bc102a",
+      "availability": "available",
+      "summary": "AI 작성 의도 초안 (codex, run draft-1789915029470)"
+    }
+  ],
+  "decisions": [],
+  "feedback": [
+    {
+      "id": "fb-2068514506a4992e",
+      "case_id": "case-b55ee0ec6964eccb",
+      "target_intent_version_id": "intent-590ca22a4edddc65",
+      "target_intent_revision": 1,
+      "artifact_id": "art-38657fec71a22453",
+      "artifact_rev": 1,
+      "author": "owner",
+      "summary": "QG-01 지적 2건 반영 요청",
+      "state": "received",
+      "reflected_in_version_id": null,
+      "disposition_note": null,
+      "created_at": "2026-09-20T23:38:37.262916+09:00",
+      "resolved_at": null
+    }
+  ],
+  "intent_state": {
+    "case_id": "case-b55ee0ec6964eccb",
+    "latest_intent_version": {
+      "id": "intent-c8b073978a920db5",
+      "case_id": "case-b55ee0ec6964eccb",
+      "revision": 2,
+      "artifact_id": "art-972986ee3e2204b2",
+      "artifact_rev": 1,
+      "status": "draft",
+      "created_at": "2026-09-20T23:39:55.623705+09:00",
+      "superseded_by": null,
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "draft-1789915120020",
+      "fields": [
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "goal",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "expected_outcome",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "scope",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "unchanged"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "exclusions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "constraints",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        },
+        {
+          "intent_version_id": "intent-c8b073978a920db5",
+          "field": "open_questions",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "change_from_prev": "changed"
+        }
+      ],
+      "questions": [
+        {
+          "id": "q-f913e7703c19a1a3",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "question_key": "q1",
+          "summary": "오류 줄의 선별 의미 결정",
+          "decide_at": "intent",
+          "state": "open",
+          "answered_by": null,
+          "answered_at": null,
+          "answer_artifact_id": null,
+          "created_at": "2026-09-20T23:39:55.629034+09:00"
+        },
+        {
+          "id": "q-9f2d4ffe04f596df",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "question_key": "q2",
+          "summary": "대소문자 처리 정책 결정",
+          "decide_at": "intent",
+          "state": "open",
+          "answered_by": null,
+          "answered_at": null,
+          "answer_artifact_id": null,
+          "created_at": "2026-09-20T23:39:55.629034+09:00"
+        }
+      ],
+      "criteria": [
+        {
+          "id": "crit-f230551784c2d03f",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-01",
+          "summary": "확정된 선별 조건에 따른 출력",
+          "method_summary": "기대 목록과 실행 결과 대조",
+          "relates_to": "expected_outcome",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        },
+        {
+          "id": "crit-23730ab3d4276b5c",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-02",
+          "summary": "단일 로그 파일로 대상 제한",
+          "method_summary": "입력 경로와 파일 접근 코드 검토",
+          "relates_to": "scope",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        },
+        {
+          "id": "crit-fa7e430b97283b76",
+          "case_id": "case-b55ee0ec6964eccb",
+          "intent_version_id": "intent-c8b073978a920db5",
+          "criterion_key": "C-03",
+          "summary": "원본 로그 보존",
+          "method_summary": "접근 방식 검토 및 실행 전후 비교",
+          "relates_to": "constraints",
+          "state": "proposed",
+          "created_at": "2026-09-20T23:39:55.629947+09:00",
+          "verdict": "unverified",
+          "evidence_kind": "none",
+          "evidence_run_id": null,
+          "evidence_artifact_id": null,
+          "evidence_artifact_rev": null,
+          "result_summary": "아직 확인하지 않음",
+          "recorded_by": "system",
+          "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+        }
+      ],
+      "content_hash": "sha256:a0d3c42ab9a4943868d9e179a0716ebae049b3d0cde31d8f657ab112de50b031",
+      "availability": "available",
+      "summary": "AI 작성 의도 초안 (codex, run draft-1789915120020)"
+    },
+    "agreement_state": "never_agreed",
+    "agreed_version": null,
+    "open_intent_questions": [
+      {
+        "id": "q-f913e7703c19a1a3",
+        "case_id": "case-b55ee0ec6964eccb",
+        "intent_version_id": "intent-c8b073978a920db5",
+        "question_key": "q1",
+        "summary": "오류 줄의 선별 의미 결정",
+        "decide_at": "intent",
+        "state": "open",
+        "answered_by": null,
+        "answered_at": null,
+        "answer_artifact_id": null,
+        "created_at": "2026-09-20T23:39:55.629034+09:00"
+      },
+      {
+        "id": "q-9f2d4ffe04f596df",
+        "case_id": "case-b55ee0ec6964eccb",
+        "intent_version_id": "intent-c8b073978a920db5",
+        "question_key": "q2",
+        "summary": "대소문자 처리 정책 결정",
+        "decide_at": "intent",
+        "state": "open",
+        "answered_by": null,
+        "answered_at": null,
+        "answer_artifact_id": null,
+        "created_at": "2026-09-20T23:39:55.629034+09:00"
+      }
+    ],
+    "unresolved_feedback": [
+      {
+        "id": "fb-2068514506a4992e",
+        "case_id": "case-b55ee0ec6964eccb",
+        "target_intent_version_id": "intent-590ca22a4edddc65",
+        "target_intent_revision": 1,
+        "artifact_id": "art-38657fec71a22453",
+        "artifact_rev": 1,
+        "author": "owner",
+        "summary": "QG-01 지적 2건 반영 요청",
+        "state": "received",
+        "reflected_in_version_id": null,
+        "disposition_note": null,
+        "created_at": "2026-09-20T23:38:37.262916+09:00",
+        "resolved_at": null
+      }
+    ],
+    "views": []
+  },
+  "runs": [
+    {
+      "run_id": "ui-review-2",
+      "case_id": "case-b55ee0ec6964eccb",
+      "task_id": "task-1",
+      "role": "reviewer",
+      "tool_id": "claude",
+      "mode": "print",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-b39ecf381691bde6",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-40f9f604c54889aa",
+      "output_artifact_rev": 1,
+      "session_ref": "973f510d-f3ef-4039-bfd1-1e3855f7900e",
+      "residual_activity": "unknown",
+      "observed_tool_version": "2.1.278 (Claude Code)",
+      "created_at": "2026-09-20T23:39:57.265752+09:00",
+      "assigned_at": "2026-09-20T23:39:57.656803+09:00",
+      "finished_at": "2026-09-20T23:40:31.871979+09:00",
+      "purpose": "intent_gate_review",
+      "usage": {
+        "tokens": {
+          "input_tokens": 6,
+          "cache_creation_input_tokens": 1309,
+          "cache_read_input_tokens": 25923,
+          "output_tokens": 2574,
+          "output_tokens_details": {
+            "thinking_tokens": 1681
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 1309,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 1984,
+              "cache_read_input_tokens": 9351,
+              "cache_creation_input_tokens": 244,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 244
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "cost_usd": 0.0904315
+      },
+      "workspace_effect": null
+    },
+    {
+      "run_id": "draft-1789915120020",
+      "case_id": "case-b55ee0ec6964eccb",
+      "task_id": "task-1",
+      "role": "author",
+      "tool_id": "codex",
+      "mode": "exec",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-724f5ea27403f2bf",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-f673db450e98cce5",
+      "output_artifact_rev": 1,
+      "session_ref": "01a0bf41-4623-7ac0-86ab-9d5a2c9ae7cb",
+      "residual_activity": "unknown",
+      "observed_tool_version": "codex-cli 0.154.0",
+      "created_at": "2026-09-20T23:38:40.022073+09:00",
+      "assigned_at": "2026-09-20T23:38:40.872755+09:00",
+      "finished_at": "2026-09-20T23:39:55.630926+09:00",
+      "purpose": "intent_authoring",
+      "usage": {
+        "tokens": {
+          "input_tokens": 16983,
+          "cached_input_tokens": 13184,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 2246,
+          "reasoning_output_tokens": 1366
+        },
+        "cost_usd": "not_reported"
+      },
+      "workspace_effect": null
+    },
+    {
+      "run_id": "ui-review-1",
+      "case_id": "case-b55ee0ec6964eccb",
+      "task_id": "task-1",
+      "role": "reviewer",
+      "tool_id": "claude",
+      "mode": "print",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-b39ecf381691bde6",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-ca263d97a29efbb6",
+      "output_artifact_rev": 1,
+      "session_ref": "136f8add-90b1-4aa0-a050-614eaf3ddaef",
+      "residual_activity": "unknown",
+      "observed_tool_version": "2.1.278 (Claude Code)",
+      "created_at": "2026-09-20T23:38:07.327416+09:00",
+      "assigned_at": "2026-09-20T23:38:08.09574+09:00",
+      "finished_at": "2026-09-20T23:38:34.810836+09:00",
+      "purpose": "intent_gate_review",
+      "usage": {
+        "tokens": {
+          "input_tokens": 4,
+          "cache_creation_input_tokens": 6135,
+          "cache_read_input_tokens": 11287,
+          "output_tokens": 2046,
+          "output_tokens_details": {
+            "thinking_tokens": 1492
+          },
+          "server_tool_use": {
+            "web_search_requests": 0,
+            "web_fetch_requests": 0
+          },
+          "service_tier": "standard",
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 6135,
+            "ephemeral_5m_input_tokens": 0
+          },
+          "inference_geo": "not_available",
+          "iterations": [
+            {
+              "input_tokens": 2,
+              "output_tokens": 1838,
+              "cache_read_input_tokens": 8286,
+              "cache_creation_input_tokens": 850,
+              "cache_creation": {
+                "ephemeral_5m_input_tokens": 0,
+                "ephemeral_1h_input_tokens": 850
+              },
+              "type": "message"
+            }
+          ],
+          "speed": "standard"
+        },
+        "cost_usd": 0.1181635
+      },
+      "workspace_effect": null
+    },
+    {
+      "run_id": "draft-1789915029470",
+      "case_id": "case-b55ee0ec6964eccb",
+      "task_id": "task-1",
+      "role": "author",
+      "tool_id": "codex",
+      "mode": "exec",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-c59bffd9dc4ee6e6",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-p204-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-047c0fda5c1598d7",
+      "output_artifact_rev": 1,
+      "session_ref": "01a0bf3f-e4fe-7e70-ac47-f98066dc358c",
+      "residual_activity": "unknown",
+      "observed_tool_version": "codex-cli 0.154.0",
+      "created_at": "2026-09-20T23:37:09.467539+09:00",
+      "assigned_at": "2026-09-20T23:37:10.387862+09:00",
+      "finished_at": "2026-09-20T23:38:04.062578+09:00",
+      "purpose": "intent_authoring",
+      "usage": {
+        "tokens": {
+          "input_tokens": 16841,
+          "cached_input_tokens": 13184,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 1604,
+          "reasoning_output_tokens": 871
+        },
+        "cost_usd": "not_reported"
+      },
+      "workspace_effect": null
+    }
+  ],
+  "gate": {
+    "id": "gate-6c486f86a7f4b2a6",
+    "case_id": "case-b55ee0ec6964eccb",
+    "gate": "QG-01",
+    "intent_version_id": "intent-c8b073978a920db5",
+    "subject_content_hash": "sha256:a0d3c42ab9a4943868d9e179a0716ebae049b3d0cde31d8f657ab112de50b031",
+    "verdict": "not_run",
+    "rule_verdict": "pass",
+    "ai_verdict": "not_run",
+    "ai_run_id": null,
+    "ai_session_ref": null,
+    "author_session_ref": null,
+    "evaluated_at": "2026-09-20T23:39:55.629947+09:00",
+    "reviewed_at": null,
+    "superseded_at": null,
+    "findings": [
+      {
+        "id": "finding-e8aadc06d191528e",
+        "gate_result_id": "gate-6c486f86a7f4b2a6",
+        "source": "rule",
+        "criterion": "open_intent_questions_present",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "confirmed",
+        "target": "questions",
+        "summary": "의도 단계에서 결정할 질문이 2건 남아 있다 (게이트를 막지 않는다)",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-20T23:39:55.629947+09:00"
+      }
+    ]
+  },
+  "admission_checks": [
+    {
+      "id": "admission-6ebde4d0879d67fe",
+      "case_id": "case-b55ee0ec6964eccb",
+      "run_id": "ui-review-2",
+      "requested_run_id": "ui-review-2",
+      "requested_purpose": "intent_gate_review",
+      "requested_role": "reviewer",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "claude",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": "intent-c8b073978a920db5",
+      "intent_agreement_state": "never_agreed",
+      "gate_verdict": "not_run",
+      "checked_at": "2026-09-20T23:39:57.267141+09:00",
+      "refusals": []
+    },
+    {
+      "id": "admission-78542fe10ff36c9a",
+      "case_id": "case-b55ee0ec6964eccb",
+      "run_id": "draft-1789915120020",
+      "requested_run_id": "draft-1789915120020",
+      "requested_purpose": "intent_authoring",
+      "requested_role": "author",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "codex",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": "intent-590ca22a4edddc65",
+      "intent_agreement_state": "never_agreed",
+      "gate_verdict": "fail",
+      "checked_at": "2026-09-20T23:38:40.022841+09:00",
+      "refusals": []
+    },
+    {
+      "id": "admission-c9b5377cf8f6d14c",
+      "case_id": "case-b55ee0ec6964eccb",
+      "run_id": "ui-review-1",
+      "requested_run_id": "ui-review-1",
+      "requested_purpose": "intent_gate_review",
+      "requested_role": "reviewer",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "claude",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": "intent-590ca22a4edddc65",
+      "intent_agreement_state": "never_agreed",
+      "gate_verdict": "not_run",
+      "checked_at": "2026-09-20T23:38:07.328663+09:00",
+      "refusals": []
+    },
+    {
+      "id": "admission-6411154686ec8db0",
+      "case_id": "case-b55ee0ec6964eccb",
+      "run_id": "draft-1789915029470",
+      "requested_run_id": "draft-1789915029470",
+      "requested_purpose": "intent_authoring",
+      "requested_role": "author",
+      "requested_permission": "read_only",
+      "requested_task_id": "task-1",
+      "requested_tool_id": "codex",
+      "profile": "intent_production",
+      "outcome": "admitted",
+      "intent_version_id": null,
+      "intent_agreement_state": "no_intent",
+      "gate_verdict": "not_applicable",
+      "checked_at": "2026-09-20T23:37:09.467539+09:00",
+      "refusals": []
+    }
+  ],
+  "result": {
+    "case_id": "case-b55ee0ec6964eccb",
+    "completion_mode": "human_acceptance",
+    "criteria": [
+      {
+        "id": "crit-f230551784c2d03f",
+        "case_id": "case-b55ee0ec6964eccb",
+        "intent_version_id": "intent-c8b073978a920db5",
+        "criterion_key": "C-01",
+        "summary": "확정된 선별 조건에 따른 출력",
+        "method_summary": "기대 목록과 실행 결과 대조",
+        "relates_to": "expected_outcome",
+        "state": "proposed",
+        "created_at": "2026-09-20T23:39:55.629947+09:00",
+        "verdict": "unverified",
+        "evidence_kind": "none",
+        "evidence_run_id": null,
+        "evidence_artifact_id": null,
+        "evidence_artifact_rev": null,
+        "result_summary": "아직 확인하지 않음",
+        "recorded_by": "system",
+        "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+      },
+      {
+        "id": "crit-23730ab3d4276b5c",
+        "case_id": "case-b55ee0ec6964eccb",
+        "intent_version_id": "intent-c8b073978a920db5",
+        "criterion_key": "C-02",
+        "summary": "단일 로그 파일로 대상 제한",
+        "method_summary": "입력 경로와 파일 접근 코드 검토",
+        "relates_to": "scope",
+        "state": "proposed",
+        "created_at": "2026-09-20T23:39:55.629947+09:00",
+        "verdict": "unverified",
+        "evidence_kind": "none",
+        "evidence_run_id": null,
+        "evidence_artifact_id": null,
+        "evidence_artifact_rev": null,
+        "result_summary": "아직 확인하지 않음",
+        "recorded_by": "system",
+        "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+      },
+      {
+        "id": "crit-fa7e430b97283b76",
+        "case_id": "case-b55ee0ec6964eccb",
+        "intent_version_id": "intent-c8b073978a920db5",
+        "criterion_key": "C-03",
+        "summary": "원본 로그 보존",
+        "method_summary": "접근 방식 검토 및 실행 전후 비교",
+        "relates_to": "constraints",
+        "state": "proposed",
+        "created_at": "2026-09-20T23:39:55.629947+09:00",
+        "verdict": "unverified",
+        "evidence_kind": "none",
+        "evidence_run_id": null,
+        "evidence_artifact_id": null,
+        "evidence_artifact_rev": null,
+        "result_summary": "아직 확인하지 않음",
+        "recorded_by": "system",
+        "recorded_at": "2026-09-20T23:39:55.629947+09:00"
+      }
+    ],
+    "unsettled_runs": [],
+    "candidate": null,
+    "closure": null,
+    "relations": []
+  }
+}
