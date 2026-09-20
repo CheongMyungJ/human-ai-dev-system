@@ -1,0 +1,7 @@
+{"_source": "reconstructed-from-docs", "_warning": "캡처가 아니라 재구성이다. type 값 3개만 공식 문서에서 확인했고 나머지 필드는 가정이다.", "_docs": ["https://opencode.ai/v2/docs/api"]}
+{"type": "shell.started", "sessionID": "ses_reconstructed_0001", "shellID": "sh_0001", "command": "pwsh -Command \"Set-Content -LiteralPath a.txt -Value a\""}
+{"type": "shell.ended", "sessionID": "ses_reconstructed_0001", "shellID": "sh_0001", "exit": 0, "output": ""}
+{"type": "shell.started", "sessionID": "ses_reconstructed_0001", "shellID": "sh_0002", "command": "pwsh -Command \"Set-Content -LiteralPath b.txt -Value b\""}
+{"type": "shell.ended", "sessionID": "ses_reconstructed_0001", "shellID": "sh_0002", "exit": 0, "output": ""}
+{"type": "location.shutdown", "reason": "reload"}
+{"type": "some.unnamed.event", "_note": "문서에서 이름을 확인하지 못한 종류. 어댑터는 이것을 unmapped 로 남겨야 한다."}

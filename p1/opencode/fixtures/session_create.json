@@ -1,0 +1,11 @@
+{
+  "_source": "reconstructed-from-docs",
+  "_warning": "실제 OpenCode 응답을 캡처한 것이 아니다. 공식 V2 문서에서 확인한 필드만으로 재구성했다.",
+  "_docs": ["https://opencode.ai/v2/docs/build/sdk", "https://opencode.ai/v2/docs/api"],
+  "_endpoint": "POST /api/session",
+  "_confirmed_fields": ["id"],
+  "id": "ses_reconstructed_0001",
+  "location": {
+    "directory": "C:/Users/USER/AppData/Local/Temp/hads-p1/testrepo"
+  }
+}
