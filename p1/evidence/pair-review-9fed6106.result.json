@@ -1,0 +1,86 @@
+{
+  "run_id": "pair-review-9fed6106",
+  "tool_id": "claude",
+  "mode": "print",
+  "permission_requested": "read_only",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "manual",
+    "--permission-prompts",
+    "none",
+    "--strict-mcp-config",
+    "--tools",
+    "Read,Grep,Glob"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 7.23,
+  "stdout_lines": 6,
+  "stderr_lines": 0,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "tool_call_started": 1,
+    "usage_reported": 2,
+    "tool_call_finished": 1,
+    "assistant_message": 1,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "M calc.py",
+    "status_after": "M calc.py",
+    "changed": false
+  },
+  "session_ref": "8816c38e-50d3-45c9-810f-424ee6bcf9ab",
+  "permission_decisions": [],
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 4,
+      "cache_creation_input_tokens": 838,
+      "cache_read_input_tokens": 11944,
+      "output_tokens": 174,
+      "output_tokens_details": {
+        "thinking_tokens": 0
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 838,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 92,
+          "cache_read_input_tokens": 6299,
+          "cache_creation_input_tokens": 184,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 184
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "cost_usd": 0.018722
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\pair-review-9fed6106.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\pair-review-9fed6106.stderr.log"
+}

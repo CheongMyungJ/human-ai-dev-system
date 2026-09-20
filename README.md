@@ -43,6 +43,7 @@ GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMy
 | [CLI 안전 중지 조사](cli-pause-feasibility.md) | 세 CLI의 제어 후보·제약·실증 계획 |
 | [최종 문서 검토](design-review-report.md) | 요구사항 추적, 일관성 점검, 남은 기술 검증 |
 | [P1-01 환경 실측·계약 초안](p1-environment-contract.md) | 이 PC의 실측 환경·CLI·인증 상태, 공통 실행 계약과 capability 표 |
+| [P1-02 CLI 실증 결과](p1/evidence/P1-02-results.md) | Codex·Claude 실제 실행 증거, 권한 경계·이벤트 스키마·완료 판정에서 확인한 것 |
 
 ## 검토 결과의 경계
 

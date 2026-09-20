@@ -1,0 +1,42 @@
+{
+  "run_id": "claude-read-8853d2f7",
+  "tool_id": "claude",
+  "mode": "print",
+  "permission_requested": "read_only",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "manual",
+    "--permission-prompts",
+    "none",
+    "--tools",
+    "Read,Grep,Glob",
+    "calc.py 파일을 읽고 정의된 함수 이름만 한 줄로 나열해라. 파일을 수정하지 마라."
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "failed",
+  "outcome_reason": "exit_code=1",
+  "exit_code": 1,
+  "timed_out": false,
+  "duration_sec": 1.52,
+  "stdout_lines": 0,
+  "stderr_lines": 1,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {},
+  "unmapped_native_types": [],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "",
+    "status_after": "",
+    "changed": false
+  },
+  "residual_activity": "unknown",
+  "usage": "not_reported",
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\claude-read-8853d2f7.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\claude-read-8853d2f7.stderr.log"
+}

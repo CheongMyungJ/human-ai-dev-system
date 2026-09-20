@@ -1,0 +1,85 @@
+{
+  "run_id": "claude-denied-write-46028b40",
+  "tool_id": "claude",
+  "mode": "print",
+  "permission_requested": "read_only",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\claude.CMD",
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--permission-mode",
+    "manual",
+    "--permission-prompts",
+    "none",
+    "--tools",
+    "Read,Grep,Glob"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 32.79,
+  "stdout_lines": 29,
+  "stderr_lines": 0,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "tool_call_started": 5,
+    "tool_call_finished": 5,
+    "usage_reported": 2,
+    "assistant_message": 2,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "",
+    "status_after": "",
+    "changed": false
+  },
+  "session_ref": "5be64565-714f-4d56-ad85-b93f6712a9fc",
+  "permission_decisions": [],
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 8,
+      "cache_creation_input_tokens": 3725,
+      "cache_read_input_tokens": 39144,
+      "output_tokens": 2187,
+      "output_tokens_details": {
+        "thinking_tokens": 853
+      },
+      "server_tool_use": {
+        "web_search_requests": 0,
+        "web_fetch_requests": 0
+      },
+      "service_tier": "standard",
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 3725,
+        "ephemeral_5m_input_tokens": 0
+      },
+      "inference_geo": "not_available",
+      "iterations": [
+        {
+          "input_tokens": 2,
+          "output_tokens": 913,
+          "cache_read_input_tokens": 11233,
+          "cache_creation_input_tokens": 449,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 449
+          },
+          "type": "message"
+        }
+      ],
+      "speed": "standard"
+    },
+    "cost_usd": 0.111537
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\claude-denied-write-46028b40.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\claude-denied-write-46028b40.stderr.log"
+}

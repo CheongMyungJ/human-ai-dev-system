@@ -1,0 +1,60 @@
+{
+  "run_id": "pair-author-8765c23c",
+  "tool_id": "codex",
+  "mode": "exec",
+  "permission_requested": "workspace_write",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\codex.CMD",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-C",
+    "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+    "--sandbox",
+    "workspace-write"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 35.64,
+  "stdout_lines": 17,
+  "stderr_lines": 1,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "run_started": 1,
+    "assistant_message": 2,
+    "tool_call_started": 5,
+    "tool_call_finished": 5,
+    "usage_reported": 1,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [
+    "item.completed",
+    "item.started"
+  ],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "",
+    "status_after": "M calc.py",
+    "changed": true
+  },
+  "session_ref": "01a0be64-f99f-7453-bcc6-85741564f1b4",
+  "permission_decisions": [],
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 101841,
+      "cached_input_tokens": 96384,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 506,
+      "reasoning_output_tokens": 35
+    },
+    "cost_usd": "not_reported"
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\pair-author-8765c23c.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\pair-author-8765c23c.stderr.log"
+}

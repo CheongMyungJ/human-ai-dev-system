@@ -15,15 +15,15 @@
 | 저장소 | https://github.com/CheongMyungJ/human-ai-dev-system — 비공개 |
 | 기본 작업 디렉터리 | `C:\git\human-ai-dev-system-design` |
 | 설계 기준 | v0.6, 사용자 결정 D-01~58 |
-| 전체 개발 상태 | **제품 코드 미착수**. 설계 문서, 개발 안내서, P1-01 환경 실측·계약 초안까지 준비됨 |
+| 전체 개발 상태 | **제품 코드 미착수**. 설계 문서, 개발 안내서, P1-01 계약 초안, P1-02 실증용 harness와 실행 증거까지 준비됨 |
 | 현재 단계 | **P1 — CLI 연결 검증** |
 | 현재 단계 상태 | `IN_PROGRESS` |
-| 다음 하위 작업 | **P1-02 — Codex·Claude 최소 실행 harness 실증** (P1-01은 완료) |
-| 활성 plan | `P1-PLAN-01` — 아래 [활성 plan](#활성-plan) 참조. P1-01 완료, P1-02 실행 순서 대기 |
-| 마지막 구현 검증 | 없음. 환경 조회·진단 명령 실행은 했으나 CLI로 실제 작업을 시킨 실증은 아직 없음 |
+| 다음 하위 작업 | **P1-03 — 중지·복구 실증** (P1-01·P1-02 완료) |
+| 활성 plan | `P1-PLAN-01` — 아래 [활성 plan](#활성-plan) 참조. 1~14번 완료, P1-03/04는 계획 갱신 후 착수 |
+| 마지막 구현 검증 | 2026-09-20 — Codex 0.154.0·Claude Code 2.1.278로 읽기·쓰기·권한 거절·세션 분리 실행 증거 확보. [P1-02 결과](p1/evidence/P1-02-results.md) |
 | 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함 |
 | 필요한 사용자 결정 | 현재 없음. 실제 호환성 제약·설치 필요·제품 정책 변경이 드러나면 구체적으로 질문 |
-| 다음 세션 첫 행동 | 시작 절차 → [P1-01 결과](p1-environment-contract.md) 확인 → `P1-PLAN-01`의 P1-02 실행 순서 재검토·갱신 → harness 구현과 실증 |
+| 다음 세션 첫 행동 | 시작 절차 → [P1-02 결과](p1/evidence/P1-02-results.md) 8절의 미검증 목록 확인 → `P1-PLAN-01`에 P1-03 실행 순서를 추가한 뒤 중지·복구 실증 |
 
 위 표는 시작 시점의 기록이다. **이 표만 믿지 말고 실제 Git 상태·코드·검증 증거와 대조한다.** 코드가 이미 있는데 구현 미착수로 표시되거나, 이전 세션이 끝나지 않은 상태면 중복 구현하지 말고 먼저 상태를 복구한다.
 
@@ -54,8 +54,8 @@
 
 ```text
 Plan ID: P1-PLAN-01
-단계 / 이번 세션 하위 작업: P1 — CLI 연결 검증 / P1-01 환경·계약(완료), P1-02 실증(대기)
-작성·수정 시점: 2026-09-20 작성
+단계 / 이번 세션 하위 작업: P1 — CLI 연결 검증 / P1-01 환경·계약(완료), P1-02 실증(완료)
+작성·수정 시점: 2026-09-20 작성, 같은 날 P1-02 수행 결과로 갱신
 기준 Git 브랜치·커밋 / 기존 미커밋 변경:
   main / 815f3f3 "docs: add plan-first development guide for staged sessions"
   시작 시 작업 트리 clean. 사용자 미커밋 변경 없음
@@ -81,9 +81,11 @@ Plan ID: P1-PLAN-01
       "도움말에 옵션이 있음"을 "지원함"으로 승격시키지 않기 위함
   (3) outcome에 unknown을 정식 값으로 포함 — 종료 코드만으로 완료를 선언하지 않기 위함(FR-28)
   (4) 어댑터가 자격증명 파일을 읽지 않음 — 인증은 CLI 자체 저장소에 유지(FR-28, NFR-07)
-변경할 구성 요소·파일(예상):
+변경할 구성 요소·파일(확정):
   P1-01: p1-environment-contract.md(신규), DEVELOPMENT.md(상태·plan·인계). 제품 코드 없음
-  P1-02: harness 스크립트와 실증 기록. 실제 경로·구성은 P1-02 착수 시 이 plan에 확정해 기록
+  P1-02: p1/harness/run_cli.py(실증용 harness), p1/evidence/(실행 증거와 결과 문서).
+         시험 저장소는 %LOCALAPPDATA%\Temp\hads-p1\testrepo, 원본 증거는 같은 경로의 evidence\.
+         제품 코드는 아직 없다. harness는 P1 실증 도구이며 P2에서 그대로 제품에 넣지 않는다
 실행 순서:
   1. [완료] 시작 절차: git 상태·원격·HEAD 읽기 확인, 안내서 상태표와 실제 상태 대조
   2. [완료] P1 필수 참조와 FR-28·NFR-07/08 확인
@@ -92,19 +94,27 @@ Plan ID: P1-PLAN-01
   5. [완료] 인증 구성 확인(존재·모드만, 내용 미조회)과 doctor 진단 요약
   6. [완료] 공통 실행 계약 초안 v0와 capability 표 작성 → p1-environment-contract.md
   7. [완료] 이 plan 기록과 사용자 공유, 상태표·인계 갱신, 로컬 커밋
-  8. [대기] P1-02-a: 임시 시험 저장소 준비(시스템 임시 경로, git init, 샘플 파일 2~3개).
+  8. [완료] P1-02-a: 임시 시험 저장소 준비(시스템 임시 경로, git init, 샘플 파일 2~3개).
      사용자의 실제 프로젝트와 이 설계 저장소는 대상으로 쓰지 않는다
-  9. [대기] P1-02-b: harness 최소 구현 — Python으로 CLI를 자식 프로세스로 실행하고
+  9. [완료] P1-02-b: harness 최소 구현 — Python으로 CLI를 자식 프로세스로 실행하고
      stdout/stderr 스트림을 소비, 이벤트 원문을 run_id별 파일에 append, 종료·타임아웃 처리
- 10. [대기] P1-02-c: 읽기 전용 호출 실증(두 CLI 각각) — 시험 저장소 파일 요약 요청.
+ 10. [완료] P1-02-c: 읽기 전용 호출 실증(두 CLI 각각) — 시험 저장소 파일 요약 요청.
      구조화 출력(`codex exec --json`, `claude -p --output-format stream-json`) 실물 스키마 기록
- 11. [대기] P1-02-d: 작은 변경 호출 실증 — 시험 저장소의 한 파일에 정해진 한 줄 추가.
+ 11. [완료] P1-02-d: 작은 변경 호출 실증 — 시험 저장소의 한 파일에 정해진 한 줄 추가.
      실행 전후 git 상태 비교로 실제 변경 확인
- 12. [대기] P1-02-e: 세션 식별·분리 확인 — 작성 호출과 검토 호출의 세션 식별자가 다름을 증거로 확인
- 13. [대기] P1-02-f: 권한 경계 확인 — 허용 밖 경로 쓰기를 요청했을 때의 실제 결과 관찰
- 14. [대기] P1-02-g: capability 표를 실측으로 갱신(doc_only → verified/unsupported)하고
+ 12. [완료] P1-02-e: 세션 식별·분리 확인 — 작성 호출과 검토 호출의 세션 식별자가 다름을 증거로 확인
+ 13. [완료] P1-02-f: 권한 경계 확인 — 허용 밖 경로 쓰기를 요청했을 때의 실제 결과 관찰
+ 14. [완료] P1-02-g: capability 표를 실측으로 갱신(doc_only → verified/unsupported)하고
      실패·거절 사례도 함께 기록
- 15. [대기] P1-03, P1-04는 P1-02 결과를 반영해 이 plan을 갱신한 뒤 착수
+ 15. [대기] P1-03 중지·복구 실증. 착수 전에 아래 순서를 이 plan에 확정해 기록한다.
+     (가) 단절 신호를 harness가 관측할 수 있는 지점 확인 — 현재 harness는 CLI를 한 번 실행하고
+          스트림만 읽으므로 "다음 호출 차단" 제어 지점이 없다. Codex hooks/app-server,
+          Claude PreToolUse 중 어느 경로를 쓸지 먼저 정한다
+     (나) 도구 A 실행 중 단절 → A 결과 보존 → B 미시작을 이벤트 시각으로 확인
+     (다) 강제 종료와 안전 중지 구분, `.cmd` 진입점 경유 프로세스 트리 확인
+     (라) 재연결 후 결과 대조로 중복 실행이 없는지 확인
+     (마) 미지원 경로는 capability 표에 unsupported로 명시하고 기능 지원을 보류
+ 16. [대기] P1-04 OpenCode 문서 계약·결론. 설치하지 않고 공식 문서 기준의 계약·fixture만 작성
 성공 기준:
   AC-1: 세 CLI의 설치·버전·경로·인증 구성 상태가 확인 방법과 함께 기록되고,
         PATH 미조회와 설치 흔적 없음이 구분된다
@@ -121,8 +131,9 @@ Plan ID: P1-PLAN-01
   AC-2 → 인증 파일은 Test-Path로 존재·크기·시각만 확인. 내용 조회 없음.
          증거: 같은 문서 4절과 이 세션의 명령 이력
   AC-3 → 같은 문서 6~8절을 FR-28·NFR-07 수용 기준과 한 항목씩 대조. 미확인은 unknown으로 남김
-  AC-4 → 같은 문서 9절과 이 plan의 8~15번 항목
-  AC-5 → P1-02 수행 시 실제 명령·출력·git diff·세션 식별자를 증거로 기록. 미수행 시 미검증으로 표시
+  AC-4 → 같은 문서 9절과 이 plan의 15~16번 항목
+  AC-5 → 실제 명령·출력·git diff·세션 식별자를 증거로 기록.
+         결과: p1/evidence/P1-02-results.md 와 같은 디렉터리의 run별 result.json / stdout.jsonl
 실패·중단 시 상태 보존과 복구 방법:
   P1-01 산출물은 문서뿐이므로 커밋으로 보존한다. 사용자 작업 트리는 건드리지 않는다.
   P1-02는 시스템 임시 경로의 시험 저장소만 사용하고, 중단 시 그 경로와 남은 프로세스를 인계에 기록한다.
@@ -140,7 +151,7 @@ Plan ID: P1-PLAN-01
 
 | 단계 | 상태 | 다음 하위 작업 | 완료 증거·인계 |
 |---|---|---|---|
-| P1 CLI 연결 검증 | IN_PROGRESS | P1-02 | P1-01 완료 — [환경 실측·계약 초안](p1-environment-contract.md), `P1-PLAN-01` |
+| P1 CLI 연결 검증 | IN_PROGRESS | P1-03 | P1-01·P1-02 완료 — [계약 초안](p1-environment-contract.md), [P1-02 실증 결과](p1/evidence/P1-02-results.md), `P1-PLAN-01` |
 | P2 최소 업무 흐름 | PENDING | P2-01 | 없음 |
 | P3 기능 개발 흐름 | PENDING | P3-01 | 없음 |
 | P4 품질·다양한 업무 | PENDING | P4-01 | 없음 |
@@ -158,7 +169,7 @@ Plan ID: P1-PLAN-01
 | 하위 작업 | 범위 | 성공 기준·검증 |
 |---|---|---|
 | P1-01 환경·계약 — **DONE** | Python·Git·CLI의 실제 위치/버전/사용 가능 여부 조사, 공통 실행 입력·이벤트·결과·능력표 초안 | PATH 조회 실패와 미설치를 구분. OS/버전/확인 방법 기록. 인증 비밀값 없이 실행 가능 여부 표시. 아래 실증의 plan 작성 → 결과: [p1-environment-contract.md](p1-environment-contract.md), `P1-PLAN-01` |
-| P1-02 Codex·Claude 실증 | 기존 설치·인증을 사용한 최소 실행 harness, 임시 시험 저장소에서 읽기·작은 변경·구조화 결과·별도 세션 확인 | 두 도구 각각 실제 실행 증거. 성공/실패/권한 질문/세션 식별을 구별하고 작성·검토 세션이 분리됨. 명령 반환 코드만으로 성공 판정하지 않음 |
+| P1-02 Codex·Claude 실증 — **DONE** | 기존 설치·인증을 사용한 최소 실행 harness, 임시 시험 저장소에서 읽기·작은 변경·구조화 결과·별도 세션 확인 | 두 도구 각각 실제 실행 증거. 성공/실패/권한 질문/세션 식별을 구별하고 작성·검토 세션이 분리됨. 명령 반환 코드만으로 성공 판정하지 않음 → 결과: [P1-02 실증 결과](p1/evidence/P1-02-results.md), harness [`p1/harness/run_cli.py`](p1/harness/run_cli.py) |
 | P1-03 중지·복구 실증 | 도구 A 실행 중 단절 감지 → A 종료 → B 호출 보류 → 연결 회복 후 대조. 취소·프로세스 종료·자식 활동도 확인 | 지원 모드에서 B가 시작되지 않는 증거. 미지원 경로는 명확히 표시. 지연 이벤트·응답 유실에서 중복 호출하지 않음. 강제 종료와 안전 중지를 혼동하지 않음 |
 | P1-04 OpenCode 문서 계약·결론 | 일관된 공식 버전의 어댑터 계약·응답 fixture/계약 시험, 세 도구 capability 표와 P2에서 사용할 연결 방식 | OpenCode를 설치/실행한 것으로 표시하지 않음. 문서 계약 검증과 실증 미완료 분리. 필수 능력의 공백·대안·후속 작업 명시 |
 
@@ -277,41 +288,52 @@ Plan ID: P1-PLAN-01
 
 ```text
 세션 기록 ID / 수행 시점: S-002 / 2026-09-20
-작업 단계·하위 작업 / 사용한 Plan ID: P1 — CLI 연결 검증 / P1-01 환경·계약 / P1-PLAN-01
+작업 단계·하위 작업 / 사용한 Plan ID: P1 — CLI 연결 검증 / P1-01 환경·계약 + P1-02 실증 / P1-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD 815f3f3.
-  이 세션은 문서만 변경했으며 제품 코드 커밋은 없음
-미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 커밋함
+  커밋 b642da2(P1-01 문서) 이후 P1-02 커밋 1건. push 없음(origin/main 보다 앞섬)
+미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함
 구현·변경 내용:
-  p1-environment-contract.md 신규 — 환경 실측, CLI 실측, 인증 구성, 권한 차이 관측,
-    공통 실행 계약 초안 v0(입력·이벤트·결과), capability 표, 미검증 항목 목록
-  DEVELOPMENT.md — 현재 상태표, 활성 plan P1-PLAN-01, 단계 진행표, P1 참조, 인계·이력 갱신
+  p1-environment-contract.md 신규 — 환경·CLI·인증 실측, 권한 차이 관측,
+    공통 실행 계약 초안 v0(입력·이벤트·결과), capability 표(P1-02 실측 반영)
+  p1/harness/run_cli.py 신규 — P1 실증용 최소 실행 harness(제품 코드 아님)
+  p1/evidence/ 신규 — 실행 증거 12건(result.json, stdout.jsonl, stderr.log)과 P1-02-results.md
+  DEVELOPMENT.md — 현재 상태표, 활성 plan P1-PLAN-01, 단계 진행표, P1 참조, 인계·이력
 성공 기준별 결과:
   AC-1 통과 — 세 CLI 상태와 확인 방법 기록. OpenCode는 PATH 미조회가 아니라
     "설치 흔적 없음(조사 범위 내)"으로 근거와 함께 구분
   AC-2 통과 — 인증 파일은 존재·크기·시각만 확인. 내용 미조회. 어댑터가 자격증명을 읽지 않는 계약 반영
-  AC-3 통과 — 계약 초안이 CLI 인자 구조가 아닌 의미 단위이며 doc_only/verified/unsupported/unknown 구분
-  AC-4 통과 — P1-02 실행 순서 8~14번과 문서 9절에 미검증 항목 명시
-  AC-5 미검증 — P1-02 미수행. CLI로 실제 작업을 시킨 실증 없음
+  AC-3 통과 — 계약이 CLI 인자 구조가 아닌 의미 단위이며 doc_only/verified/unsupported/unknown 구분
+  AC-4 통과 — P1-03/04 실행 순서를 plan 15~16번에 기록
+  AC-5 통과 — 두 CLI 각각 읽기·쓰기·권한 거절·세션 분리의 실제 실행 증거 확보.
+    종료 코드만으로 완료를 판정하지 않음을 실제 사례(#7·#8)로 확인
 실행한 검증 명령·환경·결과·증거 위치:
-  PowerShell 7.6.6 / Windows 11 Home 10.0.26200에서 실행
-  Get-Command -All, python|git|node|npm|gh|codex|claude --version, py -0,
-  npm ls -g --depth=0, winget list --id sst.opencode, Test-Path(설치·인증 후보 경로),
-  codex doctor, claude doctor, codex --help, codex exec --help, claude --help
-  증거: p1-environment-contract.md 1~5절에 명령과 실측값을 대조 가능한 형태로 기록.
-  doctor 원문에는 계정·엔드포인트 정보가 있어 판정에 필요한 항목만 요약 보존
+  PowerShell 7.6.6 / Windows 11 Home 10.0.26200 / Python 3.12.10
+  환경 조사: Get-Command -All, --version, py -0, npm ls -g, winget list, Test-Path,
+    codex doctor, claude doctor, codex/claude --help
+  실증: python p1/harness/run_cli.py --tool {codex|claude} --mode {exec|print}
+    --workspace %LOCALAPPDATA%\Temp\hads-p1\testrepo --permission {read_only|workspace_write} ...
+    총 15회 실행(그중 12회 증거 보존). git diff로 실제 코드 변경 확인
+  증거: p1/evidence/P1-02-results.md(요약) + 같은 디렉터리의 run별 원문 파일
 변경 검토 결과 / 남은 위험:
-  변경은 문서 2건. 비밀값·토큰·계정 식별자를 기록하지 않았음을 확인.
+  변경 diff 검토함. 비밀값·토큰·계정 식별자 없음. 증거 파일에는 토큰 수·비용만 포함
   남은 위험 (1) 두 CLI 모두 자동 업데이트가 켜져 있어 실증 결과의 유효 버전이 이동한다
-  (2) Codex doctor의 sandbox 보고는 설정값이며 실제 차단 관찰이 아니다
-  (3) python(3.12)과 py 런처(3.14)의 기본 버전이 달라 P2-01에서 런타임을 고정해야 한다
+  (2) Claude가 `--permission-mode manual` 요청에 `default`로 보고하는 불일치 미해결
+  (3) `--tools` 제한이 MCP 도구를 포함하지 않음 — 현재는 `--strict-mcp-config`로 대응
+  (4) python(3.12)과 py 런처(3.14)의 기본 버전이 달라 P2-01에서 런타임을 고정해야 한다
+  (5) residual_activity는 전 구간 unknown. 자식·백그라운드 활동 추적은 아직 없음
 새 사용자 결정·연결한 설계 변경: 없음. 기존 FR-28·NFR-07/08·D-42/44/45/53 범위 안에서 수행
-남은 프로세스·실험 저장소·외부 게시 상태: 없음. 시험 저장소 미생성, 외부 게시·push 없음
+남은 프로세스·실험 저장소·외부 게시 상태:
+  남은 프로세스 없음. 외부 게시·push 없음.
+  시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 그대로 둠(calc.py에 mul() 미커밋 변경 있음).
+  원본 증거는 같은 경로의 evidence\. 임시 경로이므로 필요한 증거는 저장소로 복사해 두었다
 단계 완료 여부와 이유:
-  P1 미완료. P1-01만 DONE이며 P1-02~04의 실증이 남아 P1 완료 조건(실제 실행 증거)을 충족하지 않음
+  P1 미완료. P1-01·P1-02는 DONE이나 P1-03(중지·복구)·P1-04(OpenCode 계약)가 남았다.
+  특히 P1의 핵심인 "다음 호출 차단"은 아직 어느 CLI에서도 unknown이다
 다음 단계·하위 작업 / 다음 세션 첫 명령 또는 읽을 위치:
-  P1-02 Codex·Claude 실증. p1-environment-contract.md 8~9절과 P1-PLAN-01의 8~14번 항목을 읽고
-  실행 순서를 재검토·갱신한 뒤 harness 구현부터 시작
+  P1-03 중지·복구 실증. p1/evidence/P1-02-results.md 8절과 P1-PLAN-01 15번을 읽고
+  제어 지점(Codex hooks/app-server 또는 Claude PreToolUse)을 먼저 정한 뒤 계획을 확정한다.
+  현재 harness는 CLI를 한 번 실행하고 스트림만 읽으므로 제어 지점이 없다 — 구조 확장이 필요하다
 막힌 조건과 필요한 사용자 답변: 없음
 ```
 
@@ -340,7 +362,7 @@ Plan ID: P1-PLAN-01
 | 세션 | 시점 | 단계·하위 작업 | 결과 요약 |
 |---|---|---|---|
 | S-001 | 2026-09-20 | 설계 정리 | 설계 v0.6 문서와 이 안내서 준비. 제품 코드·실증 없음 |
-| S-002 | 2026-09-20 | P1-01 환경·계약 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0와 capability 표 작성, `P1-PLAN-01` 기록. CLI 실증은 미수행이며 P1-02로 이월 |
+| S-002 | 2026-09-20 | P1-01 환경·계약, P1-02 실증 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0 작성, `P1-PLAN-01` 기록. 이어서 harness로 두 CLI의 읽기·쓰기·권한 거절·세션 분리를 실제 실행해 capability 표를 실측으로 갱신. 중지·복구(P1-03)와 OpenCode 계약(P1-04) 이월 |
 
 안내서·계약 문서 작성 자체를 P1 완료로 기록하지 않는다.
 

@@ -1,0 +1,56 @@
+{
+  "run_id": "codex-write-0ff03346",
+  "tool_id": "codex",
+  "mode": "exec",
+  "permission_requested": "workspace_write",
+  "resolved_command": [
+    "C:\\Users\\USER\\AppData\\Roaming\\npm\\codex.CMD",
+    "exec",
+    "--json",
+    "--skip-git-repo-check",
+    "-C",
+    "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+    "--sandbox",
+    "workspace-write"
+  ],
+  "workspace": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\testrepo",
+  "outcome": "completed",
+  "outcome_reason": "exit_code=0 이고 종료 이벤트를 관측함",
+  "exit_code": 0,
+  "timed_out": false,
+  "duration_sec": 29.44,
+  "stdout_lines": 11,
+  "stderr_lines": 1,
+  "stdout_utf8_decode_errors": 0,
+  "normalized_events": {
+    "session_identified": 1,
+    "run_started": 1,
+    "assistant_message": 2,
+    "tool_call_started": 3,
+    "tool_call_finished": 3,
+    "usage_reported": 1,
+    "run_finished": 1
+  },
+  "unmapped_native_types": [],
+  "workspace_effect": {
+    "head_before": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "head_after": "ae3580681743b7714ddfdbddcf1cc9d13bbaaefc",
+    "status_before": "",
+    "status_after": "M NOTES.md",
+    "changed": true
+  },
+  "session_ref": "01a0be60-deb7-76b0-a8a5-96ebb5a72833",
+  "residual_activity": "unknown",
+  "usage": {
+    "tokens": {
+      "input_tokens": 67264,
+      "cached_input_tokens": 59520,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 534,
+      "reasoning_output_tokens": 97
+    },
+    "cost_usd": "not_reported"
+  },
+  "raw_stdout": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\codex-write-0ff03346.stdout.jsonl",
+  "raw_stderr": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p1\\evidence\\codex-write-0ff03346.stderr.log"
+}

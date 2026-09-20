@@ -2,9 +2,11 @@
 
 조사일: 2026-09-20. 대상 PC: 사용자 Windows 개발 PC 1대. Plan ID: `P1-PLAN-01`.
 
-이 문서는 **P1-01(환경·계약)의 결과물**이다. 아래 2~5절은 이 PC에서 실제로 실행한 조회 명령의 결과이며, 6~9절은 그 사실과 공식 문서·CLI 도움말을 근거로 만든 **계약 초안**이다. 초안은 어댑터 구현 근거이며 실행 검증 결과가 아니다. CLI를 실제로 호출해 작업을 수행하는 실증은 P1-02 이후에 한다.
+이 문서는 **P1-01(환경·계약)의 결과물**이다. 아래 2~5절은 이 PC에서 실제로 실행한 조회 명령의 결과이며, 6~7절은 그 사실과 공식 문서·CLI 도움말을 근거로 만든 **계약 초안**이다.
 
-**이 문서에서 하지 않은 것:** CLI로 실제 작업 실행, 도구 경계 정지 시험, 연결 단절·복구 시험, OpenCode 설치·실행. 이 항목들은 9절에 미검증으로 남겨 둔다.
+8절의 capability 표는 **P1-02 실증 결과(2026-09-20)를 반영해 갱신했다.** 실행 증거는 [P1-02 결과](p1/evidence/P1-02-results.md)에 있다.
+
+**아직 하지 않은 것:** 도구 경계 정지 시험, 연결 단절·복구 시험, 세션 재개 시험, OpenCode 설치·실행. 9절에 미검증으로 남겨 둔다.
 
 ## 1. 조사 방법과 판정 규칙
 
@@ -129,41 +131,51 @@ CLI가 어떤 종류를 제공하지 않으면 **비어 있는 것으로 두고 
 
 `outcome`은 제어부가 **이벤트·결과물·작업공간 변화**를 함께 보고 판정한다. 이 판정 규칙 자체가 P1-02의 검증 대상이다.
 
-## 8. Capability 표 (P1-01 시점)
+## 8. Capability 표 (P1-02 실증 반영, 2026-09-20)
 
 상태값: `doc_only`(공식 문서·CLI 도움말에 인터페이스 존재, 실행 미확인) · `verified`(이 PC에서 실제 관측) · `unsupported`(없음을 확인) · `unknown`(확인 안 함).
+
+`verified` 항목의 근거는 [P1-02 실증 결과](p1/evidence/P1-02-results.md)와 같은 디렉터리의 실행 증거 파일이다.
 
 | 능력 | Codex 0.154.0 | Claude Code 2.1.278 | OpenCode | 근거 |
 |---|---|---|---|---|
 | 설치·기동 | `verified` | `verified` | `unsupported`(미설치) | 3절 |
-| 인증 구성 | `verified` | `verified`(파일 존재 + doctor 정상) | — | 4절 |
-| 비대화식 실행 | `doc_only` — `codex exec [PROMPT]` | `doc_only` — `claude -p` | `unknown` | `--help` |
-| 구조화 이벤트 스트림 | `doc_only` — `codex exec --json`(JSONL) | `doc_only` — `--output-format stream-json` | `unknown` | `--help` |
-| 최종 결과 분리 수집 | `doc_only` — `-o/--output-last-message <FILE>` | `doc_only` — `--output-format json` | `unknown` | `--help` |
+| 인증 구성 | `verified` | `verified` | — | 4절 |
+| 비대화식 실행 | `verified` — `codex exec`, 프롬프트는 stdin | `verified` — `claude -p`, 프롬프트는 stdin | `unknown` | P1-02 #3~#6 |
+| 구조화 이벤트 스트림 | `verified` — `--json` JSONL | `verified` — `--output-format stream-json --verbose` | `unknown` | P1-02 4절 |
+| 도구 경계 관찰 | `verified` — `item.started/completed` + `command_execution` | `verified` — `assistant(tool_use)` ↔ `user(tool_use_result)` | `unknown` | P1-02 4절 |
+| 실제 코드 변경 | `verified` — git diff로 확인 | `verified` — git diff로 확인 | `unknown` | P1-02 #5·#6·#11 |
+| 쓰기 범위 제한(실강제) | `verified` — read-only sandbox가 OS 수준에서 차단 | `verified` — `--tools` 제한이 하위 에이전트까지 강제 | `unknown` | P1-02 3절 |
+| 도구 제한의 MCP 포함 여부 | 해당 없음(sandbox 축) | `verified` — **`--tools`는 MCP 도구를 줄이지 않는다.** `--strict-mcp-config` 필요 | `unknown` | P1-02 #9·#10 |
+| 권한 거절 이벤트 | `unknown` — 이번 경로에서는 명령 실패로만 드러남 | `verified` — `system/permission_denied` | `unknown` | P1-02 3~4절 |
+| 세션 식별 | `verified` — `thread.started.thread_id` | `verified` — `system/init.session_id` | `unknown` | P1-02 6절 |
+| 작성·검토 세션 분리 | `verified` | `verified` | `unknown` | P1-02 #11·#12 |
+| 사용량 제공 | `verified` — 토큰만. 비용 없음 | `verified` — 토큰 + `total_cost_usd` | `unknown` | P1-02 4절 |
+| 작업 디렉터리 고정 | `verified` — `-C` + 프로세스 cwd | `verified` — 프로세스 cwd (`system/init.cwd`로 확인) | `unknown` | P1-02 #3·#4 |
+| 최종 결과 분리 수집 | `doc_only` — `-o/--output-last-message` | `doc_only` — `--output-format json` | `unknown` | `--help` |
 | 구조화 출력 스키마 | `doc_only` — `--output-schema <FILE>` | `doc_only` — `--json-schema <schema>` | `unknown` | `--help` |
-| 세션 식별·재개 | `doc_only` — `codex exec resume`, `fork`, `resume --last` | `doc_only` — `--session-id <uuid>`, `--resume`, `--fork-session` | `unknown` | `--help` |
-| 작업 디렉터리 고정 | `doc_only` — `-C/--cd` | `doc_only` — 프로세스 cwd + `--add-dir` | `unknown` | `--help` |
-| 쓰기 범위 제한 | `doc_only` — `--sandbox`, `--add-dir` | `doc_only` — `--permission-mode`, `--allowedTools`, `--restricted` | `unknown` | `--help`, 5절 |
-| 승인 요청 노출 | `doc_only` — `--ask-for-approval on-request` | `doc_only` — `--permission-prompts host\|none` | `unknown` | `--help` |
-| 도구 경계 관찰 | `unknown` | `unknown` | `unknown` | 이벤트 실물 미확인 |
+| 세션 재개 | `doc_only` — `codex exec resume`, `fork` | `doc_only` — `--resume`, `--session-id`, `--fork-session` | `unknown` | `--help` |
+| 승인 요청 노출 | `doc_only` — 최상위 `codex`에만 `--ask-for-approval`. **`exec`는 거부** | `doc_only` — `--permission-prompts host` | `unknown` | P1-02 2절 |
 | **다음 호출 차단** | `unknown` — hooks·app-server가 후보 | `unknown` — PreToolUse·권한 훅이 후보 | `unknown` | `cli-pause-feasibility.md` |
 | 취소·종료 확인 | `unknown` | `doc_only` — `claude stop <id>`(백그라운드 세션) | `unknown` | `--help` |
 | 자식·병렬 활동 추적 | `unknown` | `unknown` | `unknown` | 미확인 |
 | 재연결 결과 대조 | `unknown` | `unknown` | `unknown` | 미확인 |
-| 사용량 제공 | `unknown` | `doc_only` — `--max-budget-usd`(상한 설정) | `unknown` | `--help` |
-| 별도 세션 분리(작성/검토) | `doc_only` — 새 exec 호출 | `doc_only` — 새 `-p` 호출 / 별도 `--session-id` | `unknown` | `--help` |
 
-**이 표에서 `doc_only`는 "지원함"이 아니다.** CLI 도움말에 옵션이 있다는 사실이며, 실제 동작·Windows 네이티브 차이·조합 제약은 P1-02 이후에 확인한다. 특히 **다음 호출 차단**은 P1의 핵심 요구인데 현재 어느 CLI에서도 `unknown`이며, 여기에 필요한 통제가 없으면 관련 기능의 지원을 보류한다.
+**`doc_only`는 "지원함"이 아니다.** P1-02에서 실제로 두 건이 뒤집혔다: 최상위 도움말의 `--ask-for-approval`은
+`codex exec`에서 거부되고, `--tools` 뒤의 위치 인자는 옵션 값으로 흡수된다([P1-02 결과 2절](p1/evidence/P1-02-results.md)).
 
-## 9. P1-02 이후로 넘기는 미검증 항목
+**다음 호출 차단**은 P1의 핵심 요구인데 아직 어느 CLI에서도 `unknown`이다. 여기에 필요한 통제가 없으면
+해당 기능의 지원을 보류한다. P1-03에서 확인한다.
+
+## 9. 남은 미검증 항목
+
+P1-02에서 해소한 항목(실제 호출·이벤트 스키마·세션 분리·권한 경계 실동작)은 [P1-02 결과](p1/evidence/P1-02-results.md)로 옮겼다. 아래는 아직 남은 것이다.
 
 | 항목 | 넘긴 하위 작업 | 확인해야 할 것 |
 |---|---|---|
-| 실제 호출 성공과 인증 유효성 | P1-02 | 임시 시험 저장소에서 읽기·작은 변경. 종료 코드 외의 증거 |
-| 이벤트 스키마 실물 | P1-02 | `--json` / `stream-json`의 실제 필드와 도구 경계 표현 |
-| 세션 식별·분리 | P1-02 | 작성·검토 호출이 서로 다른 세션인지 식별자로 확인 |
-| 권한 경계 실동작 | P1-02 | 허용 밖 경로 쓰기 시도의 실제 결과. 5절의 진단 보고와 대조 |
 | 도구 경계 정지 | P1-03 | 단절 감지 → 현재 호출 종료 → 다음 호출 미시작의 증거 |
+| `--permission-mode` 요청값·보고값 불일치 | P1-03 | Claude가 `manual` 요청에 `default`로 보고하는 이유와 실제 적용값 |
+| `.cmd` 진입점 경유 프로세스 트리 | P1-03 | 강제 종료 시 자식 CLI 프로세스가 함께 끝나는지 |
 | 취소·프로세스 종료·자식 활동 | P1-03 | 요청 수신과 실제 종료 확인의 구분 |
 | 재연결 대조·중복 방지 | P1-03 | 지연 이벤트·응답 유실에서 중복 실행이 없는지 |
 | Python 런타임 고정 | P2-01 | 3.12 / 3.14 중 사용할 버전과 실행 스크립트 반영 |

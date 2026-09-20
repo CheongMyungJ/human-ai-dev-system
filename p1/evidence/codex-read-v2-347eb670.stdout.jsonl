@@ -1,0 +1,7 @@
+{"type":"thread.started","thread_id":"01a0be60-7f4b-7331-882e-f1b7e1cefff8"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"calc.py를 읽어 함수 이름만 확인하겠습니다.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Content -LiteralPath 'calc.py'\"","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command \"Get-Content -LiteralPath 'calc.py'\"","aggregated_output":"def add(a, b):\r\n    return a + b\r\n\r\n\r\ndef sub(a, b):\r\n    return a - b\r\n\r\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"add, sub"}}
+{"type":"turn.completed","usage":{"input_tokens":32305,"cached_input_tokens":29056,"cache_write_input_tokens":0,"output_tokens":62,"reasoning_output_tokens":0}}
