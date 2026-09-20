@@ -367,8 +367,8 @@ P2-02는 의도 초안을 사람이 화면에서 입력하게 만들었고, FR-0
 작업 단계·하위 작업 / 사용한 Plan ID: P3 — 기능 개발 흐름 / P3-01 수준·설계·계획 / P3-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
   C:\git\human-ai-dev-system-design, main. 시작 HEAD e2e4b50(작업 트리 clean, origin/main과 동기).
-  이 세션의 커밋 목록은 `git log --oneline e2e4b50..HEAD` 로 본다. 최종 커밋은 2a8d154 다.
-  **push 하지 않았다.** 원격 main 은 e2e4b50 이며 로컬이 한 커밋 앞서 있다.
+  이 세션의 커밋 목록은 `git log --oneline e2e4b50..HEAD` 로 본다(문서 커밋 포함 네 건).
+  **push 하지 않았다.** 원격 main 은 e2e4b50 이며 로컬이 앞서 있다.
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
   var\, .venv\, web\node_modules\, web\dist\ 는 .gitignore 대상이며 커밋하지 않았다.
   web\dist 는 빌드 산출물이므로 다음 세션에서 bootstrap 또는 npm run build 로 다시 만든다
