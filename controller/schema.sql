@@ -679,3 +679,146 @@ CREATE INDEX IF NOT EXISTS idx_preparation_case
     ON preparation_artifact(case_id, stage, state);
 CREATE INDEX IF NOT EXISTS idx_stage_review_case ON stage_review(case_id, stage);
 CREATE INDEX IF NOT EXISTS idx_run_context_run ON run_context_ref(run_id);
+
+-- ===================================================================
+-- 스키마 v6 (P3-02 작업 그래프·질문)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- Task 의 목적·산출물·완료 조건 서술은 개발계획 원문 안에 있고 여기에는 짧은
+-- 요약·종류·순서·상태와 참조만 남는다.
+--
+-- **Task 의 완료 상태는 컬럼이 아니다.** 그 `task_key` 의 실행 결과에서 도출한다.
+-- 사람이 "끝났다"고 적는 경로를 만들면 실행 증거 없이 의존을 푸는 문이 된다
+-- (FR-09 "미실행을 실행·통과로 표시하지 않는다").
+--
+-- **그래프는 리비전 단위로 통째로 바뀐다.** Task 행을 그 자리에서 고치지 않는다 —
+-- 고치면 "그때 무엇이 유효했는가"를 답할 수 없고 실행 기록이 가리키는 계획이
+-- 사라진다(FR-07 "변경 이유와 현재 유효한 계획을 남긴다").
+-- ===================================================================
+
+-- 작업 그래프 리비전. 현재 유효한 계획은 항상 하나다.
+--
+-- `intent_version_id` 가 오래된 그래프를 막는 지점이다. 설계·계획과 같은 규칙이며,
+-- 새 의도 버전이 생기면 그 위에 세운 그래프는 `stale` 이 된다.
+CREATE TABLE IF NOT EXISTS work_graph_revision (
+    id                  TEXT PRIMARY KEY,
+    case_id             TEXT NOT NULL REFERENCES "case"(id),
+    revision            INTEGER NOT NULL,
+    intent_version_id   TEXT NOT NULL REFERENCES intent_version(id),
+    plan_preparation_id TEXT NOT NULL REFERENCES preparation_artifact(id),
+    source              TEXT NOT NULL,   -- plan_artifact | human_replanning
+    -- 왜 바뀌었는가. 첫 리비전도 비워 두지 않는다.
+    reason_summary      TEXT NOT NULL,
+    actor               TEXT NOT NULL,
+    state               TEXT NOT NULL,   -- current | superseded
+    created_at          TEXT NOT NULL,
+    superseded_at       TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (length(reason_summary) <= 200)
+);
+
+-- Task. **본문 컬럼 없음.**
+--
+-- `task_key` 가 리비전을 가로지르는 식별자다. 행 id 는 리비전마다 새로 생기지만
+-- 키는 남으므로 **재분할이 실행 이력을 초기화하지 않는다**(FR-07 수용 기준).
+-- `run.task_id` 에 들어가는 값도 이 키다.
+CREATE TABLE IF NOT EXISTS task (
+    id                 TEXT PRIMARY KEY,
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    graph_revision_id  TEXT NOT NULL REFERENCES work_graph_revision(id),
+    task_key           TEXT NOT NULL,
+    kind               TEXT NOT NULL,   -- investigation|implementation|verification|experiment|integration
+    -- 연결된 의도 항목(goal|expected_outcome|scope|...). 없으면 빈 문자열.
+    relates_to         TEXT NOT NULL,
+    summary            TEXT NOT NULL,   -- 목적의 짧은 요약. 원문 대체 아님
+    deliverable_summary TEXT NOT NULL,  -- 산출물의 짧은 요약. 원문 대체 아님
+    completion_summary  TEXT NOT NULL,  -- 완료 조건의 짧은 요약. 원문 대체 아님
+    order_index        INTEGER NOT NULL,
+    origin             TEXT NOT NULL,   -- none|user_requirement|project_rule|observation|ai_*
+    -- 이 리비전에서 취소됐는가. 취소된 Task 는 **지우지 않는다** — 무엇이 있었고
+    -- 왜 빠졌는지가 남아야 한다.
+    cancelled          INTEGER NOT NULL DEFAULT 0,
+    cancel_reason      TEXT NOT NULL DEFAULT '',
+    created_at         TEXT NOT NULL,
+    UNIQUE (graph_revision_id, task_key),
+    CHECK (length(summary) <= 200),
+    CHECK (length(deliverable_summary) <= 200),
+    CHECK (length(completion_summary) <= 200),
+    CHECK (length(cancel_reason) <= 200)
+);
+
+-- 의존 관계. `task_key` 는 `depends_on_key` 가 완료된 뒤에 실행할 수 있다.
+-- 순환은 `controller/work_graph.py` 가 리비전을 만들 때 거부한다.
+CREATE TABLE IF NOT EXISTS task_dependency (
+    graph_revision_id TEXT NOT NULL REFERENCES work_graph_revision(id),
+    task_key          TEXT NOT NULL,
+    depends_on_key    TEXT NOT NULL,
+    PRIMARY KEY (graph_revision_id, task_key, depends_on_key),
+    FOREIGN KEY (graph_revision_id, task_key)
+        REFERENCES task(graph_revision_id, task_key),
+    FOREIGN KEY (graph_revision_id, depends_on_key)
+        REFERENCES task(graph_revision_id, task_key),
+    CHECK (task_key <> depends_on_key)
+);
+
+-- Task 와 성공 기준의 연결(FR-06·FR-07).
+--
+-- **현재 의도 버전의 기준만 받는다.** 성공 기준은 의도 버전에 묶여 있고 새 버전은
+-- 기준을 승계하지 않으므로(스키마 v4), 옛 기준을 가리키는 연결을 받아 두면
+-- 대체된 기준이 새 그래프에 그대로 붙는다.
+CREATE TABLE IF NOT EXISTS task_criterion (
+    graph_revision_id TEXT NOT NULL REFERENCES work_graph_revision(id),
+    task_key          TEXT NOT NULL,
+    criterion_id      TEXT NOT NULL REFERENCES success_criterion(id),
+    relation          TEXT NOT NULL,   -- implements | verifies
+    PRIMARY KEY (graph_revision_id, task_key, criterion_id, relation),
+    FOREIGN KEY (graph_revision_id, task_key)
+        REFERENCES task(graph_revision_id, task_key)
+);
+
+-- 어떤 사람 결정이 어떤 Task 를 막는가(intent-artifacts 3절 "결정을 기다리는
+-- 작업과 차단 관계", FR-13 "답변 의존 작업과 독립 작업을 구분한다").
+--
+-- **연결이 없는 열린 이월 질문은 전부 막는다.** 그 규칙은 이 표의 부재로
+-- 표현되며 `controller/work_graph.py` 가 판정한다 — 행이 없다는 것을 "막을 것이
+-- 없다"로 읽으면 좁히기가 곧 우회가 된다.
+CREATE TABLE IF NOT EXISTS task_question_block (
+    graph_revision_id TEXT NOT NULL REFERENCES work_graph_revision(id),
+    question_id       TEXT NOT NULL REFERENCES intent_question(id),
+    task_key          TEXT NOT NULL,
+    PRIMARY KEY (graph_revision_id, question_id, task_key),
+    FOREIGN KEY (graph_revision_id, task_key)
+        REFERENCES task(graph_revision_id, task_key)
+);
+
+-- 해석되지 않은 `blocks` 참조. **조용히 버리지 않는다.**
+--
+-- 산출물 원문의 `blocks` 는 자유 문자열이라 존재하지 않는 Task 를 가리킬 수 있다.
+-- 그것을 버리면 "이 질문은 아무 것도 막지 않는다"가 되어 버린다. 남겨 두고 그
+-- 질문을 **연결 없는 질문**으로 취급한다(= 전부 막는다).
+CREATE TABLE IF NOT EXISTS task_block_unresolved (
+    graph_revision_id TEXT NOT NULL REFERENCES work_graph_revision(id),
+    question_id       TEXT NOT NULL REFERENCES intent_question(id),
+    raw_ref           TEXT NOT NULL,
+    PRIMARY KEY (graph_revision_id, question_id, raw_ref),
+    CHECK (length(raw_ref) <= 200)
+);
+
+-- 산출물 원문이 적은 `blocks` 참조. **자유 문자열 그대로 남긴다.**
+--
+-- 설계 단계의 질문도 계획이 정의할 Task 를 가리킬 수 있는데, 그 Task 는 질문이
+-- 제기되는 시점에 아직 없다. 그래서 참조를 **해석하지 않고 먼저 보관**하고,
+-- 그래프를 만들 때 그 리비전의 Task 키로 해석한다.
+--
+-- 여기 들어오는 것은 Task 키를 가리키는 **식별자**이며 질문 본문이 아니다.
+-- 길이 상한을 두어 본문을 밀어 넣지 못하게 한다.
+CREATE TABLE IF NOT EXISTS question_block_ref (
+    question_id TEXT NOT NULL REFERENCES intent_question(id),
+    raw_ref     TEXT NOT NULL,
+    PRIMARY KEY (question_id, raw_ref),
+    CHECK (length(raw_ref) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_work_graph_case ON work_graph_revision(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_task_graph ON task(graph_revision_id, order_index);
+CREATE INDEX IF NOT EXISTS idx_task_case_key ON task(case_id, task_key);

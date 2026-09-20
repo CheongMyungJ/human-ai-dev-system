@@ -507,7 +507,7 @@ class RunnerAgent:
         intent_version_id = assignment.get("current_intent_version_id")
         if not intent_version_id:
             raise ValueError("어느 의도 버전 위에 세울지 배정에서 찾지 못했다")
-        sections, questions = prompts.parse_preparation(output.final_message, stage)
+        sections, questions, tasks = prompts.parse_preparation(output.final_message, stage)
         case_id = assignment["case_id"]
         run_id = assignment["run_id"]
         body = prep_doc.compose(
@@ -515,6 +515,7 @@ class RunnerAgent:
             level=WorkLevel(level),
             sections=sections,
             questions=questions,
+            tasks=tasks,
             case_id=case_id,
             intent_version_id=intent_version_id,
             authored_by=f"{assignment['tool_id']}/{assignment['mode']}",
@@ -585,6 +586,9 @@ class RunnerAgent:
                 "preparation_id": prep_id,
                 "sections": structure["sections"],
                 "questions": structure["questions"],
+                # Task 도 **구조**다. 목적·산출물·완료 조건의 짧은 요약만
+                # 올라가고 서술은 계획 원문에 남는다(P3-02).
+                "tasks": structure["tasks"],
             }
         )
 

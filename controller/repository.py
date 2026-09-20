@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 from controller import gate as gatemod
 from controller import sizing as sizingmod
+from controller import work_graph as workgraph
 from controller.admission import AdmissionRequest, AdmissionResult
 from controller.admission import evaluate as evaluate_admission
 from controller.db import transaction, utc_now
@@ -67,6 +68,11 @@ from domain.models import (
     SizingSource,
     SizingState,
     StageReviewState,
+    TaskKind,
+    TaskRelation,
+    TaskState,
+    WorkGraphSource,
+    WorkGraphState,
     WorkLevel,
 )
 
@@ -3067,6 +3073,7 @@ class Repository:
         prep_id: str,
         sections: Iterable[dict[str, Any]],
         questions: Iterable[dict[str, Any]],
+        tasks: Iterable[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Runner가 계산한 산출물 구조를 반영한다.
 
@@ -3075,6 +3082,12 @@ class Repository:
 
         이 산출물이 낳은 미정 질문도 함께 들어온다. 질문 표에 `raised_in_stage` 를
         남겨 의도 단계에서 나온 질문과 구별한다.
+
+        **P3-02:** 개발계획이 Task 를 정의했으면 여기서 작업 그래프 리비전이
+        태어난다. 그래프를 계획의 **검토 뒤**가 아니라 구조 보고 시점에 만드는
+        이유는, 사람이 검토할 때 무엇을 어떤 순서로 만들 계획인지가 화면에 보여야
+        하기 때문이다. 검토는 별개 기록으로 남고 진입 검사가 따로 확인한다 —
+        그래프가 있다는 사실이 계획 검토를 대신하지 않는다.
         """
         prep = self.get_preparation_artifact(prep_id)
         stage = PreparationStage(prep["stage"])
@@ -3091,6 +3104,9 @@ class Repository:
                 f" missing={missing} extra={extra}"
             )
         now = utc_now()
+        # `questions` 는 Iterable 이라 두 번 돌 수 없다. 아래에서 참조를 다시
+        # 훑어야 하므로 여기서 고정한다.
+        question_rows = list(questions)
         with transaction(self.conn):
             for row in rows:
                 self.conn.execute(
@@ -3110,7 +3126,7 @@ class Repository:
                         1 if row["section"] in required else 0,
                     ),
                 )
-            for question in questions:
+            for question in question_rows:
                 self.conn.execute(
                     "INSERT INTO intent_question"
                     " (id, case_id, intent_version_id, question_key, summary, decide_at,"
@@ -3133,6 +3149,42 @@ class Repository:
                         prep_id,
                     ),
                 )
+
+        # 질문이 **무엇을 막는다고 적혀 있는지**를 해석하지 않고 보관한다.
+        # 설계 단계의 질문은 계획이 정의할 Task 를 가리키는데, 그 Task 는 질문이
+        # 제기되는 시점에 아직 없다. 해석은 그래프를 만들 때 한다.
+        for question in question_rows:
+            row = self.conn.execute(
+                "SELECT id FROM intent_question WHERE intent_version_id = ? AND question_key = ?",
+                (prep["intent_version_id"], f"{stage.value}:{question['key']}"),
+            ).fetchone()
+            if row is None:
+                continue
+            # **더하지 않고 바꾼다.** 같은 질문을 다시 보고하면 이번 원문이 적은
+            # 것이 그 질문의 차단 관계다. 쌓아 두면 없어진 Task 를 가리키는 옛
+            # 참조가 살아남아 그 질문이 영원히 전부 막는다.
+            #
+            # 사람이 고쳐 둔 연결도 이때 대체된다. 새 산출물은 새 대상이고,
+            # 옛 산출물에 대고 고친 연결을 새 계획에 그대로 옮기면 그것이야말로
+            # "무효 전제의 결과를 확인 없이 채택"하는 것이다(FR-07).
+            self.conn.execute(
+                "DELETE FROM question_block_ref WHERE question_id = ?", (row["id"],)
+            )
+            self.record_question_block_refs(row["id"], question.get("blocks") or [])
+
+        # 개발계획이 Task 를 정의했으면 작업 그래프 리비전이 태어난다.
+        # **Task 0건이면 그래프를 만들지 않는다** — 빈 그래프를 만들어 두면
+        # `work_graph_missing` 과 "Task 가 전부 취소된 그래프"를 구별할 수 없다.
+        task_rows = list(tasks or [])
+        if stage is PreparationStage.PLAN and task_rows:
+            self.create_work_graph_revision(
+                case_id=prep["case_id"],
+                plan_preparation_id=prep_id,
+                tasks=task_rows,
+                source=WorkGraphSource.PLAN_ARTIFACT,
+                reason_summary=f"개발계획 v{prep['revision']} 이 정의한 작업",
+                actor=self.PLAN_GRAPH_ACTOR,
+            )
         return self.get_preparation_artifact(prep_id)
 
     def effective_required_sections(self, prep_id: str) -> frozenset[str]:
@@ -3442,6 +3494,9 @@ class Repository:
             "design": self.stage_state(case_id, PreparationStage.DESIGN),
             "plan": self.stage_state(case_id, PreparationStage.PLAN),
             "deferred_open_questions": self.deferred_open_questions(case_id),
+            # P3-02. 준비 조건 **위에 얹히는** 상태다. 계획 검토가 끝났다는 사실과
+            # 무엇을 어떤 순서로 만들지가 정해졌다는 사실은 다른 것이다.
+            "work_graph": self.work_graph_state(case_id),
         }
 
     # ------------------------------------------------- P3-01 고정 컨텍스트
@@ -3544,3 +3599,501 @@ class Repository:
             "closure": self.get_closure(case_id),
             "relations": self.list_case_relations(case_id),
         }
+
+    # ===================================================== P3-02 작업 그래프
+
+    #: 사람의 재계획이 아닌, 계획 산출물에서 태어난 그래프의 행위자 표기.
+    #: 사람 이름이 아니라 출처 식별자다 — P3-01의 `AUTO_POLICY_ACTOR` 와 같은 이유다.
+    PLAN_GRAPH_ACTOR = "policy:plan_artifact"
+
+    def record_question_block_refs(self, question_id: str, refs: Iterable[str]) -> None:
+        """질문이 막는다고 적힌 참조를 **해석하지 않고** 보관한다.
+
+        해석은 그래프를 만들 때 한다. 설계 단계의 질문은 계획이 정의할 Task 를
+        가리키는데 그 Task 는 질문이 제기되는 시점에 아직 없기 때문이다.
+        """
+        for ref in refs:
+            value = " ".join(str(ref).split())[:200]
+            if not value:
+                continue
+            self.conn.execute(
+                "INSERT OR IGNORE INTO question_block_ref (question_id, raw_ref) VALUES (?, ?)",
+                (question_id, value),
+            )
+
+    def question_block_refs(self, question_id: str) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT raw_ref FROM question_block_ref WHERE question_id = ? ORDER BY raw_ref",
+            (question_id,),
+        ).fetchall()
+        return [r["raw_ref"] for r in rows]
+
+    def current_work_graph_row(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM work_graph_revision WHERE case_id = ? AND state = ?",
+            (case_id, WorkGraphState.CURRENT.value),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def _graph_tasks(self, graph_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM task WHERE graph_revision_id = ? ORDER BY order_index",
+            (graph_id,),
+        ).fetchall()
+        tasks = [dict(r) for r in rows]
+        deps: dict[str, list[str]] = {}
+        for dep in self.conn.execute(
+            "SELECT task_key, depends_on_key FROM task_dependency"
+            " WHERE graph_revision_id = ? ORDER BY depends_on_key",
+            (graph_id,),
+        ).fetchall():
+            deps.setdefault(dep["task_key"], []).append(dep["depends_on_key"])
+        links: dict[str, list[dict[str, str]]] = {}
+        for link in self.conn.execute(
+            "SELECT task_key, criterion_id, relation FROM task_criterion"
+            " WHERE graph_revision_id = ? ORDER BY criterion_id",
+            (graph_id,),
+        ).fetchall():
+            links.setdefault(link["task_key"], []).append(
+                {"criterion_id": link["criterion_id"], "relation": link["relation"]}
+            )
+        for task in tasks:
+            task["cancelled"] = bool(task["cancelled"])
+            task["depends_on"] = deps.get(task["task_key"], [])
+            task["criteria"] = links.get(task["task_key"], [])
+        return tasks
+
+    def _graph_nodes(self, tasks: list[dict[str, Any]]) -> list[workgraph.TaskNode]:
+        return [
+            workgraph.TaskNode(
+                key=t["task_key"],
+                kind=t["kind"],
+                depends_on=tuple(t["depends_on"]),
+                cancelled=bool(t["cancelled"]),
+            )
+            for t in tasks
+        ]
+
+    def create_work_graph_revision(
+        self,
+        case_id: str,
+        plan_preparation_id: str,
+        tasks: list[dict[str, Any]],
+        source: WorkGraphSource,
+        reason_summary: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """새 그래프 리비전을 만든다. **이전 리비전은 지우지 않고 대체됨으로 남긴다.**
+
+        Task 행을 그 자리에서 고치지 않는 이유는 "그때 무엇이 유효했는가"를 답할 수
+        있어야 하기 때문이다(FR-07). `task_key` 는 리비전을 가로질러 같으므로
+        **재분할이 실행 이력을 초기화하지 않는다.**
+
+        의존·기준 연결·질문 연결을 **전부 이 리비전 안에서 다시 해석한다.**
+        이전 리비전에서 복사해 오지 않는 이유는, 없어진 Task 를 가리키는 연결이
+        조용히 살아남으면 그 질문이 무엇을 막는지 알 수 없게 되기 때문이다.
+        """
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        prep = self.get_preparation_artifact(plan_preparation_id)
+        if PreparationStage(prep["stage"]) is not PreparationStage.PLAN:
+            raise ConflictError("a work graph is built on a development plan, not a design")
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            raise ConflictError("a work graph needs an intent version to build on")
+        reason = _summary(reason_summary)
+        if not reason.strip():
+            raise ConflictError("a work graph revision needs a reason")
+
+        nodes = [
+            workgraph.TaskNode(
+                key=str(t["key"]),
+                kind=TaskKind(t.get("kind") or TaskKind.IMPLEMENTATION.value).value,
+                depends_on=tuple(str(d) for d in (t.get("depends_on") or [])),
+            )
+            for t in tasks
+        ]
+        if len({n.key for n in nodes}) != len(nodes):
+            raise ConflictError("task keys must be unique inside one work graph revision")
+        # 순환·미지의 의존은 **받아 두지 않는다.** 잘못된 그래프를 저장하면 그 뒤의
+        # 모든 차단 판정이 그 위에서 이루어진다.
+        try:
+            workgraph.validate_dependencies(nodes)
+        except workgraph.WorkGraphError as exc:
+            raise ConflictError(str(exc)) from exc
+
+        keys = {n.key for n in nodes}
+        # 기준 연결은 **현재 의도 버전의 기준만** 받는다. 성공 기준은 의도 버전에
+        # 묶여 있고 새 버전은 기준을 승계하지 않으므로(스키마 v4), 옛 기준을 받아
+        # 두면 대체된 기준이 새 그래프에 그대로 붙는다.
+        criteria_by_key = {
+            c["criterion_key"]: c for c in self.list_success_criteria(latest["id"])
+        }
+
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM work_graph_revision WHERE case_id = ?",
+            (case_id,),
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        graph_id = ids.new_id("wgraph")
+        now = utc_now()
+
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE work_graph_revision SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND state = ?",
+                (WorkGraphState.SUPERSEDED.value, now, case_id, WorkGraphState.CURRENT.value),
+            )
+            self.conn.execute(
+                "INSERT INTO work_graph_revision (id, case_id, revision, intent_version_id,"
+                " plan_preparation_id, source, reason_summary, actor, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    graph_id,
+                    case_id,
+                    revision,
+                    latest["id"],
+                    plan_preparation_id,
+                    WorkGraphSource(source).value,
+                    reason,
+                    actor,
+                    WorkGraphState.CURRENT.value,
+                    now,
+                ),
+            )
+            for index, raw in enumerate(tasks, start=1):
+                self.conn.execute(
+                    "INSERT INTO task (id, case_id, graph_revision_id, task_key, kind,"
+                    " relates_to, summary, deliverable_summary, completion_summary,"
+                    " order_index, origin, cancelled, cancel_reason, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("task"),
+                        case_id,
+                        graph_id,
+                        str(raw["key"]),
+                        TaskKind(raw.get("kind") or TaskKind.IMPLEMENTATION.value).value,
+                        str(raw.get("relates_to") or ""),
+                        _summary(raw.get("summary") or raw["key"]),
+                        _summary(raw.get("deliverable_summary") or ""),
+                        _summary(raw.get("completion_summary") or ""),
+                        int(raw.get("order_index") or index),
+                        ContentOrigin(raw.get("origin") or ContentOrigin.AI_PROPOSAL.value).value,
+                        1 if raw.get("cancelled") else 0,
+                        _summary(raw.get("cancel_reason") or ""),
+                        now,
+                    ),
+                )
+            for raw in tasks:
+                for dep in raw.get("depends_on") or []:
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO task_dependency"
+                        " (graph_revision_id, task_key, depends_on_key) VALUES (?, ?, ?)",
+                        (graph_id, str(raw["key"]), str(dep)),
+                    )
+                for link in raw.get("criteria") or []:
+                    criterion_key = str(link.get("key") or link.get("criterion_key") or "")
+                    criterion = criteria_by_key.get(criterion_key)
+                    if criterion is None:
+                        # 없는 기준·대체된 기준을 가리키는 연결은 **거부한다.**
+                        # 조용히 버리면 "연결했다"는 기록만 남고 실제 연결은 없다.
+                        raise ConflictError(
+                            f"task {raw['key']} links to criterion {criterion_key!r},"
+                            " which is not a success criterion of the current intent version"
+                        )
+                    self.conn.execute(
+                        "INSERT OR IGNORE INTO task_criterion"
+                        " (graph_revision_id, task_key, criterion_id, relation)"
+                        " VALUES (?, ?, ?, ?)",
+                        (
+                            graph_id,
+                            str(raw["key"]),
+                            criterion["id"],
+                            TaskRelation(link.get("relation") or TaskRelation.IMPLEMENTS.value).value,
+                        ),
+                    )
+            # 이월 질문의 `blocks` 를 이 리비전의 Task 키로 해석한다.
+            # **해석되지 않은 참조는 버리지 않고 남긴다** — 버리면 그 질문이
+            # "아무 것도 막지 않는" 질문이 되어 좁히기가 곧 우회가 된다.
+            for question in self.deferred_open_questions(case_id):
+                for ref in self.question_block_refs(question["id"]):
+                    if ref in keys:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO task_question_block"
+                            " (graph_revision_id, question_id, task_key) VALUES (?, ?, ?)",
+                            (graph_id, question["id"], ref),
+                        )
+                    else:
+                        self.conn.execute(
+                            "INSERT OR IGNORE INTO task_block_unresolved"
+                            " (graph_revision_id, question_id, raw_ref) VALUES (?, ?, ?)",
+                            (graph_id, question["id"], ref),
+                        )
+        return self.get_work_graph(graph_id)
+
+    def get_work_graph(self, graph_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM work_graph_revision WHERE id = ?", (graph_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"work graph revision not found: {graph_id}")
+        out = dict(row)
+        out["tasks"] = self._graph_tasks(graph_id)
+        return out
+
+    def list_work_graph_revisions(self, case_id: str) -> list[dict[str, Any]]:
+        """리비전 이력. **이전 계획은 지워지지 않는다**(FR-07)."""
+        rows = self.conn.execute(
+            "SELECT id FROM work_graph_revision WHERE case_id = ? ORDER BY revision DESC",
+            (case_id,),
+        ).fetchall()
+        return [self.get_work_graph(r["id"]) for r in rows]
+
+    def task_run_history(self, case_id: str, task_key: str) -> list[dict[str, Any]]:
+        """그 `task_key` 의 실행 이력. **리비전을 가로지른다.**
+
+        `run.task_id` 에 행 id 가 아니라 키가 들어가기 때문에, 그래프를 다시 짜도
+        이력이 끊기지 않는다(FR-07 "재분할로 실패 이력·수정 한도를 초기화하지 않는다").
+        """
+        rows = self.conn.execute(
+            "SELECT run_id FROM run WHERE case_id = ? AND task_id = ? ORDER BY created_at",
+            (case_id, task_key),
+        ).fetchall()
+        return [self.get_run(r["run_id"]) for r in rows]
+
+    def work_graph_state(self, case_id: str) -> dict[str, Any]:
+        """그래프의 현재 상태. **진입 검사와 화면이 같은 값을 본다.**
+
+        `present=False` 는 "Task 가 필요 없다"가 아니라 **그래프가 아직 없다**는
+        뜻이다. 그 경우 진입 검사는 P3-01의 Case 수준 차단을 그대로 적용한다.
+        """
+        self.get_case(case_id)
+        graph = self.current_work_graph_row(case_id)
+        latest = self.latest_intent_version(case_id)
+        open_questions = self.deferred_open_questions(case_id)
+        if graph is None:
+            return {
+                "case_id": case_id,
+                "present": False,
+                "stale": False,
+                "graph": None,
+                "tasks": [],
+                "readiness": {},
+                "criteria_coverage": [],
+                "deferred_open_questions": open_questions,
+                "question_blocks": {},
+                "unresolved_block_refs": [],
+            }
+
+        graph_id = graph["id"]
+        tasks = self._graph_tasks(graph_id)
+        nodes = self._graph_nodes(tasks)
+        runs = self.list_runs(case_id)
+        states = {n.key: workgraph.derive_task_state(n, runs) for n in nodes}
+
+        blocks: dict[str, list[str]] = {}
+        for row in self.conn.execute(
+            "SELECT question_id, task_key FROM task_question_block"
+            " WHERE graph_revision_id = ? ORDER BY task_key",
+            (graph_id,),
+        ).fetchall():
+            blocks.setdefault(row["question_id"], []).append(row["task_key"])
+        unresolved = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT question_id, raw_ref FROM task_block_unresolved"
+                " WHERE graph_revision_id = ? ORDER BY raw_ref",
+                (graph_id,),
+            ).fetchall()
+        ]
+
+        stale = latest is not None and graph["intent_version_id"] != latest["id"]
+        readiness = {
+            node.key: workgraph.evaluate_task(
+                task_key=node.key,
+                tasks=nodes,
+                task_states=states,
+                open_questions=open_questions,
+                question_blocks=blocks,
+            ).to_dict()
+            for node in nodes
+        }
+        for task in tasks:
+            task["state"] = states.get(task["task_key"], TaskState.PLANNED.value)
+            task["readiness"] = readiness.get(task["task_key"])
+
+        links = [
+            {"task_key": t["task_key"], **link} for t in tasks for link in t["criteria"]
+        ]
+        coverage = workgraph.criteria_coverage(self.current_criteria(case_id), links)
+
+        graph_out = dict(graph)
+        graph_out["tasks"] = tasks
+        return {
+            "case_id": case_id,
+            "present": True,
+            "stale": stale,
+            "graph": graph_out,
+            "tasks": tasks,
+            "readiness": readiness,
+            "criteria_coverage": coverage,
+            "deferred_open_questions": open_questions,
+            "question_blocks": blocks,
+            "unresolved_block_refs": unresolved,
+        }
+
+    # ------------------------------------------------- P3-02 사람의 재계획
+
+    def _replan(
+        self, case_id: str, mutate: Any, reason_summary: str, actor: str
+    ) -> dict[str, Any]:
+        """현재 리비전을 바탕으로 **새 리비전**을 만든다.
+
+        행을 그 자리에서 고치지 않는 이유는 위 `create_work_graph_revision` 과 같다.
+        질문 연결은 원문의 참조에서 다시 해석되므로 여기서 옮기지 않는다.
+        """
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            raise ConflictError("this case has no work graph to replan")
+        latest = self.latest_intent_version(case_id)
+        if latest is not None and graph["intent_version_id"] != latest["id"]:
+            # **오래된 그래프를 손보지 않는다.** 의도가 바뀌면 그 위의 계획은 이미
+            # 대체됐고, 여기서 Task 를 더하면 옛 의도의 계획이 되살아난다.
+            # 고칠 것은 계획이지 그래프가 아니다(FR-12 "오래된 증거를 새 요구의
+            # 완료 근거로 쓰지 않는다").
+            raise ConflictError(
+                "this work graph was built on a superseded intent version;"
+                " rewrite the development plan instead of editing the old graph"
+            )
+        tasks = self._graph_tasks(graph["id"])
+        payload = [
+            {
+                "key": t["task_key"],
+                "kind": t["kind"],
+                "relates_to": t["relates_to"],
+                "summary": t["summary"],
+                "deliverable_summary": t["deliverable_summary"],
+                "completion_summary": t["completion_summary"],
+                "order_index": t["order_index"],
+                "origin": t["origin"],
+                "cancelled": t["cancelled"],
+                "cancel_reason": t["cancel_reason"],
+                "depends_on": list(t["depends_on"]),
+                "criteria": [
+                    {
+                        "key": self.get_success_criterion(link["criterion_id"])["criterion_key"],
+                        "relation": link["relation"],
+                    }
+                    for link in t["criteria"]
+                ],
+            }
+            for t in tasks
+        ]
+        mutate(payload)
+        return self.create_work_graph_revision(
+            case_id=case_id,
+            plan_preparation_id=graph["plan_preparation_id"],
+            tasks=payload,
+            source=WorkGraphSource.HUMAN_REPLANNING,
+            reason_summary=reason_summary,
+            actor=actor,
+        )
+
+    def add_task(
+        self, case_id: str, task: dict[str, Any], reason_summary: str, actor: str
+    ) -> dict[str, Any]:
+        """사람이 Task 를 더한다(FR-07 "추가·분할·취소·조정").
+
+        **이유가 필수다.** 계획이 왜 바뀌었는지 없이 그래프만 바뀌면 나중에
+        "무효 전제의 결과를 확인 없이 채택"했는지 알 수 없다.
+
+        분할 전용 경로를 두지 않는다 — 추가 + 취소 + 의존 조정의 합성으로 같은
+        결과가 되고, `task_key` 가 보존되므로 이력도 끊기지 않는다.
+        """
+        key = str(task.get("key") or "").strip()
+        if not key:
+            raise ConflictError("a task needs a key")
+
+        def mutate(payload: list[dict[str, Any]]) -> None:
+            if any(t["key"] == key for t in payload):
+                raise ConflictError(f"task {key!r} already exists in this work graph")
+            payload.append(
+                {
+                    "key": key,
+                    "kind": TaskKind(task.get("kind") or TaskKind.IMPLEMENTATION.value).value,
+                    "relates_to": str(task.get("relates_to") or ""),
+                    "summary": task.get("summary") or key,
+                    "deliverable_summary": task.get("deliverable_summary") or "",
+                    "completion_summary": task.get("completion_summary") or "",
+                    "order_index": len(payload) + 1,
+                    # 사람이 더한 Task 의 출처는 **사람의 요구**다. AI 제안으로
+                    # 적으면 누가 정한 것인지가 기록에서 사라진다.
+                    "origin": ContentOrigin.USER_REQUIREMENT.value,
+                    "cancelled": False,
+                    "cancel_reason": "",
+                    "depends_on": [str(d) for d in (task.get("depends_on") or [])],
+                    "criteria": list(task.get("criteria") or []),
+                }
+            )
+
+        return self._replan(case_id, mutate, reason_summary, actor)
+
+    def cancel_task(
+        self, case_id: str, task_key: str, reason_summary: str, actor: str
+    ) -> dict[str, Any]:
+        """사람이 Task 를 취소한다.
+
+        **행을 지우지 않는다** — 무엇이 있었고 왜 빠졌는지가 남아야 한다. 취소된
+        Task 는 배정되지 않고 의존도 충족시키지 않는다(완료가 아니기 때문이다).
+        """
+
+        def mutate(payload: list[dict[str, Any]]) -> None:
+            for entry in payload:
+                if entry["key"] == task_key:
+                    if entry["cancelled"]:
+                        raise ConflictError(f"task {task_key!r} is already cancelled")
+                    entry["cancelled"] = True
+                    entry["cancel_reason"] = _summary(reason_summary)
+                    return
+            raise NotFoundError(f"task not found in the current work graph: {task_key}")
+
+        return self._replan(case_id, mutate, reason_summary, actor)
+
+    def set_question_blocks(
+        self,
+        case_id: str,
+        question_id: str,
+        task_keys: list[str],
+        reason_summary: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """어떤 Task 가 이 결정을 기다리는지 사람이 고친다.
+
+        AI가 적은 `blocks` 가 틀리거나 비어 있을 수 있고, 그때 사람이 고칠 수단이
+        없으면 **연결 없는 질문 하나가 영원히 전부 막는다.** 고친 참조는 원문의
+        참조 목록을 대체하고 다음 리비전에서도 그대로 해석된다.
+
+        **이것이 질문에 답하는 것은 아니다.** 연결을 고쳐도 질문은 여전히 `open`
+        이고 연결된 Task 는 계속 막힌다 — 연결은 "누가 기다리는가"이지 "결정됐는가"가
+        아니다.
+        """
+        question = self.get_question(question_id)
+        if question["case_id"] != case_id:
+            raise ConflictError("that question belongs to another case")
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            raise ConflictError("this case has no work graph to link questions to")
+        known = {t["task_key"] for t in self._graph_tasks(graph["id"])}
+        unknown = [k for k in task_keys if k not in known]
+        if unknown:
+            raise ConflictError(f"unknown task keys for this work graph: {sorted(unknown)}")
+        with transaction(self.conn):
+            self.conn.execute(
+                "DELETE FROM question_block_ref WHERE question_id = ?", (question_id,)
+            )
+            self.record_question_block_refs(question_id, task_keys)
+
+        def mutate(_payload: list[dict[str, Any]]) -> None:
+            return None
+
+        return self._replan(case_id, mutate, reason_summary, actor)

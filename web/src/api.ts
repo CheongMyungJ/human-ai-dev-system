@@ -1066,6 +1066,9 @@ export interface PreparationState {
   design: StageState
   plan: StageState
   deferred_open_questions: IntentQuestion[]
+  // P3-02. 준비 조건 **위에 얹히는** 상태다. 계획 검토가 끝났다는 사실과
+  // 무엇을 어떤 순서로 만들지가 정해졌다는 사실은 다른 것이다.
+  work_graph: WorkGraphState
 }
 
 export interface RunContextRef {
@@ -1145,4 +1148,162 @@ export const preparationApi = {
     }),
 
   contextRefs: (runId: string) => request<RunContextRef[]>(`/api/runs/${runId}/context-refs`),
+}
+
+// ===================================================================== P3-02
+//
+// 작업 그래프 — 무엇을 어떤 순서로 만들고, 그중 무엇이 **왜 지금 막혀 있는가.**
+//
+// 차단 사유는 서버가 계산한 것을 그대로 보인다. 화면이 따로 계산하면 버튼은
+// 눌리는데 서버가 거부하는(또는 그 반대의) 상태가 생긴다.
+
+export type TaskKind =
+  | 'investigation'
+  | 'implementation'
+  | 'verification'
+  | 'experiment'
+  | 'integration'
+
+export type TaskState = 'planned' | 'in_progress' | 'done' | 'cancelled'
+
+export const TASK_KIND_LABEL: Record<TaskKind, string> = {
+  investigation: '조사',
+  implementation: '구현',
+  verification: '검증',
+  experiment: '실험',
+  integration: '통합',
+}
+
+export const TASK_STATE_LABEL: Record<TaskState, string> = {
+  planned: '대기',
+  in_progress: '진행 중',
+  // **실행 증거가 있는 완료다.** 사람이 적어서 되는 상태가 아니다.
+  done: '완료 (실행 결과)',
+  cancelled: '취소됨',
+}
+
+export const TASK_RELATION_LABEL: Record<string, string> = {
+  implements: '구현',
+  verifies: '검증',
+}
+
+export const WORK_GRAPH_SOURCE_LABEL: Record<string, string> = {
+  plan_artifact: '개발계획이 정의함',
+  human_replanning: '사람의 재계획',
+}
+
+//: 차단 사유의 사람 문구. 진입 검사의 사유 코드와 **같은 값**을 쓴다.
+export const TASK_BLOCK_LABEL: Record<string, string> = {
+  deferred_questions_unresolved: '사람 결정 대기',
+  task_dependencies_unmet: '선행 작업 미완료',
+  task_not_in_work_graph: '현재 그래프의 작업이 아님',
+}
+
+export interface TaskCriterionLink {
+  criterion_id: string
+  relation: string
+}
+
+export interface TaskReadiness {
+  task_key: string
+  state: TaskState
+  runnable: boolean
+  blocked_by: { reason: string; detail: string }[]
+}
+
+export interface TaskRow {
+  id: string
+  task_key: string
+  kind: TaskKind
+  relates_to: string
+  summary: string
+  deliverable_summary: string
+  completion_summary: string
+  order_index: number
+  origin: string
+  cancelled: boolean
+  cancel_reason: string
+  depends_on: string[]
+  criteria: TaskCriterionLink[]
+  state: TaskState
+  readiness: TaskReadiness | null
+}
+
+export interface WorkGraphRevision {
+  id: string
+  case_id: string
+  revision: number
+  intent_version_id: string
+  plan_preparation_id: string
+  source: string
+  reason_summary: string
+  actor: string
+  state: string
+  created_at: string
+  tasks: TaskRow[]
+}
+
+export interface CriterionCoverage {
+  criterion_id: string
+  criterion_key: string
+  summary: string
+  implemented_by: string[]
+  verified_by: string[]
+  has_verification_task: boolean
+}
+
+export interface WorkGraphState {
+  case_id: string
+  // `false` 는 "Task 가 필요 없다"가 아니라 **그래프가 아직 없다**는 뜻이다.
+  present: boolean
+  stale: boolean
+  graph: WorkGraphRevision | null
+  tasks: TaskRow[]
+  readiness: Record<string, TaskReadiness>
+  criteria_coverage: CriterionCoverage[]
+  deferred_open_questions: IntentQuestion[]
+  question_blocks: Record<string, string[]>
+  // **해석되지 않은 참조는 버려지지 않는다.** 그 질문은 전부 막는다.
+  unresolved_block_refs: { question_id: string; raw_ref: string }[]
+}
+
+export const workGraphApi = {
+  state: (caseId: string) => request<WorkGraphState>(`/api/cases/${caseId}/work-graph`),
+
+  revisions: (caseId: string) =>
+    request<WorkGraphRevision[]>(`/api/cases/${caseId}/work-graph-revisions`),
+
+  taskRuns: (caseId: string, taskKey: string) =>
+    request<Run[]>(`/api/cases/${caseId}/tasks/${encodeURIComponent(taskKey)}/runs`),
+
+  // 사람의 재계획. **이유가 필수다**(FR-07).
+  addTask: (
+    caseId: string,
+    task: {
+      key: string
+      kind: TaskKind
+      summary: string
+      deliverable_summary?: string
+      completion_summary?: string
+      depends_on?: string[]
+    },
+    reason: string,
+  ) =>
+    request<WorkGraphRevision>(`/api/cases/${caseId}/work-graph/tasks`, {
+      method: 'POST',
+      body: JSON.stringify({ task, reason, actor: 'owner' }),
+    }),
+
+  cancelTask: (caseId: string, taskKey: string, reason: string) =>
+    request<WorkGraphRevision>(
+      `/api/cases/${caseId}/work-graph/tasks/${encodeURIComponent(taskKey)}/cancel`,
+      { method: 'POST', body: JSON.stringify({ reason, actor: 'owner' }) },
+    ),
+
+  // 어떤 Task 가 이 결정을 기다리는지 고친다. **답하는 것이 아니다.**
+  setQuestionBlocks: (caseId: string, questionId: string, taskKeys: string[], reason: string) =>
+    request<WorkGraphRevision>(`/api/cases/${caseId}/questions/${questionId}/blocks`, {
+      method: 'PUT',
+      body: JSON.stringify({ task_keys: taskKeys, reason, actor: 'owner' }),
+    }),
 }

@@ -302,3 +302,99 @@ th {
 .notice.refusal strong {
   color: var(--error);
 }
+
+/* P3-02 작업 그래프.
+   차단된 작업과 취소된 작업을 **다르게** 보인다 — 둘을 같은 회색으로 두면
+   "아직 못 한다"와 "하지 않기로 했다"가 구별되지 않는다. */
+
+.warn {
+  color: var(--warn);
+}
+
+.tasks,
+.questions {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0;
+}
+
+.task {
+  border: 1px solid #2a3142;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.6rem;
+}
+
+.task-cancelled {
+  opacity: 0.55;
+  border-style: dashed;
+}
+
+.task-head {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 0.3rem;
+}
+
+.tag {
+  font-size: 0.75rem;
+  border: 1px solid #3a4258;
+  border-radius: 10px;
+  padding: 0.05rem 0.5rem;
+}
+
+.tag.ok {
+  border-color: #3f9e5a;
+  color: #7ad699;
+}
+
+.task-detail {
+  display: grid;
+  grid-template-columns: 6rem 1fr;
+  gap: 0.15rem 0.6rem;
+  margin: 0.3rem 0;
+  font-size: 0.85rem;
+}
+
+.task-detail dt {
+  color: #8b93a7;
+}
+
+.task-detail dd {
+  margin: 0;
+}
+
+.blocked {
+  list-style: none;
+  padding: 0.4rem 0.6rem;
+  margin: 0.4rem 0;
+  border-left: 3px solid var(--warn);
+  background: #1b1f2b;
+  font-size: 0.85rem;
+}
+
+.coverage {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.coverage th,
+.coverage td {
+  border-bottom: 1px solid #2a3142;
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+}
+
+.replan {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin: 0.4rem 0;
+}
+
+.replan input {
+  flex: 1 1 10rem;
+}

@@ -244,8 +244,36 @@ PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설�
 5. 각 항목에 origin 을 붙인다(설계와 같은 목록).
 6. 사람이 정해야 하는 것은 questions 에 넣고 decide_at 을 plan 으로 둔다.
 7. 실행 환경·선행 조건에 없는 도구·자격증명을 가정하지 않는다.
+8. **tasks 에 작업을 하나씩 정의한다.** 이것이 실제 실행 단위가 된다.
+   - key 는 짧은 식별자(T1, T2 …)이고 depends_on 은 다른 작업의 key 다.
+   - kind 는 investigation / implementation / verification / experiment / integration.
+   - **검증 작업을 별도 Task 로 둔다.** 구현 Task 안에 묻으면 무엇이 확인
+     작업인지 알 수 없다.
+   - criteria 에는 이 작업이 대응하는 성공 기준의 key 와 relation
+     (implements / verifies)을 적는다. **모르는 기준 key 를 지어내지 마라.**
+   - 의존 관계에 **순환을 만들지 마라.** 순환이 있으면 계획 전체가 거부된다.
+9. **각 작업의 *_summary 는 목록에 보일 짧은 한 줄을 따로 쓴다.** 본문 발췌가
+   아니다 — 비우면 "요약 없음"으로 표시되고 사람이 원문을 열어야 한다.
+10. **questions 의 blocks 에는 그 결정을 기다리는 작업의 key 를 적는다.**
+   비워 두면 그 질문이 **모든 작업을 막는다** — 무엇을 막는지 모르기 때문이다.
+   설계 단계에서 이월된 질문도 여기서 정의한 key 로 가리킬 수 있다.
 
-출력 형태는 설계와 같다(sections / questions).
+출력 형태는 설계와 같고(sections / questions) tasks 가 더 있다.
+
+{{
+  "sections": {{"tasks": {{"text": "...", "origin": "ai_proposal"}}}},
+  "questions": [
+    {{"key": "p1", "text": "질문 본문", "summary": "짧은 요약",
+     "decide_at": "plan", "blocks": ["T2"]}}
+  ],
+  "tasks": [
+    {{"key": "T1", "kind": "investigation", "purpose": "...",
+     "purpose_summary": "짧은 한 줄", "deliverable": "...",
+     "deliverable_summary": "짧은 한 줄", "completion": "...",
+     "completion_summary": "짧은 한 줄",
+     "depends_on": [], "criteria": [{{"key": "C-01", "relation": "implements"}}]}}
+  ]
+}}
 
 --- 지시 원문 ---
 """
@@ -469,8 +497,8 @@ def _parse_sizing(raw: Any) -> dict[str, Any] | None:
 
 def parse_preparation(
     text: str, stage: PreparationStage
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """AI가 쓴 설계·계획을 항목과 질문으로 바꾼다.
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """AI가 쓴 설계·계획을 항목·질문·Task 로 바꾼다.
 
     **비운 항목을 채우지 않는다.** 필수 항목을 비운 채 내면 그 산출물로는 구현
     실행이 배정되지 않으며, 그것이 올바른 결과다 — 채워서 통과시키면 진입 조건이
@@ -519,7 +547,47 @@ def parse_preparation(
                 "blocks": [str(b) for b in (item.get("blocks") or [])],
             }
         )
-    return sections, questions
+
+    # Task 는 **개발계획에서만** 읽는다. 설계에도 받으면 두 산출물의 역할이
+    # 섞이고 그래프의 출처가 둘이 된다(intent-artifacts 1절).
+    tasks: list[dict[str, Any]] = []
+    if PreparationStage(stage) is PreparationStage.PLAN:
+        for index, item in enumerate(doc.get("tasks") or [], start=1):
+            if not isinstance(item, dict):
+                continue
+            purpose = str(item.get("purpose") or "").strip()
+            if not purpose:
+                # 목적 없는 Task 는 만들지 않는다. 지어내면 계획이 무엇을
+                # 빠뜨렸는지 사람 검토가 볼 수 없다.
+                continue
+            tasks.append(
+                {
+                    "key": str(item.get("key") or f"T{index}")[:64],
+                    "kind": str(item.get("kind") or "implementation"),
+                    "purpose": purpose,
+                    # 요약이 없으면 **본문을 잘라 쓰지 않는다.** 빈 문자열로 두면
+                    # 구조 보고가 자리표시 문구를 붙인다(P2-02에서 고친 문제).
+                    "purpose_summary": " ".join(
+                        str(item.get("purpose_summary") or "").split()
+                    )[:200],
+                    "deliverable": str(item.get("deliverable") or "").strip(),
+                    "deliverable_summary": " ".join(
+                        str(item.get("deliverable_summary") or "").split()
+                    )[:200],
+                    "completion": str(item.get("completion") or "").strip(),
+                    "completion_summary": " ".join(
+                        str(item.get("completion_summary") or "").split()
+                    )[:200],
+                    "relates_to": str(item.get("relates_to") or "").strip(),
+                    "depends_on": [
+                        str(d) for d in (item.get("depends_on") or []) if str(d).strip()
+                    ],
+                    "criteria": [c for c in (item.get("criteria") or [])],
+                    "origin": str(item.get("origin") or "ai_proposal"),
+                }
+            )
+
+    return sections, questions, tasks
 
 
 def parse_gate_review(text: str) -> list[dict[str, Any]]:

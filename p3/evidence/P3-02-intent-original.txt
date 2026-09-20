@@ -1,0 +1,136 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 3,
+  "case_id": "case-b477c7af6dbfaafb",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-intent-1",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "fields": {
+    "goal": {
+      "text": "reader.py에 sample.log에서 오류 줄만 추출해 출력하는 기능을 추가한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "합의된 오류 판정 규칙에 해당하는 sample.log의 줄만 출력되고, 나머지 줄은 출력되지 않는다. 대소문자 처리 방식은 결정 후 반영한다.",
+      "state": "proposed",
+      "origin": "ai_proposal"
+    },
+    "scope": {
+      "text": "reader.py에서 sample.log의 줄을 판정하고 오류 줄을 출력하는 기능.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "constraints": {
+      "text": "현재 단계에서는 코드를 변경하거나 파일을 만들지 않고 의도 초안만 작성한다. 대소문자 구분 여부는 아직 확정하지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "오류 줄의 판정 규칙, 대소문자 구분 여부, 구체적인 출력 방식이 미정이다.",
+      "state": "proposed",
+      "origin": "ai_proposal"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "어떤 조건을 만족하는 줄을 오류 줄로 판정해야 하는가? 예를 들어 특정 문자열인 ERROR의 포함 여부, 로그 레벨 필드, 정규식 중 무엇을 기준으로 하는가?",
+      "summary": "오류 줄 판정 기준",
+      "decide_at": "intent",
+      "blocks": []
+    },
+    {
+      "key": "q2",
+      "text": "오류 판정 시 영문 대소문자를 구분해야 하는가?",
+      "summary": "대소문자 구분 여부",
+      "decide_at": "intent",
+      "blocks": []
+    },
+    {
+      "key": "q3",
+      "text": "추출한 오류 줄은 표준 출력에 표시하면 되는가, 아니면 다른 출력 대상이나 형식이 필요한가?",
+      "summary": "출력 대상과 형식",
+      "decide_at": "intent",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "expected_outcome",
+      "text": "q1과 q2에서 확정한 판정 규칙에 해당하는 sample.log의 모든 줄만 출력되고, 해당하지 않는 줄은 출력되지 않아야 한다. 구체적인 기대 출력은 두 결정 전까지 확정할 수 없다.",
+      "method": "판정 대상, 비대상, 대소문자 변형을 포함한 sample.log 입력 사례로 reader.py를 실행하고 실제 출력 줄을 확정된 기대 목록과 비교한다.",
+      "summary": "오류 줄만 정확히 추출",
+      "method_summary": "혼합 로그 입력의 실제 출력과 기대 목록 비교"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "expected_outcome",
+      "text": "추출 결과가 q3에서 확정한 출력 대상과 형식으로 제공되어야 한다. 구체적인 기대값은 출력 방식 결정 전까지 확정할 수 없다.",
+      "method": "reader.py 실행 후 확정된 출력 대상에서 결과를 수집하고, 합의된 형식과 일치하는지 비교한다.",
+      "summary": "합의된 방식으로 결과 출력",
+      "method_summary": "실행 결과의 출력 대상과 형식 확인"
+    }
+  ],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "high",
+        "evidence": "오류 줄만 출력한다는 목표는 명시됐지만 오류 판정 기준과 대소문자 처리가 확정되지 않았다.",
+        "judgement": "핵심 판정 동작이 미정이어서 현재 상태로는 기대 결과를 완전히 정의할 수 없다.",
+        "unconfirmed": "오류 판정 규칙, 대소문자 구분 여부, 출력 방식"
+      },
+      {
+        "axis": "change_scope",
+        "weight": "insufficient_evidence",
+        "evidence": "요청에는 reader.py와 sample.log만 언급됐으며 프로젝트 구조나 기존 호출 관계는 제공되지 않았다.",
+        "judgement": "표면상 국소 변경이지만 연관 모듈과 인터페이스 영향을 판단할 근거가 부족하다.",
+        "unconfirmed": "reader.py의 기존 역할, 호출자, 테스트 및 관련 모듈"
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "sample.log의 인코딩, 줄 형식, 크기와 reader.py의 기존 입출력 계약이 제시되지 않았다.",
+        "judgement": "로그 형식과 데이터 처리 조건에 따른 호환성 영향을 아직 평가할 수 없다.",
+        "unconfirmed": "파일 인코딩, 줄바꿈 형식, 로그 크기, 기존 입출력 동작"
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "로그 파일의 내용, 접근 권한 및 민감 정보 포함 여부가 제공되지 않았다.",
+        "judgement": "파일 읽기 권한과 오류 줄 출력에 따른 정보 노출 가능성을 판단할 근거가 부족하다.",
+        "unconfirmed": "sample.log 접근 권한과 민감 데이터 포함 여부"
+      },
+      {
+        "axis": "reversibility",
+        "weight": "medium",
+        "evidence": "변경 대상으로 reader.py가 지정됐지만 기존 동작과 사용처는 확인되지 않았다.",
+        "judgement": "코드 변경 자체는 되돌릴 수 있을 가능성이 크지만 기존 동작에 미치는 실패 비용은 아직 불명확하다.",
+        "unconfirmed": "기존 기능 변경 여부와 실패 시 영향 범위"
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "medium",
+        "evidence": "오류 식별 규칙과 대소문자 정책이 결정되지 않아 구현 방식이 달라질 수 있다.",
+        "judgement": "기술적 과제는 제한적으로 보이나 핵심 동작 정책에 의미 있는 불확실성이 있다.",
+        "unconfirmed": "문자열 검색, 로그 구조 분석 또는 정규식 중 사용할 판정 방식"
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "evidence": "혼합 로그 사례로 출력 비교가 가능하지만 판정 규칙과 출력 계약이 아직 미정이다.",
+        "judgement": "정책 확정 후에는 직접 검증할 수 있으나 현재는 완전한 기대 결과를 구성할 수 없다.",
+        "unconfirmed": "대표 테스트 입력, 예상 출력, 기존 자동 테스트 유무"
+      }
+    ]
+  }
+}

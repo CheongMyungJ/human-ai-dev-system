@@ -1,0 +1,1192 @@
+{
+  "case_id": "case-b477c7af6dbfaafb",
+  "present": true,
+  "stale": false,
+  "graph": {
+    "id": "wgraph-9bd4b696f0ed34a2",
+    "case_id": "case-b477c7af6dbfaafb",
+    "revision": 1,
+    "intent_version_id": "intent-c4ee34039a7dc500",
+    "plan_preparation_id": "prep-376905bca8b7fb83",
+    "source": "plan_artifact",
+    "reason_summary": "개발계획 v1 이 정의한 작업",
+    "actor": "policy:plan_artifact",
+    "state": "current",
+    "created_at": "2026-09-20T22:16:34.705942+00:00",
+    "superseded_at": null,
+    "tasks": [
+      {
+        "id": "task-f556a40765568504",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T1",
+        "kind": "investigation",
+        "relates_to": "",
+        "summary": "판정·출력·경로 계약 고정",
+        "deliverable_summary": "구현용 계약표와 기준 상태",
+        "completion_summary": "모든 기대값과 기준 상태가 명시됨",
+        "order_index": 1,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "implements"
+          },
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T1",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1, plan:p2, plan:p3, plan:p4"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-8d789a3ff55b2ee6",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T2",
+        "kind": "experiment",
+        "relates_to": "",
+        "summary": "판정 경계 사례 사전 실험",
+        "deliverable_summary": "구별 가능한 판정 사례표",
+        "completion_summary": "모든 경계 사례가 단일 결과로 확정됨",
+        "order_index": 2,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T1"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T2",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-6d328db89a3e7903",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T3",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "판정·추출 순수 함수 구현",
+        "deliverable_summary": "is_error_line과 extract_error_lines",
+        "completion_summary": "순수 필터가 정확성과 순서를 보존함",
+        "order_index": 3,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T2"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T3",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p6"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-53624430327fcf33",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T4",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "실행 진입점과 실패 처리 연결",
+        "deliverable_summary": "실행 가능한 main과 오류 처리",
+        "completion_summary": "CLI 정상·실패 계약이 정확히 연결됨",
+        "order_index": 4,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T3"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "implements"
+          },
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T4",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-d56860f7d2cc401d",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T5",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "반복 가능한 검증 수단 준비",
+        "deliverable_summary": "승인 범위에 맞는 검증 하네스",
+        "completion_summary": "모든 합의 사례를 자동 판정 가능",
+        "order_index": 5,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T1"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T5",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p5, plan:p6"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-3f426f900c132259",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T6",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "판정·추출 로직 검증",
+        "deliverable_summary": "순수 함수 검증 결과",
+        "completion_summary": "C-01 함수 수준 사례 전부 통과",
+        "order_index": 6,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T3",
+          "T5"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T6",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned), T5(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-dbaaed89cd36916a",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T7",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "정상 실행 종단 검증",
+        "deliverable_summary": "sample.log 종단 실행 결과",
+        "completion_summary": "실제 파일 출력과 계약이 완전 일치",
+        "order_index": 7,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T4",
+          "T5"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T7",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-da1317651ae6410b",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T8",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "무결과·실패 경로 검증",
+        "deliverable_summary": "예외별 스트림과 종료 코드 결과",
+        "completion_summary": "모든 실패·회귀 사례가 계약대로 동작",
+        "order_index": 8,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T4",
+          "T5"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T8",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-61ddb6b362df1e4a",
+        "case_id": "case-b477c7af6dbfaafb",
+        "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+        "task_key": "T9",
+        "kind": "integration",
+        "relates_to": "",
+        "summary": "전체 검증과 변경 범위 최종 감사",
+        "deliverable_summary": "통합 검증·범위 감사 보고",
+        "completion_summary": "전체 기준 통과 및 승인 범위 준수",
+        "order_index": 9,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-20T22:16:34.705942+00:00",
+        "depends_on": [
+          "T6",
+          "T7",
+          "T8"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-6f8243dcc91f36e2",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-ade149396ff2f2d9",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T9",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T6(planned), T7(planned), T8(planned)"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "tasks": [
+    {
+      "id": "task-f556a40765568504",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T1",
+      "kind": "investigation",
+      "relates_to": "",
+      "summary": "판정·출력·경로 계약 고정",
+      "deliverable_summary": "구현용 계약표와 기준 상태",
+      "completion_summary": "모든 기대값과 기준 상태가 명시됨",
+      "order_index": 1,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "implements"
+        },
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "implements"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T1",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1, plan:p2, plan:p3, plan:p4"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-8d789a3ff55b2ee6",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T2",
+      "kind": "experiment",
+      "relates_to": "",
+      "summary": "판정 경계 사례 사전 실험",
+      "deliverable_summary": "구별 가능한 판정 사례표",
+      "completion_summary": "모든 경계 사례가 단일 결과로 확정됨",
+      "order_index": 2,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T1"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T2",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-6d328db89a3e7903",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T3",
+      "kind": "implementation",
+      "relates_to": "",
+      "summary": "판정·추출 순수 함수 구현",
+      "deliverable_summary": "is_error_line과 extract_error_lines",
+      "completion_summary": "순수 필터가 정확성과 순서를 보존함",
+      "order_index": 3,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T2"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "implements"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T3",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p6"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-53624430327fcf33",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T4",
+      "kind": "implementation",
+      "relates_to": "",
+      "summary": "실행 진입점과 실패 처리 연결",
+      "deliverable_summary": "실행 가능한 main과 오류 처리",
+      "completion_summary": "CLI 정상·실패 계약이 정확히 연결됨",
+      "order_index": 4,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T3"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "implements"
+        },
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "implements"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T4",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-d56860f7d2cc401d",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T5",
+      "kind": "implementation",
+      "relates_to": "",
+      "summary": "반복 가능한 검증 수단 준비",
+      "deliverable_summary": "승인 범위에 맞는 검증 하네스",
+      "completion_summary": "모든 합의 사례를 자동 판정 가능",
+      "order_index": 5,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T1"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "verifies"
+        },
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T5",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p5, plan:p6"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-3f426f900c132259",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T6",
+      "kind": "verification",
+      "relates_to": "",
+      "summary": "판정·추출 로직 검증",
+      "deliverable_summary": "순수 함수 검증 결과",
+      "completion_summary": "C-01 함수 수준 사례 전부 통과",
+      "order_index": 6,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T3",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T6",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned), T5(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-dbaaed89cd36916a",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T7",
+      "kind": "verification",
+      "relates_to": "",
+      "summary": "정상 실행 종단 검증",
+      "deliverable_summary": "sample.log 종단 실행 결과",
+      "completion_summary": "실제 파일 출력과 계약이 완전 일치",
+      "order_index": 7,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T4",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "verifies"
+        },
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T7",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-da1317651ae6410b",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T8",
+      "kind": "verification",
+      "relates_to": "",
+      "summary": "무결과·실패 경로 검증",
+      "deliverable_summary": "예외별 스트림과 종료 코드 결과",
+      "completion_summary": "모든 실패·회귀 사례가 계약대로 동작",
+      "order_index": 8,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T4",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T8",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+          }
+        ]
+      }
+    },
+    {
+      "id": "task-61ddb6b362df1e4a",
+      "case_id": "case-b477c7af6dbfaafb",
+      "graph_revision_id": "wgraph-9bd4b696f0ed34a2",
+      "task_key": "T9",
+      "kind": "integration",
+      "relates_to": "",
+      "summary": "전체 검증과 변경 범위 최종 감사",
+      "deliverable_summary": "통합 검증·범위 감사 보고",
+      "completion_summary": "전체 기준 통과 및 승인 범위 준수",
+      "order_index": 9,
+      "origin": "ai_proposal",
+      "cancelled": false,
+      "cancel_reason": "",
+      "created_at": "2026-09-20T22:16:34.705942+00:00",
+      "depends_on": [
+        "T6",
+        "T7",
+        "T8"
+      ],
+      "criteria": [
+        {
+          "criterion_id": "crit-6f8243dcc91f36e2",
+          "relation": "verifies"
+        },
+        {
+          "criterion_id": "crit-ade149396ff2f2d9",
+          "relation": "verifies"
+        }
+      ],
+      "state": "planned",
+      "readiness": {
+        "task_key": "T9",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T6(planned), T7(planned), T8(planned)"
+          }
+        ]
+      }
+    }
+  ],
+  "readiness": {
+    "T1": {
+      "task_key": "T1",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1, plan:p2, plan:p3, plan:p4"
+        }
+      ]
+    },
+    "T2": {
+      "task_key": "T2",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+        }
+      ]
+    },
+    "T3": {
+      "task_key": "T3",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p6"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+        }
+      ]
+    },
+    "T4": {
+      "task_key": "T4",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+        }
+      ]
+    },
+    "T5": {
+      "task_key": "T5",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p5, plan:p6"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+        }
+      ]
+    },
+    "T6": {
+      "task_key": "T6",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned), T5(planned)"
+        }
+      ]
+    },
+    "T7": {
+      "task_key": "T7",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+        }
+      ]
+    },
+    "T8": {
+      "task_key": "T8",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned), T5(planned)"
+        }
+      ]
+    },
+    "T9": {
+      "task_key": "T9",
+      "state": "planned",
+      "runnable": false,
+      "blocked_by": [
+        {
+          "reason": "deferred_questions_unresolved",
+          "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1, design:d2, design:d3, design:d4, design:d5"
+        },
+        {
+          "reason": "task_dependencies_unmet",
+          "detail": "선행 Task 가 아직 완료되지 않았다: T6(planned), T7(planned), T8(planned)"
+        }
+      ]
+    }
+  },
+  "criteria_coverage": [
+    {
+      "criterion_id": "crit-ade149396ff2f2d9",
+      "criterion_key": "C-01",
+      "summary": "오류 줄만 정확히 추출",
+      "implemented_by": [
+        "T1",
+        "T3",
+        "T4"
+      ],
+      "verified_by": [
+        "T2",
+        "T5",
+        "T6",
+        "T7",
+        "T9"
+      ],
+      "has_verification_task": true
+    },
+    {
+      "criterion_id": "crit-6f8243dcc91f36e2",
+      "criterion_key": "C-02",
+      "summary": "합의된 방식으로 결과 출력",
+      "implemented_by": [
+        "T1",
+        "T4"
+      ],
+      "verified_by": [
+        "T5",
+        "T7",
+        "T8",
+        "T9"
+      ],
+      "has_verification_task": true
+    }
+  ],
+  "deferred_open_questions": [
+    {
+      "id": "q-4a10385b73c19691",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "design:d1",
+      "summary": "판정 구현 방식(부분 문자열/레벨 필드/정규식)",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:13:14.578513+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-ce06344051a1f81e"
+    },
+    {
+      "id": "q-d96e2033b0348b45",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "design:d2",
+      "summary": "대소문자 구분 여부",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:13:14.578513+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-ce06344051a1f81e"
+    },
+    {
+      "id": "q-6ed745f55911d527",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "design:d3",
+      "summary": "출력 대상·형식과 실패 시 종료 코드",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:13:14.578513+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-ce06344051a1f81e"
+    },
+    {
+      "id": "q-a42b956c4f77da63",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "design:d4",
+      "summary": "대상 경로 고정 vs 명령행 인자",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:13:14.578513+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-ce06344051a1f81e"
+    },
+    {
+      "id": "q-04b48584df3b5441",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "design:d5",
+      "summary": "테스트/픽스처 추가가 범위에 포함되는지",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:13:14.578513+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-ce06344051a1f81e"
+    },
+    {
+      "id": "q-f50046fbea86e8be",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p1",
+      "summary": "오류 판정 방식과 값 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    },
+    {
+      "id": "q-4e8fad68c1bd75d2",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p2",
+      "summary": "대소문자 정책 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    },
+    {
+      "id": "q-11fa4775f519a822",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p3",
+      "summary": "출력·오류·종료 계약 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    },
+    {
+      "id": "q-3c95bedf1c86a9cc",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p4",
+      "summary": "대상 경로 해석 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    },
+    {
+      "id": "q-6d68092ab0dfde47",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p5",
+      "summary": "영구 테스트 포함 여부",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    },
+    {
+      "id": "q-1a9714e675654cfb",
+      "case_id": "case-b477c7af6dbfaafb",
+      "intent_version_id": "intent-c4ee34039a7dc500",
+      "question_key": "plan:p6",
+      "summary": "최소 Python 버전 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T22:16:34.700755+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-376905bca8b7fb83"
+    }
+  ],
+  "question_blocks": {
+    "q-11fa4775f519a822": [
+      "T1"
+    ],
+    "q-3c95bedf1c86a9cc": [
+      "T1"
+    ],
+    "q-4e8fad68c1bd75d2": [
+      "T1"
+    ],
+    "q-f50046fbea86e8be": [
+      "T1"
+    ],
+    "q-1a9714e675654cfb": [
+      "T3",
+      "T5"
+    ],
+    "q-6d68092ab0dfde47": [
+      "T5"
+    ]
+  },
+  "unresolved_block_refs": []
+}

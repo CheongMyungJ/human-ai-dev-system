@@ -27,6 +27,7 @@ import {
 import { IntentPanel } from './IntentPanel'
 import { PreparationPanel } from './PreparationPanel'
 import { ResultPanel } from './ResultPanel'
+import { WorkGraphPanel } from './WorkGraphPanel'
 
 //: 화면에서 고를 수 있는 목적. `feature_implementation` 도 **일부러 남겨 둔다** —
 //: 조건을 갖추지 못했으면 서버가 무엇이 빠졌는지 사유 코드로 거부하는 것을 볼 수
@@ -437,6 +438,7 @@ function CaseDetailPanel(props: {
           나눈다 — 게이트 통과가 설계 검토가 아니고, 검토가 게이트를 통과시키지도
           않는다(FR-05 "산출물 존재, 품질 판정, 사람 검토는 구분한다"). */}
       <PreparationPanel detail={detail} onChanged={props.onChanged} />
+      <WorkGraphPanel detail={detail} onChanged={props.onChanged} />
 
       {/* 결과·근거와 최종 확인. 게이트 판정과 **다른 기록**이므로 패널을 나눈다 —
           게이트 통과가 결과 인수가 아니고, 인수가 게이트를 통과시키지도 않는다. */}

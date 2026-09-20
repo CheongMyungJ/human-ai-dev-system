@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 def utc_now() -> str:
@@ -87,6 +87,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     #     제기됐다는 사실과 일치한다 — P3-01 전에는 다른 단계가 없었다.
     _add_column_if_missing(conn, "intent_question", "raised_in_stage", "TEXT")
     _add_column_if_missing(conn, "intent_question", "preparation_id", "TEXT")
+
+    # v6: 작업 그래프도 **새 표만** 더한다. 기존 표의 컬럼을 바꾸지 않으므로 위
+    #     executescript 의 `CREATE TABLE IF NOT EXISTS` 로 이행이 끝난다.
+    #     기존 Case 에는 `work_graph_revision` 행이 없고, 그것은 "Task 가 필요
+    #     없다"가 아니라 **그래프가 아직 없다**는 뜻이다. 그래프가 없는 Case 는
+    #     P3-01의 Case 수준 차단(이월 질문이 하나라도 열려 있으면 전부 막는다)을
+    #     그대로 받는다 — 없음을 통과로 읽지 않는 것이 중요하다.
+    #
+    #     `run.task_id` 의 의미도 바뀌지 않는다. 그래프가 생기면 그 값이
+    #     `task_key` 로 해석될 뿐이고, 옛 행의 "task-1" 은 그대로 남는다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

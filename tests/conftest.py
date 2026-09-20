@@ -166,15 +166,52 @@ DEFAULT_SIZING: dict[str, Any] = {
 #: **항목을 다 채운 것과 필수 항목을 비운 것**을 둘 다 만들 수 있어야 한다.
 #: 비운 산출물이 진입 조건을 통과하지 않는 것이 P3-01의 성공 기준이기 때문이다.
 def fake_preparation_response(
-    stage: str, sections: dict[str, str], questions: list[dict[str, Any]] | None = None
+    stage: str,
+    sections: dict[str, str],
+    questions: list[dict[str, Any]] | None = None,
+    tasks: list[dict[str, Any]] | None = None,
 ) -> str:
     import json as _json
 
     body = {
         "sections": {k: {"text": v, "origin": "ai_proposal"} for k, v in sections.items()},
         "questions": questions or [],
+        "tasks": tasks or [],
     }
     return f"{stage} 산출물입니다.\n\n```json\n{_json.dumps(body, ensure_ascii=False)}\n```\n"
+
+
+#: 계획이 정의하는 기본 Task 두 개(P3-02).
+#:
+#: **T2 가 T1 을 기다린다.** 의존이 없는 그래프만 시험하면 "선행 Task 가 끝나지
+#: 않으면 배정되지 않는다"를 확인할 수 없다.
+FAKE_TASKS: list[dict[str, Any]] = [
+    {
+        "key": "T1",
+        "kind": "investigation",
+        "purpose": "표본 파일의 오류 줄 형태를 확인한다",
+        "purpose_summary": "표본 파일의 오류 줄 형태 확인",
+        "deliverable": "확인한 형태를 적은 메모",
+        "deliverable_summary": "형태 메모",
+        "completion": "오류 줄의 접두사가 무엇인지 근거와 함께 적혔다",
+        "completion_summary": "접두사가 근거와 함께 적혔다",
+        "relates_to": "scope",
+        "criteria": [{"key": "C-01", "relation": "implements"}],
+    },
+    {
+        "key": "T2",
+        "kind": "implementation",
+        "purpose": "필터 함수를 구현한다",
+        "purpose_summary": "필터 함수 구현",
+        "deliverable": "reader.py 의 filter_errors",
+        "deliverable_summary": "filter_errors 함수",
+        "completion": "표본 파일에서 기대한 줄만 남는다",
+        "completion_summary": "표본 파일에서 기대한 줄만 남는다",
+        "relates_to": "goal",
+        "depends_on": ["T1"],
+        "criteria": [{"key": "C-01", "relation": "implements"}],
+    },
+]
 
 
 #: 심층 수준까지 필수 항목을 모두 채운 설계 응답.
@@ -204,6 +241,7 @@ FAKE_PLAN_FULL = fake_preparation_response(
         "experiments": "실험은 필요하지 않다. 표본 파일로 직접 확인한다",
         "failure_response": "시험이 실패하면 T1 로 돌아가고 통과를 주장하지 않는다",
     },
+    tasks=FAKE_TASKS,
 )
 
 
@@ -410,6 +448,7 @@ class Harness:
         tool_id: str = "local-echo",
         mode: str = "p2-01-local",
         permission: str = "read_only",
+        task_id: str = "task-1",
     ) -> dict[str, Any]:
         response = self.client.post(
             f"/api/cases/{case_id}/runs",
@@ -421,11 +460,48 @@ class Harness:
                 "tool_id": tool_id,
                 "mode": mode,
                 "permission": permission,
+                "task_id": task_id,
             },
         )
         # 201 = 새로 만듦, 200 = 같은 run_id 의 재전송(만들지 않음)
         assert response.status_code in (200, 201), response.text
         return response.json()
+
+
+    # ------------------------------------------------------ P3-02 도우미
+
+    def complete_task(
+        self, case_id: str, task_key: str, run_id: str | None = None
+    ) -> dict[str, Any]:
+        """그 Task 를 **실제 실행으로** 끝낸다.
+
+        사람이 "끝났다"고 적는 경로를 만들지 않았으므로(그것은 실행 증거 없이
+        의존을 푸는 문이다) 시험도 같은 경로를 쓴다 — 실행을 만들고 Runner 가
+        수행해 결과가 `completed` 로 보고된다.
+        """
+        instruction = self.submit_artifact(
+            case_id, f"{task_key} 를 조사해 주세요.", kind="instruction", summary=f"{task_key} 조사"
+        )
+        created = self.create_run(
+            case_id,
+            instruction["artifact_id"],
+            run_id or f"run-{task_key.lower()}-1",
+            purpose="limited_analysis",
+            role="author",
+            tool_id=FAKE_TOOL_ID,
+            mode=FAKE_TOOL_MODE,
+            task_id=task_key,
+        )
+        self.agent.poll_once()
+        return created
+
+    def work_graph(self, case_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/api/cases/{case_id}/work-graph")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def task_readiness(self, case_id: str, task_key: str) -> dict[str, Any]:
+        return self.work_graph(case_id)["readiness"][task_key]
 
     def effect_count(self, case_id: str) -> int:
         return self.agent.executor.count_effects(case_id)
@@ -752,9 +828,17 @@ class Harness:
         )
 
     def request_implementation(
-        self, case_id: str, run_id: str = "run-impl-1", permission: str = "read_only"
+        self,
+        case_id: str,
+        run_id: str = "run-impl-1",
+        permission: str = "read_only",
+        task_id: str = "T2",
     ):
-        """기능 구현 실행을 요청한다. 허용/거부 응답을 그대로 돌려준다."""
+        """기능 구현 실행을 요청한다. 허용/거부 응답을 그대로 돌려준다.
+
+        기본 `task_id` 가 `T2` 인 것은 `FAKE_TASKS` 의 구현 Task 이기 때문이다.
+        P3-02부터 그래프가 있는 Case 는 그래프의 Task 키로 요청해야 한다.
+        """
         instruction = self.submit_artifact(
             case_id, "계획대로 구현해 주세요.", kind="instruction", summary="구현 요청"
         )
@@ -768,6 +852,7 @@ class Harness:
                 "tool_id": FAKE_TOOL_ID,
                 "mode": FAKE_TOOL_MODE,
                 "permission": permission,
+                "task_id": task_id,
             },
         )
 

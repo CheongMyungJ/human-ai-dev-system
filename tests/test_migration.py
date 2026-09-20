@@ -198,6 +198,14 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
         "stage_review_setting",
         "stage_review",
         "run_context_ref",
+        # v6 의 작업 그래프 표.
+        "work_graph_revision",
+        "task",
+        "task_dependency",
+        "task_criterion",
+        "task_question_block",
+        "task_block_unresolved",
+        "question_block_ref",
     }
     placeholders = ",".join("?" for _ in expected)
     new_tables = {
@@ -219,6 +227,16 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     # "간소"가 아니다.
     assert conn.execute("SELECT COUNT(*) c FROM stage_review_setting").fetchone()["c"] == 0
     assert conn.execute("SELECT COUNT(*) c FROM sizing_assessment").fetchone()["c"] == 0
+
+    # **작업 그래프 행도 생기지 않는다**(P3-02 AC-15). 행이 없다는 것은 "Task 가
+    # 필요 없다"가 아니라 그래프가 아직 없다는 뜻이고, 그 Case 의 기능 구현은
+    # `work_graph_missing` 으로 막힌다. 없음을 통과로 읽지 않는 것이 핵심이다.
+    assert conn.execute("SELECT COUNT(*) c FROM work_graph_revision").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM task").fetchone()["c"] == 0
+
+    # 옛 `run.task_id` 도 그대로다. P3-02가 그 값을 `task_key` 로 해석하게 됐을 뿐
+    # 옛 행의 값을 바꾸지 않는다.
+    assert conn.execute("SELECT task_id FROM run").fetchone()["task_id"] == "t-1"
 
     # 옛 질문 행의 새 컬럼도 NULL 이다. P3-01 전에는 의도 단계 말고 다른 단계가
     # 없었으므로 NULL 은 "의도 단계에서 제기됨"과 일치한다.

@@ -754,13 +754,17 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
         timeout=10.0,
     ).raise_for_status()
 
-    def register_prep(stage: str, sections: dict, artifact_id: str) -> dict:
+    def register_prep(
+        stage: str, sections: dict, artifact_id: str, tasks: list | None = None,
+        questions: list | None = None,
+    ) -> dict:
         kind = "design" if stage == "design" else "dev_plan"
         prep_body = prep_doc.compose(
             stage=PreparationStage(stage),
             level=WorkLevel.STANDARD,
             sections={k: {"text": v, "origin": "ai_proposal"} for k, v in sections.items()},
-            questions=[],
+            questions=questions or [],
+            tasks=tasks or [],
             case_id=case["id"],
             intent_version_id=pending["intent"]["intent_version_id"],
             authored_by="codex/exec",
@@ -803,6 +807,7 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
                 "preparation_id": prep_row["id"],
                 "sections": reported["sections"],
                 "questions": reported["questions"],
+                "tasks": reported["tasks"],
             },
             timeout=10.0,
         ).raise_for_status()
@@ -829,14 +834,48 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
     register_prep(
         "plan",
         {
-            "tasks": "T1 조건 변경(완료 조건: 세 조합 시험 통과)",
+            "tasks": "작업 목록은 tasks 에 있다",
             "verification": "허용/거부/경계 세 조합 시험",
-            "dependencies": "없음",
-            "integration_order": "T1 → 회귀 확인",
+            "dependencies": "T2 는 T1 을 기다린다",
+            "integration_order": "T1 → T2 → 회귀 확인",
             "human_decision_points": "기존 사용자 영향 확인",
             "environment_prerequisites": "저장소 checkout",
         },
         "art-plan-1",
+        tasks=[
+            {
+                "key": "T1",
+                "kind": "implementation",
+                "purpose": "권한 조건 한 줄을 바꾼다",
+                "purpose_summary": "권한 조건 변경",
+                "deliverable": "조건 분기",
+                "deliverable_summary": "조건 분기",
+                "completion": "세 조합 시험 통과",
+                "completion_summary": "세 조합 시험 통과",
+                "criteria": [{"key": "C-01", "relation": "implements"}],
+            },
+            {
+                "key": "T2",
+                "kind": "verification",
+                "purpose": "허용·거부·경계 세 조합을 확인한다",
+                "purpose_summary": "세 조합 확인",
+                "deliverable": "시험 결과",
+                "deliverable_summary": "시험 결과",
+                "completion": "세 조합이 기대대로 동작한다",
+                "completion_summary": "세 조합이 기대대로",
+                "depends_on": ["T1"],
+                "criteria": [{"key": "C-01", "relation": "verifies"}],
+            },
+        ],
+        questions=[
+            {
+                "key": "p1",
+                "text": "기존 사용자 영향 범위를 사람이 정해야 한다",
+                "summary": "기존 사용자 영향",
+                "decide_at": "plan",
+                "blocks": ["T2"],
+            }
+        ],
     )
     auto = httpx.post(
         f"{base}/api/cases/{case['id']}/stage-auto-proceed/plan", json={}, timeout=10.0
@@ -871,6 +910,22 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
     assert after["plan"]["review"]["decision_id"] is None
     assert after["plan"]["review"]["actor"] == "stage-auto-proceed-policy"
 
+    # AC-15: **작업 그래프와 차단 이유가 그대로 복원된다.** 재시작이 그래프를
+    # 잃으면 좁히기의 근거가 사라지고, 무엇이 왜 막혀 있는지 답할 수 없다.
+    graph = httpx.get(f"{base}/api/cases/{case['id']}/work-graph", timeout=10.0).json()
+    assert graph["present"] is True
+    assert [t["task_key"] for t in graph["tasks"]] == ["T1", "T2"]
+    assert graph["tasks"][1]["depends_on"] == ["T1"]
+    question = graph["deferred_open_questions"][0]
+    assert graph["question_blocks"][question["id"]] == ["T2"]
+    # 연결이 살아 있으므로 T1 은 그 질문에 막히지 않는다(좁히기가 복원됐다).
+    assert [b["reason"] for b in graph["readiness"]["T1"]["blocked_by"]] == []
+    assert "deferred_questions_unresolved" in [
+        b["reason"] for b in graph["readiness"]["T2"]["blocked_by"]
+    ]
+    coverage = {c["criterion_key"]: c for c in graph["criteria_coverage"]}
+    assert coverage["C-01"]["verified_by"] == ["T2"]
+
     # 준비가 갖춰졌으므로 기능 구현이 열린다. 재시작이 그 판단을 잃지 않는다.
     instruction = httpx.post(
         f"{base}/api/cases/{case['id']}/artifacts",
@@ -898,6 +953,7 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
             "tool_id": "codex",
             "mode": "exec",
             "permission": "read_only",
+            "task_id": "T1",
         },
         timeout=10.0,
     )
@@ -910,5 +966,8 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
         "design_review_missing",
         "plan_missing",
         "plan_review_missing",
+        # 그래프도 복원됐으므로 "없다"로 되돌아가지 않는다.
+        "work_graph_missing",
+        "task_not_in_work_graph",
     ):
         assert code not in refusals, f"{code} 가 재시작 뒤에 다시 나타났다"

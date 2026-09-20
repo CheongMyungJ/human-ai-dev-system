@@ -51,6 +51,7 @@ from domain.models import (
     RunPurpose,
     RunRole,
     SizingAxis,
+    TaskKind,
     WorkLevel,
 )
 
@@ -1607,6 +1608,11 @@ class PreparationStructureIn(BaseModel):
     preparation_id: str
     sections: list[dict[str, Any]]
     questions: list[dict[str, Any]] = Field(default_factory=list)
+    #: 개발계획이 정의한 Task(P3-02). 설계 보고에는 비어 있다.
+    #: **기본값이 빈 목록인 것은 v1 계획 문서 때문이다** — Task 0건은
+    #: "Task 가 필요 없다"가 아니라 그래프가 없다는 뜻이고,
+    #: 기능 구현은 `work_graph_missing` 으로 막힌다.
+    tasks: list[dict[str, Any]] = Field(default_factory=list)
 
 
 @router.get("/api/cases/{case_id}/preparation")
@@ -1784,7 +1790,138 @@ def runner_preparation_structure(
         if prep["owner_runner_id"] != payload.runner_id:
             raise ConflictError("only the owning runner can report this structure")
         return repo.apply_preparation_structure(
-            payload.preparation_id, payload.sections, payload.questions
+            payload.preparation_id, payload.sections, payload.questions, payload.tasks
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== P3-02
+#
+# 작업 그래프. **조회는 준비 상태와 따로 둔다** — 설계·계획이 각각 조회되는 것과
+# 같은 이유다. 한 응답에 다 넣으면 화면이 무엇을 보고 있는지가 흐려진다.
+
+
+class TaskIn(BaseModel):
+    """사람이 더하는 Task. **본문 필드가 없다.**
+
+    목적·산출물·완료 조건의 **짧은 요약**만 받는다. 서술을 받으면 제어부에 본문이
+    남고, 그것은 개발계획 원문의 자리다.
+    """
+
+    key: str = Field(min_length=1, max_length=64)
+    kind: TaskKind = TaskKind.IMPLEMENTATION
+    summary: str = Field(min_length=1, max_length=200)
+    deliverable_summary: str = Field(default="", max_length=200)
+    completion_summary: str = Field(default="", max_length=200)
+    relates_to: str = Field(default="", max_length=64)
+    depends_on: list[str] = Field(default_factory=list)
+    criteria: list[dict[str, str]] = Field(default_factory=list)
+
+
+class AddTaskIn(BaseModel):
+    """Task 추가 요청.
+
+    `reason` 이 필수다. 계획이 **왜** 바뀌었는지 없이 그래프만 바뀌면 나중에
+    "무효 전제의 결과를 확인 없이 채택"했는지 알 수 없다(FR-07 수용 기준).
+    """
+
+    task: TaskIn
+    reason: str = Field(min_length=1, max_length=200)
+    actor: str = Field(min_length=1, max_length=64)
+
+
+class CancelTaskIn(BaseModel):
+    reason: str = Field(min_length=1, max_length=200)
+    actor: str = Field(min_length=1, max_length=64)
+
+
+class QuestionBlocksIn(BaseModel):
+    """이 결정을 기다리는 Task 를 사람이 고친다.
+
+    **질문에 답하는 것이 아니다.** 연결을 고쳐도 질문은 여전히 `open` 이고 연결된
+    Task 는 계속 막힌다 — 연결은 "누가 기다리는가"이지 "결정됐는가"가 아니다.
+    """
+
+    task_keys: list[str] = Field(default_factory=list)
+    reason: str = Field(min_length=1, max_length=200)
+    actor: str = Field(min_length=1, max_length=64)
+
+
+@router.get("/api/cases/{case_id}/work-graph")
+def get_work_graph(request: Request, case_id: str) -> dict[str, Any]:
+    """현재 작업 그래프와 Task 별 실행 가능 여부.
+
+    **진입 검사와 같은 값을 본다.** 화면이 따로 계산하면 버튼은 눌리는데 서버가
+    거부하는(또는 그 반대의) 상태가 생긴다.
+    """
+    try:
+        return _repo(request).work_graph_state(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/work-graph-revisions")
+def list_work_graph_revisions(request: Request, case_id: str) -> list[dict[str, Any]]:
+    """리비전 이력. **이전 계획은 지워지지 않는다**(FR-07)."""
+    try:
+        return _repo(request).list_work_graph_revisions(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/tasks/{task_key}/runs")
+def list_task_runs(request: Request, case_id: str, task_key: str) -> list[dict[str, Any]]:
+    """그 Task 키의 실행 이력. **리비전을 가로지른다.**
+
+    재분할이 실패 이력을 초기화하지 않는다는 것을 여기서 확인할 수 있다(FR-07).
+    """
+    try:
+        return _repo(request).task_run_history(case_id, task_key)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/work-graph/tasks", status_code=201)
+def add_task(request: Request, case_id: str, payload: AddTaskIn) -> dict[str, Any]:
+    """사람이 Task 를 더한다. **새 리비전이 만들어진다.**"""
+    repo = _repo(request)
+    try:
+        return repo.add_task(
+            case_id,
+            payload.task.model_dump(mode="json"),
+            payload.reason,
+            payload.actor,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/work-graph/tasks/{task_key}/cancel", status_code=201)
+def cancel_task(
+    request: Request, case_id: str, task_key: str, payload: CancelTaskIn
+) -> dict[str, Any]:
+    """사람이 Task 를 취소한다. **행을 지우지 않고** 새 리비전에 취소로 남긴다."""
+    repo = _repo(request)
+    try:
+        return repo.cancel_task(case_id, task_key, payload.reason, payload.actor)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/questions/{question_id}/blocks", status_code=201)
+def set_question_blocks(
+    request: Request, case_id: str, question_id: str, payload: QuestionBlocksIn
+) -> dict[str, Any]:
+    """어떤 Task 가 이 결정을 기다리는지 고친다.
+
+    AI가 적은 `blocks` 가 비어 있거나 틀렸을 때 사람이 고칠 수단이 없으면
+    **연결 없는 질문 하나가 영원히 전부 막는다.**
+    """
+    repo = _repo(request)
+    try:
+        return repo.set_question_blocks(
+            case_id, question_id, payload.task_keys, payload.reason, payload.actor
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

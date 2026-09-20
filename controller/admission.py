@@ -25,6 +25,11 @@ P2-03·P2-04에서는 설계·계획 검토의 구현이 없었으므로 `featur
 다만 `workspace_write` 는 여전히 열지 않는다(P3-03). 배정 조건을 갖춘 것과 코드를
 바꿀 권한은 다른 문제이고, 작업공간·브랜치 준비 없이 쓰기를 열면 사용자의 미커밋
 변경을 보호할 수단이 없다. **검토를 마쳤다는 사실이 쓰기 권한을 만들지 않는다.**
+
+**P3-02에서 차단의 단위가 Case 에서 Task 로 좁아졌다.** 이월 질문 하나가 업무 전체를
+멈추는 대신 그 결정에 의존하는 Task 만 멈춘다. 좁히기가 우회가 되지 않게 하는 규칙은
+`_check_work_graph` 에 있다 — 그래프가 없거나, Task 가 없거나, 질문이 어떤 Task 를
+막는지 모르면 **전부 막는다.**
 """
 
 from __future__ import annotations
@@ -239,6 +244,87 @@ def _check_stage_ready(request: AdmissionRequest, stage: PreparationStage, refus
         refuse(codes["review"], f"{label} 검토 상태가 {review.get('state')} 다")
 
 
+#: 작업 그래프 검사를 받는 목적(P3-02).
+#:
+#: **조사도 실행이다.** "하위 작업 `task_id` 가 다르다고 면제되지 않는다"는 FR-29의
+#: 규칙은 목적이 달라도 같게 적용돼야 한다. 다만 검사는 **그래프가 있는 Case 에서만**
+#: 돈다 — 그래프는 계획에서 태어나므로 계획 이전의 조사까지 막으면 순환이 된다.
+NEEDS_WORK_GRAPH: frozenset[RunPurpose] = frozenset(
+    {RunPurpose.FEATURE_IMPLEMENTATION, RunPurpose.LIMITED_ANALYSIS}
+)
+
+
+def _check_work_graph(request: AdmissionRequest, refuse: Any) -> None:
+    """작업 그래프 조건을 검사한다(P3-02).
+
+    **좁히는 것이 느슨해지는 것이 되어서는 안 된다.** P3-01에서 이월 질문 하나는
+    Case 전체를 막았고, 여기서 "그 결정에 의존하는 Task 만"으로 좁힌다. 좁히기가
+    우회가 되지 않도록 아래 세 경우는 **전부 막는다.**
+
+        그래프가 없다                    계획이 Task 를 정의하지 않았다
+        Task 가 0건이다                  같은 사실의 다른 모습
+        열린 질문에 연결된 Task 가 없다  `blocks` 가 비었거나 해석되지 않았다
+
+    셋째가 핵심이다. 연결이 없다는 것은 "아무 것도 막지 않는다"가 아니라 **무엇을
+    막는지 모른다**는 뜻이고, 모르는 것을 안전한 쪽으로 읽으면 질문 하나를 연결하지
+    않는 것만으로 모든 차단이 사라진다.
+
+    그래프가 아예 없는 Case 에서는 P3-01의 Case 수준 차단을 그대로 쓴다. 준비
+    조건(`design_*`/`plan_*`)이 그 상태를 이미 정확히 설명하므로, 그래프가 생기기
+    전의 `limited_analysis` 까지 막지는 않는다.
+    """
+    prep = request.preparation_state or {}
+    deferred = prep.get("deferred_open_questions") or []
+    graph_state = prep.get("work_graph") or {}
+
+    if not graph_state.get("present"):
+        # --- P3-01 그대로: Case 수준 차단 ---------------------------------
+        # 그래프가 없는데 기능 구현을 요청하면 계획이 작업을 정의하지 않은 것이다.
+        if request.purpose is RunPurpose.FEATURE_IMPLEMENTATION:
+            refuse(
+                AdmissionRefusal.WORK_GRAPH_MISSING,
+                "개발계획이 Task 를 정의하지 않아 작업 그래프가 없다."
+                " 무엇을 어떤 순서로 만들지가 정해지지 않았다",
+            )
+            if deferred:
+                refuse(
+                    AdmissionRefusal.DEFERRED_QUESTIONS_UNRESOLVED,
+                    "설계·계획으로 이월한 질문이 남아 있다: "
+                    + ", ".join(q["question_key"] for q in deferred),
+                )
+        return
+
+    if graph_state.get("stale"):
+        # 새 의도 버전이 생겼다. 그 위에 세운 그래프를 재사용하지 않는다(FR-23).
+        refuse(
+            AdmissionRefusal.WORK_GRAPH_STALE,
+            "작업 그래프가 대체된 의도 버전 위에 세워져 있다."
+            " 최신 의도 기준으로 계획을 다시 만든다",
+        )
+        return
+
+    if not graph_state.get("tasks"):
+        refuse(
+            AdmissionRefusal.WORK_GRAPH_MISSING,
+            "작업 그래프에 Task 가 없다",
+        )
+        return
+
+    readiness = (graph_state.get("readiness") or {}).get(request.task_id)
+    if readiness is None:
+        refuse(
+            AdmissionRefusal.TASK_NOT_IN_WORK_GRAPH,
+            f"{request.task_id!r} 는 현재 작업 그래프의 Task 가 아니다."
+            " 그래프의 Task 키로 요청한다",
+        )
+        return
+
+    # 차단 사유는 `controller/work_graph.py` 가 계산한다. 화면·진입 검사·시험이
+    # 같은 함수를 보게 하기 위해서다 — 두 벌로 쓰면 한쪽만 고치는 실수가 생긴다.
+    for block in readiness.get("blocked_by") or []:
+        refuse(AdmissionRefusal(block["reason"]), block["detail"])
+
+
 def evaluate(request: AdmissionRequest) -> AdmissionResult:
     """진입 조건을 검사한다. 거부 사유는 **모두** 모은다.
 
@@ -406,15 +492,8 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
         # 닿을 수 없는 분기가 되고, 닿을 수 없는 검사는 시험할 수도 없다.
         # 대체된 계획은 단계별 목록에 `superseded` 로 남아 무엇이 있었는지 조회된다.
 
-        # 이월한 사람 질문. **단계 자동 진행이 이 결정을 대신하지 않는다**
-        # (FR-03 질문 처리, FR-29). 의도 단계 질문은 위에서 이미 본다.
-        deferred = prep.get("deferred_open_questions") or []
-        if deferred:
-            refuse(
-                AdmissionRefusal.DEFERRED_QUESTIONS_UNRESOLVED,
-                "설계·계획으로 이월한 질문이 남아 있다: "
-                + ", ".join(q["question_key"] for q in deferred),
-            )
+    if request.purpose in NEEDS_WORK_GRAPH:
+        _check_work_graph(request, refuse)
 
     outcome = AdmissionOutcome.REFUSED if refusals else AdmissionOutcome.ADMITTED
     return AdmissionResult(

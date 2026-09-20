@@ -1,0 +1,137 @@
+== 제어부 health: schema_version=6
+== Runner 등록: ['runner-live-p302']
+== Case case-b477c7af6dbfaafb
+
+[1] codex 가 의도 초안을 쓴다
+  status=201 outcome=completed tool=codex-cli 0.154.0
+  제안 수준=standard 도출=deep 적용=deep
+  의도 v1 기준=2건
+
+[2] claude(별도 세션)가 QG-01 로 검토한다
+  시도 1: status=201 판정=pass 발견=6
+
+[3] 사람이 읽고 동의한다
+  의도 단계 질문 q1 에 답함
+  의도 단계 질문 q2 에 답함
+  의도 단계 질문 q3 에 답함
+  동의 status=201 상태=agreed_current
+
+[4] claude 가 설계안을 쓴다
+  status=201 refusals=[] outcome=completed
+  설계 항목 미정=[]
+  사람 검토 status=201 상태=human_reviewed
+
+[5] codex 가 개발계획을 쓴다 — 여기서 작업 그래프가 태어난다
+  status=201 refusals=[] outcome=completed
+  그래프 있음=True 리비전=1
+    T1 [investigation] 판정·출력·경로 계약 고정 선행=[] 기준=['implements', 'implements'] 상태=planned 배정가능=False
+    T2 [experiment] 판정 경계 사례 사전 실험 선행=['T1'] 기준=['verifies'] 상태=planned 배정가능=False
+    T3 [implementation] 판정·추출 순수 함수 구현 선행=['T2'] 기준=['implements'] 상태=planned 배정가능=False
+    T4 [implementation] 실행 진입점과 실패 처리 연결 선행=['T3'] 기준=['implements', 'implements'] 상태=planned 배정가능=False
+    T5 [implementation] 반복 가능한 검증 수단 준비 선행=['T1'] 기준=['verifies', 'verifies'] 상태=planned 배정가능=False
+    T6 [verification] 판정·추출 로직 검증 선행=['T3', 'T5'] 기준=['verifies'] 상태=planned 배정가능=False
+    T7 [verification] 정상 실행 종단 검증 선행=['T4', 'T5'] 기준=['verifies', 'verifies'] 상태=planned 배정가능=False
+    T8 [verification] 무결과·실패 경로 검증 선행=['T4', 'T5'] 기준=['verifies'] 상태=planned 배정가능=False
+    T9 [integration] 전체 검증과 변경 범위 최종 감사 선행=['T6', 'T7', 'T8'] 기준=['verifies', 'verifies'] 상태=planned 배정가능=False
+  이월 질문=['design:d1', 'design:d2', 'design:d3', 'design:d4', 'design:d5', 'plan:p1', 'plan:p2', 'plan:p3', 'plan:p4', 'plan:p5', 'plan:p6']
+  질문→Task 연결={'q-11fa4775f519a822': ['T1'], 'q-3c95bedf1c86a9cc': ['T1'], 'q-4e8fad68c1bd75d2': ['T1'], 'q-f50046fbea86e8be': ['T1'], 'q-1a9714e675654cfb': ['T3', 'T5'], 'q-6d68092ab0dfde47': ['T5']}
+  해석 실패 참조=[]
+  계획 사람 검토 status=201
+
+[6] 좁히기 — 어느 Task 가 왜 막히는가
+  T1: 배정가능=False 사유=['deferred_questions_unresolved', 'deferred_questions_unresolved']
+  T2: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  T3: 배정가능=False 사유=['deferred_questions_unresolved', 'deferred_questions_unresolved', 'task_dependencies_unmet']
+  T4: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  T5: 배정가능=False 사유=['deferred_questions_unresolved', 'deferred_questions_unresolved', 'task_dependencies_unmet']
+  T6: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  T7: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  T8: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  T9: 배정가능=False 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T1: status=409 사유=['deferred_questions_unresolved']
+  구현 배정 T2: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T3: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T4: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T5: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T6: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T7: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T8: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  구현 배정 T9: status=409 사유=['deferred_questions_unresolved', 'task_dependencies_unmet']
+  그래프 밖 task_id: status=409 사유=['task_not_in_work_graph']
+
+[7] 이월 질문에 답한다
+  design:d1 에 답함
+  design:d2 에 답함
+  design:d3 에 답함
+  design:d4 에 답함
+  design:d5 에 답함
+  plan:p1 에 답함
+  plan:p2 에 답함
+  plan:p3 에 답함
+  plan:p4 에 답함
+  plan:p5 에 답함
+  plan:p6 에 답함
+  T1: 배정가능=True 사유=[]
+  T2: 배정가능=False 사유=['task_dependencies_unmet']
+  T3: 배정가능=False 사유=['task_dependencies_unmet']
+  T4: 배정가능=False 사유=['task_dependencies_unmet']
+  T5: 배정가능=False 사유=['task_dependencies_unmet']
+  T6: 배정가능=False 사유=['task_dependencies_unmet']
+  T7: 배정가능=False 사유=['task_dependencies_unmet']
+  T8: 배정가능=False 사유=['task_dependencies_unmet']
+  T9: 배정가능=False 사유=['task_dependencies_unmet']
+
+[8] 선행 Task 를 실제 CLI로 끝낸다 — 차단이 풀리는지 본다
+  선행=T1 후속=T2
+  실행 전 후속 사유=['task_dependencies_unmet']
+  T1 실행 status=201 outcome=completed
+  실행 후 T1 상태=done
+  실행 후 후속 배정가능=True 사유=[]
+  후속 구현 배정: status=201 사유=[]
+  쓰기 권한 요청: status=409 사유=['permission_not_allowed_in_stage']
+
+[9] 사람이 검증 작업을 더한다 — 새 리비전과 이유
+  추가 status=201
+  리비전 2건: r2(human_replanning: 검증 작업이 계획에 없었다), r1(plan_artifact: 개발계획 v1 이 정의한 작업)
+  재계획 뒤에도 T1 실행 이력 1건 — 상태=done
+  이유 없는 재계획: status=422 (422 여야 한다)
+
+[10] 성공 기준 대응 — 판정하지 않고 보이기만 한다
+  C-01: 구현=['T1', 'T3', 'T4'] 검증=['T2', 'T5', 'T6', 'T7', 'T9'] 확인작업있음=True
+  C-02: 구현=['T1', 'T4'] 검증=['T5', 'T7', 'T8', 'T9'] 확인작업있음=True
+
+[11] 제어부·Runner 강제 종료 후 복원
+  Task·연결·상태가 그대로인가: True
+  리비전 2건 보존
+
+[12] 데이터 경계 — Task 본문이 제어부 바이트에 있는가
+  T1.purpose: 제어부=False Runner=True
+  T1.deliverable: 제어부=False Runner=True
+  T1.completion: 제어부=False Runner=True
+  T2.purpose: 제어부=False Runner=True
+  T2.deliverable: 제어부=False Runner=True
+  T2.completion: 제어부=False Runner=True
+  T3.purpose: 제어부=False Runner=True
+  T3.deliverable: 제어부=False Runner=True
+  T3.completion: 제어부=False Runner=True
+  T4.purpose: 제어부=False Runner=True
+  T4.deliverable: 제어부=False Runner=True
+  T4.completion: 제어부=False Runner=True
+  T5.purpose: 제어부=False Runner=True
+  T5.deliverable: 제어부=False Runner=True
+  T5.completion: 제어부=False Runner=True
+  T6.purpose: 제어부=False Runner=True
+  T6.deliverable: 제어부=False Runner=True
+  T6.completion: 제어부=False Runner=True
+  T7.purpose: 제어부=False Runner=True
+  T7.deliverable: 제어부=False Runner=True
+  T7.completion: 제어부=False Runner=True
+  T8.purpose: 제어부=False Runner=True
+  T8.deliverable: 제어부=False Runner=True
+  T8.completion: 제어부=False Runner=True
+  T9.purpose: 제어부=False Runner=True
+  T9.deliverable: 제어부=False Runner=True
+  T9.completion: 제어부=False Runner=True
+  검사한 본문 27건 — 제어부에 없음
+
+== 라이브 종료. 남은 제어부·Runner 프로세스 없음

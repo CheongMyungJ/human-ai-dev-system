@@ -1,0 +1,353 @@
+{
+  "doc_type": "hads.preparation",
+  "doc_version": 2,
+  "stage": "plan",
+  "level": "deep",
+  "case_id": "case-b477c7af6dbfaafb",
+  "intent_version_id": "intent-c4ee34039a7dc500",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-plan-1",
+  "authoring_note": "AI 실행이 작성해 제시한 산출물이다. 사람은 열람·검토를 한다.",
+  "context_notes": [
+    {
+      "role": "agreed_intent",
+      "artifact_id": "art-2467dc7dd5d780df",
+      "revision": 1,
+      "read": true
+    },
+    {
+      "role": "current_design",
+      "artifact_id": "art-02d7a052de86b864",
+      "revision": 1,
+      "read": true
+    }
+  ],
+  "sections": {
+    "tasks": {
+      "text": "먼저 미정 정책을 실행 가능한 계약과 기대값 표로 확정한 뒤, 판정·추출 계층을 구현하고 실행·실패 처리 계층을 연결한다. 검증 수단을 준비한 후 순수 함수, 정상 실행, 실패 경로를 각각 별도 작업으로 검증하고 마지막에 변경 범위와 전체 결과를 통합 확인한다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "verification": {
+      "text": "C-01은 판정 대상·비대상·대소문자 변형·빈 줄·형식 이상 줄·중복 줄을 섞은 입력으로 is_error_line과 extract_error_lines의 결과를 순서까지 비교한다. C-02는 reader.py 실행의 표준 출력, 표준 오류, 종료 코드를 분리 수집해 확정된 계약과 정확히 비교한다. 파일 없음·권한 없음·UTF-8 디코딩 실패는 제어된 예외 주입으로 재현한다. 마지막에는 기존 read_lines 동작, import 무부작용, sample.log 무변경, 승인된 파일만 변경되었는지를 확인한다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "dependencies": {
+      "text": "의존 그래프는 T1→T2→T3→T4, T1→T5, (T3,T5)→T6, (T4,T5)→T7, (T4,T5)→T8, (T6,T7,T8)→T9이다. p1~p4가 T1을, p5가 T5를, p6가 T3과 T5를 직접 막는다. 모든 후속 차단은 작업 의존 관계를 통해 전파되며 순환은 없다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "integration_order": {
+      "text": "1) T1에서 정책과 기대값을 고정한다. 2) T2에서 경계 사례로 판정 계약을 실험한다. 3) T5의 검증 수단을 준비하면서 T3의 판정·추출 계층을 구현한다. 4) T4에서 실행 계층과 실패 처리를 연결한다. 5) T6, T7, T8을 수행해 순수 로직·정상 실행·실패 경로를 독립적으로 검증한다. 6) T9에서 전체 검증을 다시 실행하고 변경 범위를 최종 감사한다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "human_decision_points": {
+      "text": "구현 전에 p1의 판정 방식과 값, p2의 대소문자 정책, p3의 출력·종료 계약, p4의 경로 해석을 확정해야 한다. 검증 준비 전에는 p5의 영구 테스트 파일 포함 여부를 정해야 한다. 저장소에 Python 버전 선언이 없고 현재 환경에도 인터프리터가 없으므로, 코드 작성 전 p6의 최소 지원 버전을 확정해야 한다. 결정값은 T1의 계약표 또는 T5의 검증 방식에 기록하며 구현자가 임의로 보충하지 않는다.",
+      "state": "proposed",
+      "origin": "observation",
+      "required": true
+    },
+    "environment_prerequisites": {
+      "text": "현재 저장소에는 Git 2.52.0이 있으며 추적 파일은 reader.py와 sample.log뿐이다. 현재 실행 환경에서는 python, py, python3 명령을 찾을 수 없으므로 T2 이후의 Python 실행 전에 승인된 Python 인터프리터가 제공되어야 한다. p6에서 정확한 최소 버전을 확정하되 설계의 list[str] 및 int | None 표기를 그대로 사용하려면 Python 3.10 이상이 필요하다. 실행자는 reader.py 수정 권한과 sample.log 읽기 권한이 필요하다. sample.log는 UTF-8로 읽고 수정하지 않는다. 테스트 프레임워크나 외부 패키지, 네트워크, 자격증명은 현재 제공되지 않았으므로 가정하지 않으며, 검증은 기본 라이브러리만으로 구성한다.",
+      "state": "proposed",
+      "origin": "observation",
+      "required": true
+    },
+    "experiments": {
+      "text": "T2에서 선택된 판정 규칙을 대표 사례와 구별 사례에 적용한다. 예를 들어 메시지에만 ERROR가 있는 줄, 소문자 error, 빈 줄, 선행 공백, 레벨 필드 없는 줄을 포함해 부분 문자열 방식과 첫 필드 방식의 차이가 사람의 결정과 일치하는지 확인한다. 현재 sample.log만으로는 판정 방식과 대소문자 정책을 구별할 수 없으므로 실험 입력은 메모리 또는 승인된 검증 수단으로 제공하고 sample.log는 변경하지 않는다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "failure_response": {
+      "text": "정책 실험이 결정 내용과 충돌하면 구현을 시작하지 않고 해당 결정을 다시 확인한다. 구현 후 C-01이 실패하면 is_error_line과 extract_error_lines부터 분리 진단하고, C-02가 실패하면 main의 경로·스트림·포맷·종료 코드 배선을 진단한다. 파일 오류 검증이 운영체제 권한 특성 때문에 직접 재현되지 않으면 예외 주입 결과를 사용하고 실제 OS 재현이 필수인지 사람에게 확인한다. Python 인터프리터가 없거나 버전이 맞지 않으면 임의 설치나 다른 런타임 대체 없이 작업을 중단한다. 실패한 변경은 해당 작업의 reader.py 변경분만 되돌리고 기존 read_lines와 sample.log를 보존한다. 수정 후에는 실패한 검증뿐 아니라 그 작업에 의존하는 모든 검증을 다시 실행하며, T9가 실패하면 통합 완료로 처리하지 않는다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "open_questions": {
+      "text": "미정 사항은 p1~p6이다. 특히 p1~p4가 확정되지 않으면 C-01과 C-02의 구체적 기대값을 만들 수 없으며, p5가 확정되지 않으면 검증 결과를 영구 테스트로 남길지 일회성 실행 기록으로 남길지 결정할 수 없다. p6는 사용할 문법과 실제 실행 환경을 결정한다.",
+      "state": "proposed",
+      "origin": "observation",
+      "required": false
+    }
+  },
+  "questions": [
+    {
+      "key": "p1",
+      "text": "오류 줄 판정을 A1) 줄 전체의 지정 문자열 포함, A2) 공백으로 분리한 첫 필드의 지정 로그 레벨 일치, A3) 지정 정규식 일치 중 무엇으로 확정할 것인가? 선택한 방식과 함께 비교할 문자열·레벨 또는 정규식 패턴도 지정해야 한다.",
+      "summary": "오류 판정 방식과 값 확정",
+      "decide_at": "plan",
+      "blocks": [
+        "T1"
+      ]
+    },
+    {
+      "key": "p2",
+      "text": "오류 판정 비교는 영문 대소문자를 구분할 것인가, casefold 기반으로 구분하지 않을 것인가?",
+      "summary": "대소문자 정책 확정",
+      "decide_at": "plan",
+      "blocks": [
+        "T1"
+      ]
+    },
+    {
+      "key": "p3",
+      "text": "정상 결과를 표준 출력에 원문 그대로 한 줄씩 내보내고 0건이면 출력 없이 성공으로 처리할 것인지 확정해야 한다. 또한 파일 없음·권한 없음·UTF-8 디코딩 실패의 표준 오류 문구와 종료 코드, BrokenPipeError 처리 정책을 지정해야 한다.",
+      "summary": "출력·오류·종료 계약 확정",
+      "decide_at": "plan",
+      "blocks": [
+        "T1"
+      ]
+    },
+    {
+      "key": "p4",
+      "text": "대상 파일을 스크립트 디렉터리의 sample.log로 고정할지, 현재 작업 디렉터리 기준으로 고정할지, 명령행 인자를 허용하고 sample.log를 기본값으로 둘지 확정해야 한다.",
+      "summary": "대상 경로 해석 확정",
+      "decide_at": "plan",
+      "blocks": [
+        "T1"
+      ]
+    },
+    {
+      "key": "p5",
+      "text": "검증을 기본 라이브러리 기반의 영구 테스트 파일로 저장소에 추가할 것인가, 저장소 파일을 추가하지 않는 일회성 명령과 결과 기록으로 수행할 것인가? sample.log 변경은 현재 설계의 읽기 전용 조건과 충돌하므로 이를 원하면 설계 범위부터 다시 승인해야 한다.",
+      "summary": "영구 테스트 포함 여부",
+      "decide_at": "plan",
+      "blocks": [
+        "T5"
+      ]
+    },
+    {
+      "key": "p6",
+      "text": "지원할 최소 Python 버전은 무엇인가? 설계에 명시된 list[str] 및 int | None 형식 주석을 그대로 사용하려면 Python 3.10 이상이 필요하지만 저장소에는 버전 선언이 없고 현재 환경에는 Python 실행 파일도 없다.",
+      "summary": "최소 Python 버전 확정",
+      "decide_at": "plan",
+      "blocks": [
+        "T3",
+        "T5"
+      ]
+    }
+  ],
+  "tasks": [
+    {
+      "key": "T1",
+      "kind": "investigation",
+      "purpose": "p1~p4의 사람 결정을 구현과 검증에 바로 사용할 수 있는 단일 동작 계약으로 변환하고 저장소 기준 상태를 다시 확인한다.",
+      "purpose_summary": "판정·출력·경로 계약 고정",
+      "deliverable": "선택된 판정 값과 대소문자 정책, 경로 해석, 정상 출력, 무결과 동작, 오류별 메시지·스트림·종료 코드, BrokenPipeError 정책 및 sample.log의 확정 기대 출력을 담은 계약표와 기준 상태 기록.",
+      "deliverable_summary": "구현용 계약표와 기준 상태",
+      "completion": "계약표의 모든 항목이 p1~p4 결정과 일치하고 빈칸이 없으며, C-01용 입력별 판정 기대값과 C-02용 stdout·stderr·종료 코드 기대값이 구체적으로 기재되어야 한다. reader.py에는 read_lines만 있고 sample.log의 원본 내용과 Git 상태가 기록되어야 한다.",
+      "completion_summary": "모든 기대값과 기준 상태가 명시됨",
+      "relates_to": "",
+      "depends_on": [],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "implements"
+        },
+        {
+          "key": "C-02",
+          "relation": "implements"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T2",
+      "kind": "experiment",
+      "purpose": "현재 sample.log만으로 드러나지 않는 판정 방식과 대소문자 경계를 구현 전에 구별해 계약의 모호성이나 모순을 제거한다.",
+      "purpose_summary": "판정 경계 사례 사전 실험",
+      "deliverable": "판정 대상, 비대상, 메시지 내부 표식, 대소문자 변형, 빈 줄, 선행 공백, 필드 없는 줄 각각의 입력·기대 결과·선택 이유를 담은 사례표와 실험 결과.",
+      "deliverable_summary": "구별 가능한 판정 사례표",
+      "completion": "승인된 Python 인터프리터에서 사례표를 재현할 수 있고, 각 결과가 T1 계약과 일치해야 한다. 선택된 규칙으로 결과가 결정되지 않는 사례가 남으면 T3으로 진행하지 않는다.",
+      "completion_summary": "모든 경계 사례가 단일 결과로 확정됨",
+      "relates_to": "",
+      "depends_on": [
+        "T1"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T3",
+      "kind": "implementation",
+      "purpose": "판정 정책을 한 지점에 국소화하고 파일 I/O와 무관한 순서 보존 추출 계층을 추가한다.",
+      "purpose_summary": "판정·추출 순수 함수 구현",
+      "deliverable": "reader.py에 추가된 판정 상수, is_error_line(line), extract_error_lines(lines). 기존 read_lines의 시그니처와 본문은 유지한다.",
+      "deliverable_summary": "is_error_line과 extract_error_lines",
+      "completion": "is_error_line은 T1에서 확정한 규칙만 적용하고 빈 줄·형식 이상 줄에서 예외 없이 False를 반환해야 한다. extract_error_lines는 True인 모든 줄만 중복과 입력 순서를 보존해 list[str]로 반환하고 빈 입력에는 빈 리스트를 반환해야 한다. 파일 접근과 출력은 두 함수에 없어야 한다.",
+      "completion_summary": "순수 필터가 정확성과 순서를 보존함",
+      "relates_to": "",
+      "depends_on": [
+        "T2"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "implements"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T4",
+      "kind": "implementation",
+      "purpose": "확정된 경로에서 sample.log를 읽고 추출 결과를 합의된 스트림과 형식으로 출력하는 실행 계층 및 명시적 실패 처리를 연결한다.",
+      "purpose_summary": "실행 진입점과 실패 처리 연결",
+      "deliverable": "reader.py의 main()과 __main__ 보호 블록, T1에 따른 경로 선택, 정상 출력, FileNotFoundError·PermissionError·UnicodeDecodeError 처리 및 확정된 종료 코드 처리.",
+      "deliverable_summary": "실행 가능한 main과 오류 처리",
+      "completion": "python reader.py 실행이 read_lines→extract_error_lines→출력 순서로 동작하고 결과 줄 이외의 내용을 정상 출력에 쓰지 않아야 한다. 오류 메시지는 정상 결과와 분리된 스트림으로 나가며 합의된 종료 코드를 반환해야 한다. import reader는 파일 읽기나 출력을 발생시키지 않고, sample.log를 변경하지 않아야 한다.",
+      "completion_summary": "CLI 정상·실패 계약이 정확히 연결됨",
+      "relates_to": "",
+      "depends_on": [
+        "T3"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "implements"
+        },
+        {
+          "key": "C-02",
+          "relation": "implements"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T5",
+      "kind": "implementation",
+      "purpose": "p5에서 승인한 방식으로 C-01과 C-02를 반복 실행할 수 있는 검증 수단을 준비한다.",
+      "purpose_summary": "반복 가능한 검증 수단 준비",
+      "deliverable": "영구 테스트가 승인되면 외부 의존성 없는 표준 라이브러리 테스트 파일을, 승인되지 않으면 파일을 추가하지 않는 Python 명령과 기대 결과표를 제공한다. 두 방식 모두 함수 결과와 stdout·stderr·종료 코드를 독립적으로 검사한다.",
+      "deliverable_summary": "승인 범위에 맞는 검증 하네스",
+      "completion": "검증 수단이 T1의 모든 정상·경계·실패 사례를 실행할 수 있고, 실제값과 기대값이 다르면 성공으로 처리하지 않아야 한다. 외부 패키지를 요구하지 않고 sample.log를 변경하지 않으며, 추가 파일은 p5에서 승인된 경우에만 생성해야 한다.",
+      "completion_summary": "모든 합의 사례를 자동 판정 가능",
+      "relates_to": "",
+      "depends_on": [
+        "T1"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "verifies"
+        },
+        {
+          "key": "C-02",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T6",
+      "kind": "verification",
+      "purpose": "판정·추출 계층이 C-01의 정확성, 완전성, 순서 보존 조건을 독립적으로 만족하는지 확인한다.",
+      "purpose_summary": "판정·추출 로직 검증",
+      "deliverable": "T5의 검증 수단으로 실행한 is_error_line 및 extract_error_lines 사례별 통과·실패 결과와 실제·기대 목록 비교.",
+      "deliverable_summary": "순수 함수 검증 결과",
+      "completion": "판정 대상은 모두 한 번씩 선택되고 비대상은 모두 제외되며, 대소문자 변형은 p2 정책대로 처리되어야 한다. 빈 입력·빈 줄·형식 이상 줄에서 예외가 없어야 하고, 중복과 입력 순서가 그대로 유지되어야 한다. 모든 사례가 통과해야 완료한다.",
+      "completion_summary": "C-01 함수 수준 사례 전부 통과",
+      "relates_to": "",
+      "depends_on": [
+        "T3",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T7",
+      "kind": "verification",
+      "purpose": "실제 sample.log를 이용한 정상 실행이 필터 결과와 출력 계약을 끝까지 보존하는지 확인한다.",
+      "purpose_summary": "정상 실행 종단 검증",
+      "deliverable": "p4에서 정한 실행 위치와 호출 방식으로 reader.py를 실행해 수집한 stdout, stderr, 종료 코드 및 T1의 기대값과의 비교 결과.",
+      "deliverable_summary": "sample.log 종단 실행 결과",
+      "completion": "stdout의 줄 목록과 순서가 T1에서 확정한 sample.log 기대 목록과 정확히 같고 추가 접두어·안내 문구가 없어야 한다. 정상 실행의 stderr는 비어 있고 종료 코드는 합의값이어야 한다. 경로 해석도 p4 결정과 일치해야 한다.",
+      "completion_summary": "실제 파일 출력과 계약이 완전 일치",
+      "relates_to": "",
+      "depends_on": [
+        "T4",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "verifies"
+        },
+        {
+          "key": "C-02",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T8",
+      "kind": "verification",
+      "purpose": "무결과와 파일 읽기 실패가 정상 결과를 오염시키지 않고 합의된 메시지·스트림·종료 코드로 처리되는지 확인한다.",
+      "purpose_summary": "무결과·실패 경로 검증",
+      "deliverable": "0건 입력, FileNotFoundError, PermissionError, UnicodeDecodeError와 p3에서 요구한 경우 BrokenPipeError를 제어된 방식으로 발생시켜 수집한 stdout·stderr·종료 코드 결과.",
+      "deliverable_summary": "예외별 스트림과 종료 코드 결과",
+      "completion": "각 실패에서 stdout은 비어 있고 stderr는 T1의 한 줄 메시지 계약과 일치하며 스택 트레이스가 노출되지 않아야 한다. 종료 코드는 예외별 합의값이어야 한다. 0건은 합의대로 무출력 정상 종료해야 하고, import 시 I/O가 없어야 하며 기존 read_lines의 UTF-8 strict 및 rstrip 동작이 유지되어야 한다.",
+      "completion_summary": "모든 실패·회귀 사례가 계약대로 동작",
+      "relates_to": "",
+      "depends_on": [
+        "T4",
+        "T5"
+      ],
+      "criteria": [
+        {
+          "key": "C-02",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    },
+    {
+      "key": "T9",
+      "kind": "integration",
+      "purpose": "독립 검증을 하나의 최종 결과로 통합하고 변경 범위가 승인된 설계에서 벗어나지 않았는지 확인한다.",
+      "purpose_summary": "전체 검증과 변경 범위 최종 감사",
+      "deliverable": "T6~T8 전체 재실행 결과, Git diff 기반 변경 파일 목록, reader.py 구조 점검, sample.log 원본 비교 및 남은 위험 기록.",
+      "deliverable_summary": "통합 검증·범위 감사 보고",
+      "completion": "T6~T8이 동일한 최종 코드에서 모두 통과해야 한다. reader.py에는 판정·추출·실행 계층이 분리되어 있고 기존 read_lines가 보존되어야 한다. sample.log는 변경되지 않아야 하며, p5에서 승인하지 않은 파일이나 의존성이 추가되지 않아야 한다. C-01과 C-02 각각에 통과 증거가 있어야 완료한다.",
+      "completion_summary": "전체 기준 통과 및 승인 범위 준수",
+      "relates_to": "",
+      "depends_on": [
+        "T6",
+        "T7",
+        "T8"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relation": "verifies"
+        },
+        {
+          "key": "C-02",
+          "relation": "verifies"
+        }
+      ],
+      "origin": "ai_proposal"
+    }
+  ]
+}

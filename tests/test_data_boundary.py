@@ -553,3 +553,75 @@ def test_the_controller_never_parses_the_preparation_document(harness):
         source = inspect.getsource(module)
         assert "prep_doc.parse(" not in source, f"{module.__name__} 이 산출물 본문을 해석한다"
         assert "prep_doc.structure(" not in source
+
+
+def test_task_bodies_stay_on_the_runner(harness):
+    """AC-15: Task 의 목적·산출물·완료 조건 **서술**이 제어부 바이트에 없다.
+
+    제어부에는 작성자가 따로 쓴 짧은 요약만 온다. 본문을 잘라 쓰면 서술의
+    앞부분이 제어부에 남는다 — P2-02에서 질문 요약이 본문 발췌였던 것을 고친
+    것과 같은 규칙이다.
+    """
+    from tests.conftest import fake_preparation_response
+    from tests.test_preparation import _agreed_case
+
+    marker = "TASK-BODY-7d4e2-원문본문"
+    case, _intent = _agreed_case(harness)
+    harness.agent.cli_executor.plan_response = fake_preparation_response(
+        "계획",
+        {"tasks": "작업 목록은 tasks 에 있다", "verification": "표본 파일 시험"},
+        tasks=[
+            {
+                "key": "T1",
+                "purpose": f"{marker} 목적 서술",
+                "purpose_summary": "필터 구현",
+                "deliverable": f"{marker} 산출물 서술",
+                "deliverable_summary": "filter_errors",
+                "completion": f"{marker} 완료 조건 서술",
+                "completion_summary": "표본 파일에서 기대한 줄만 남는다",
+            }
+        ],
+    )
+    assert harness.ai_prepare(case["id"], "design").status_code == 201
+    assert harness.review_stage(case["id"], "design").status_code == 201
+    assert harness.ai_prepare(case["id"], "plan").status_code == 201
+
+    encoded = marker.encode("utf-8")
+    assert encoded not in _controller_bytes(harness), "Task 본문이 제어부 DB에 남았다"
+    assert encoded not in Path(harness.controller_config.log_path).read_bytes()
+    # 없으면 애초에 저장되지 않은 것이므로 경계 확인이 무의미하다.
+    assert encoded in _runner_bytes(harness), "Task 본문이 Runner에도 없다"
+
+
+def test_new_p3_02_tables_have_no_body_columns(harness):
+    """AC-15: P3-02가 더한 표에도 본문 컬럼이 없다. 요약 길이 제한도 함께 본다."""
+    import sqlite3
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    body_like = {"content", "body", "text", "raw", "payload", "content_text", "full_text",
+                 "purpose", "deliverable", "completion", "evidence"}
+    for table in (
+        "work_graph_revision",
+        "task",
+        "task_dependency",
+        "task_criterion",
+        "task_question_block",
+        "task_block_unresolved",
+        "question_block_ref",
+    ):
+        columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        assert columns, f"{table} 이 없다"
+        assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"
+
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE name IN"
+        " ('work_graph_revision','task','task_block_unresolved')"
+    ).fetchall()
+    limits = {r["name"]: r["sql"] for r in rows}
+    assert "length(reason_summary) <= 200" in limits["work_graph_revision"]
+    assert "length(completion_summary) <= 200" in limits["task"]
+    # `raw_ref` 는 Task 키를 가리키는 **식별자**다. 길이 상한으로 본문을 밀어
+    # 넣지 못하게 한다.
+    assert "length(raw_ref) <= 200" in limits["task_block_unresolved"]
+    conn.close()

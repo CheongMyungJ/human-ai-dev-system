@@ -1,0 +1,18 @@
+대상 Case: case-b477c7af6dbfaafb
+작업 그래프 패널 보임: True
+  '작업 그래프' 화면에 있음: True
+  '성공 기준 대응' 화면에 있음: True
+  '사람의 재계획' 화면에 있음: True
+  T1 화면에 있음=True 서버 배정가능=True
+  T2 화면에 있음=True 서버 배정가능=True
+  T3 화면에 있음=True 서버 배정가능=False
+  T4 화면에 있음=True 서버 배정가능=False
+  T5 화면에 있음=True 서버 배정가능=True
+  T6 화면에 있음=True 서버 배정가능=False
+  T7 화면에 있음=True 서버 배정가능=False
+  T8 화면에 있음=True 서버 배정가능=False
+  T9 화면에 있음=True 서버 배정가능=False
+  TV 화면에 있음=True 서버 배정가능=True
+화면에서 작업 추가: 리비전 2 → 3 이유='화면 경로로도 재계획이 되는지 확인한다' 출처=human_replanning
+이유 없는 추가가 거부됨: True
+  리비전이 늘지 않음: True

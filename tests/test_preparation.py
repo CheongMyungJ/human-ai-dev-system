@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 
 from tests.conftest import (
+    FAKE_TASKS,
     FAKE_TOOL_ID,
     FAKE_TOOL_MODE,
     fake_preparation_response,
@@ -45,12 +46,20 @@ def _refusals(response) -> list[str]:
     return response.json()["detail"]["admission"]["refusals"]
 
 
-def _prepare_both(harness, case_id):
-    """설계와 계획을 AI로 작성하고 둘 다 사람 검토한다."""
+def _prepare_both(harness, case_id, finish_first_task: bool = True):
+    """설계와 계획을 AI로 작성하고 둘 다 사람 검토한다.
+
+    **P3-02부터 계획이 작업 그래프를 낳는다.** `FAKE_TASKS` 의 T2 는 T1 을
+    기다리므로, 구현 배정을 보려는 시험은 T1 을 실제 실행으로 끝내야 한다.
+    사람이 "끝났다"고 적는 경로는 만들지 않았다 — 실행 증거 없이 의존을 푸는
+    문이 되기 때문이다. 의존 자체를 확인하는 시험은 `finish_first_task=False` 다.
+    """
     assert harness.ai_prepare(case_id, "design").status_code == 201
     assert harness.review_stage(case_id, "design").status_code == 201
     assert harness.ai_prepare(case_id, "plan").status_code == 201
     assert harness.review_stage(case_id, "plan").status_code == 201
+    if finish_first_task:
+        harness.complete_task(case_id, "T1")
 
 
 # ------------------------------------------------------------------- AC-1
@@ -404,7 +413,9 @@ def test_deferred_questions_block_the_implementation(harness):
             }
         ],
     )
-    _prepare_both(harness, case["id"])
+    # 연결 없는 이월 질문은 **모든 Task** 를 막으므로 선행 Task 조차 끝낼 수 없다.
+    # 그것이 P3-02의 안전 기본값이다 — 무엇을 막는지 모르면 전부 막는다.
+    _prepare_both(harness, case["id"], finish_first_task=False)
 
     refusals = _refusals(harness.request_implementation(case["id"]))
     assert "deferred_questions_unresolved" in refusals
@@ -424,6 +435,8 @@ def test_deferred_questions_block_the_implementation(harness):
         },
     )
     assert answer.status_code == 202
+    # 질문이 풀리자 선행 Task 를 실행할 수 있고, 그것이 끝나면 구현이 열린다.
+    harness.complete_task(case["id"], "T1")
     assert harness.request_implementation(case["id"], run_id="run-impl-2").status_code == 201
 
 
@@ -670,6 +683,7 @@ def test_raising_the_level_makes_an_existing_artifact_insufficient(harness):
     harness.agent.cli_executor.plan_response = fake_preparation_response(
         "계획",
         {"tasks": "T1 구현(완료 조건: 시험 통과)", "verification": "표본 파일 시험 1건"},
+        tasks=FAKE_TASKS,
     )
     _prepare_both(harness, case["id"])
     assert harness.preparation(case["id"])["design"]["missing_required_sections"] == []

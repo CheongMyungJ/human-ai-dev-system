@@ -440,7 +440,20 @@ class AdmissionRefusal(str, Enum):
     PLAN_STALE = "plan_stale"
     PLAN_INCOMPLETE_FOR_LEVEL = "plan_incomplete_for_level"
     PLAN_REVIEW_MISSING = "plan_review_missing"
+    #: **P3-02에서 범위가 좁아졌다.** Case 전체가 아니라 그 결정에 의존하는 Task 를
+    #: 막는다. 새 코드를 만들지 않는 이유는 사람이 해야 할 일("그 질문에 답하라")이
+    #: 같기 때문이다. 다만 **연결된 Task 가 하나도 없는 질문은 여전히 전부 막는다** —
+    #: 좁히는 것이 느슨해지는 것이 되지 않게 하는 지점이다.
     DEFERRED_QUESTIONS_UNRESOLVED = "deferred_questions_unresolved"
+
+    # --- P3-02: 작업 그래프 ------------------------------------------------
+    #
+    # 준비(설계·계획) 조건 **위에 얹히는** 조건이며 대체하지 않는다. 계획 검토가
+    # 끝났다는 사실과 무엇을 어떤 순서로 만들지가 정해졌다는 사실은 다른 것이다.
+    WORK_GRAPH_MISSING = "work_graph_missing"
+    WORK_GRAPH_STALE = "work_graph_stale"
+    TASK_NOT_IN_WORK_GRAPH = "task_not_in_work_graph"
+    TASK_DEPENDENCIES_UNMET = "task_dependencies_unmet"
 
 
 class GateId(str, Enum):
@@ -730,3 +743,68 @@ class ContextRefRole(str, Enum):
     CURRENT_DESIGN = "current_design"
     PREVIOUS_PLAN = "previous_plan"
     FEEDBACK = "feedback"
+
+
+# --------------------------------------------------------------------- P3-02
+
+
+class TaskKind(str, Enum):
+    """Task 의 종류(FR-07 "필요한 조사·설계·구현·실험·검증 단위").
+
+    구현과 검증을 값으로 나누는 것이 핵심이다. 합치면 "이 기준을 확인하는 작업이
+    계획에 있는가"를 물을 수 없고, 구현만 있는 계획이 완결된 것처럼 보인다.
+    """
+
+    INVESTIGATION = "investigation"
+    IMPLEMENTATION = "implementation"
+    VERIFICATION = "verification"
+    EXPERIMENT = "experiment"
+    INTEGRATION = "integration"
+
+
+class TaskRelation(str, Enum):
+    """Task 와 성공 기준의 연결 방식(FR-06·FR-07).
+
+    `IMPLEMENTS` 이 Task 가 그 기준을 충족시키는 것을 만든다
+    `VERIFIES`   이 Task 가 그 기준의 충족을 확인한다
+
+    두 값을 합치면 "만들기는 하는데 확인하지 않는 기준"이 보이지 않는다.
+    """
+
+    IMPLEMENTS = "implements"
+    VERIFIES = "verifies"
+
+
+class TaskState(str, Enum):
+    """Task 의 현재 상태. **`DONE` 은 컬럼이 아니라 실행에서 도출한다.**
+
+    사람이 "끝났다"고 적는 경로를 만들지 않는다 — 그것은 실행 증거 없이 의존을
+    푸는 문이 된다(FR-09 "미실행을 실행·통과로 표시하지 않는다"). 완료는 그
+    `task_key` 의 실행 중 `outcome=completed` 가 있는가로 본다.
+
+    `CANCELLED` 만 표에 저장되는 값이며 사람의 재계획으로 정해진다.
+    """
+
+    PLANNED = "planned"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    CANCELLED = "cancelled"
+
+
+class WorkGraphSource(str, Enum):
+    """이 그래프 리비전을 누가 만들었는가.
+
+    `PLAN_ARTIFACT`    검토를 마친 개발계획의 구조 보고에서 태어났다
+    `HUMAN_REPLANNING` 사람이 Task 를 추가·취소하거나 질문 연결을 고쳤다
+
+    두 경우를 합치지 않는 이유는 P3-01이 `stage_review` 에서 사람 검토와 자동
+    진행을 합치지 않은 것과 같다. 무엇이 사람의 결정인지가 기록으로 남아야 한다.
+    """
+
+    PLAN_ARTIFACT = "plan_artifact"
+    HUMAN_REPLANNING = "human_replanning"
+
+
+class WorkGraphState(str, Enum):
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
