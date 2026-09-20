@@ -2,3 +2,8 @@
 *.md text eol=lf
 .gitignore text eol=lf
 .gitattributes text eol=lf
+
+# P1 실행 증거는 CLI 원문 바이트다. 줄바꿈 정규화 대상에서 제외한다.
+p1/evidence/*.jsonl -text
+p1/evidence/*.stderr.log -text
+p1/evidence/*.result.json -text
