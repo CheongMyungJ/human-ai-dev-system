@@ -42,6 +42,7 @@ GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMy
 | [공식 기술 문서 확인](review-tech-findings.md) | 기술 선택 근거와 실제 검증의 구분 |
 | [CLI 안전 중지 조사](cli-pause-feasibility.md) | 세 CLI의 제어 후보·제약·실증 계획 |
 | [최종 문서 검토](design-review-report.md) | 요구사항 추적, 일관성 점검, 남은 기술 검증 |
+| [P1-01 환경 실측·계약 초안](p1-environment-contract.md) | 이 PC의 실측 환경·CLI·인증 상태, 공통 실행 계약과 capability 표 |
 
 ## 검토 결과의 경계
 

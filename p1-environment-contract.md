@@ -1,0 +1,171 @@
+# P1-01 실행 환경 실측과 공통 어댑터 계약 초안
+
+조사일: 2026-09-20. 대상 PC: 사용자 Windows 개발 PC 1대. Plan ID: `P1-PLAN-01`.
+
+이 문서는 **P1-01(환경·계약)의 결과물**이다. 아래 2~5절은 이 PC에서 실제로 실행한 조회 명령의 결과이며, 6~9절은 그 사실과 공식 문서·CLI 도움말을 근거로 만든 **계약 초안**이다. 초안은 어댑터 구현 근거이며 실행 검증 결과가 아니다. CLI를 실제로 호출해 작업을 수행하는 실증은 P1-02 이후에 한다.
+
+**이 문서에서 하지 않은 것:** CLI로 실제 작업 실행, 도구 경계 정지 시험, 연결 단절·복구 시험, OpenCode 설치·실행. 이 항목들은 9절에 미검증으로 남겨 둔다.
+
+## 1. 조사 방법과 판정 규칙
+
+| 판정 | 의미 | 이 문서의 표기 |
+|---|---|---|
+| `설치 확인` | 실행 파일 경로 확인 + 버전 출력 성공 | 경로와 버전을 함께 기록 |
+| `PATH 미조회` | 현재 셸의 PATH에서 찾지 못함. 설치 여부는 별도 확인 필요 | 추가 조회 결과와 함께 기록 |
+| `설치 흔적 없음(조사 범위 내)` | PATH + 패키지 관리자 + 일반 설치 경로에서 모두 확인되지 않음 | 조사한 범위를 함께 기록. 디스크 전체 검색은 하지 않았으므로 `미설치 확정`으로 쓰지 않는다 |
+
+실행한 조회 명령(PowerShell 7):
+
+```powershell
+Get-Command <name> -All            # 실행 파일 경로와 종류
+<tool> --version                   # 실제 버전
+Get-CimInstance Win32_OperatingSystem
+npm ls -g --depth=0                # 전역 npm 패키지
+winget list --id sst.opencode
+Test-Path <설치 후보 경로>          # 존재 여부만 확인
+codex doctor / claude doctor       # 설치·인증·런타임 진단
+```
+
+`codex doctor`·`claude doctor`의 원문 출력에는 계정·엔드포인트 정보가 섞여 있어 저장소에는 **판정에 필요한 항목만 요약**해 남긴다. 인증 파일은 존재·크기·수정시각만 확인했고 내용은 열지 않았다.
+
+## 2. 기반 환경 실측
+
+| 항목 | 실측값 | 확인 방법 |
+|---|---|---|
+| OS | Microsoft Windows 11 Home, 버전 10.0.26200, 빌드 26200, 64비트, 로캘 ko-KR | `Win32_OperatingSystem`, `codex doctor` |
+| 셸 | PowerShell 7.6.6 (Windows Terminal). 콘솔 코드 페이지 입·출력 모두 65001 | `$PSVersionTable`, `codex doctor` |
+| Python (기본) | 3.12.10 — `C:\Users\USER\AppData\Local\Programs\Python\Python312\python.exe` | `python --version` |
+| Python (추가) | 3.14.7 — `...\Python314\python.exe`. `py` 런처 기본값은 **3.14** | `py -0` |
+| Git | 2.52.0.windows.1 — `C:\Program Files\Git\cmd\git.exe` | `git --version` |
+| Node / npm | v22.15.1 / 10.9.2 — `C:\Program Files\nodejs\` | `node --version`, `npm --version` |
+| GitHub CLI | 2.100.0 — `C:\Program Files\GitHub CLI\gh.exe` | `gh --version` |
+| 디스크 여유 | 689.4 GiB | `codex doctor` |
+
+**주의 1.** `python`과 `py`의 기본 버전이 다르다(3.12 대 3.14). P2에서 제어부·Runner를 만들 때 실행 스크립트가 어느 인터프리터를 쓰는지 명시하지 않으면 세션마다 다른 런타임이 잡힌다. NFR-08의 재현성 요구에 직접 걸리므로 P2-01에서 사용할 Python 버전을 고정한다. 이 문서는 버전을 선택하지 않는다.
+
+**주의 2.** 위 값은 **이 PC 1대의 관측**이다. NFR-08이 정한 우선 호환 환경(Windows 11 Home 10.0.26200)과 일치하지만, 이를 최소 지원 버전이나 다른 Windows 호환 보장으로 확대하지 않는다.
+
+## 3. 코딩 CLI 실측
+
+| CLI | 상태 | 버전 | 실행 경로 | 설치 방식 |
+|---|---|---|---|---|
+| Codex | 설치 확인 | `codex-cli 0.154.0` | PATH 진입점 `C:\Users\USER\AppData\Roaming\npm\codex.cmd` → 실제 `...\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\bin\codex.exe` | 전역 npm `@openai/codex@0.154.0` |
+| Claude Code | 설치 확인 | `2.1.278 (Claude Code)`, commit 809c980662e3, win32-x64 | PATH 진입점 `C:\Users\USER\AppData\Roaming\npm\claude.cmd` → `...\node_modules\@anthropic-ai\claude-code\bin\claude.exe` | 전역 npm `@anthropic-ai/claude-code@2.1.278` |
+| OpenCode | 설치 흔적 없음(조사 범위 내) | — | — | — |
+
+OpenCode 조사 범위: PATH(`Get-Command opencode`), 전역 npm 목록, `winget list --id sst.opencode`, scoop·chocolatey 디렉터리, `%LOCALAPPDATA%\Programs`, `%APPDATA%\npm`, `%LOCALAPPDATA%\Microsoft\WinGet\Packages`, `~\.opencode`, `~\.config\opencode`. 모두 없음. 디스크 전체 검색은 하지 않았다. 이는 사전에 합의한 제한(P1 범위에서 OpenCode 설치 제외)과 일치하며, OpenCode는 P1-04에서 **문서 계약만** 다룬다.
+
+두 CLI 모두 **자동 업데이트가 켜져 있다**. Codex는 0.155.1이 이미 배포됐고 Claude Code는 최근 자동 업데이트 성공 기록(2026-09-19)이 있다. 어댑터 계약과 실증 결과에는 반드시 **관측한 버전 문자열**을 함께 남겨야 하며, 버전이 바뀐 뒤의 실증 결과를 이전 버전의 검증으로 재사용하지 않는다.
+
+## 4. 인증과 비밀값 취급
+
+| 항목 | 관측 | 근거 |
+|---|---|---|
+| Codex 인증 | 구성됨. 저장 방식 `File`, 모드 `chatgpt`, 저장된 API 키 없음, ChatGPT 토큰 있음. 파일 `~\.codex\auth.json` 존재 | `codex doctor`(요약 항목), `Test-Path` |
+| Codex 연결 | 활성 공급자 엔드포인트 도달 가능. websocket 핸드셰이크 HTTP 101 성공 | `codex doctor` |
+| Claude 인증 | `~\.claude\.credentials.json` 존재(523바이트, 2026-09-20). `claude doctor`는 설치 문제 없음으로 보고 | `Test-Path`, `claude doctor` |
+| OpenCode 인증 | 해당 없음(미설치) | — |
+
+**계약상 결론:** 두 CLI 모두 **자격증명을 각자의 사용자 홈 저장소에 보관**하므로, 이 시스템은 실행 시 비밀값을 읽거나 주입하지 않고 CLI를 그대로 호출하면 된다. 이는 FR-28·NFR-07의 "로그인은 Runner에 유지", "외부 AI 전송은 기존 CLI 설정을 따른다"와 맞는다. 어댑터는 자격증명 파일을 읽지 않고, 인증 실패는 CLI가 반환한 오류로만 판정한다.
+
+다만 **인증 파일이 있다는 사실이 호출 성공을 보장하지 않는다.** 토큰 만료·요금제 한도·조직 정책은 실제 호출에서만 드러난다. 따라서 이 절은 "인증 구성됨"까지만 확정하고, "사용 가능"은 P1-02의 실행 증거로 판정한다.
+
+## 5. 관측한 권한·격리 차이
+
+| CLI | 관측값 | 해석 |
+|---|---|---|
+| Codex | `codex doctor` 기준 sandbox = 제한된 파일시스템 + 제한된 네트워크, 승인 정책 `OnRequest`, sandbox backend `elevated`, provisioning complete | Windows 네이티브에서 sandbox 기능이 구성되어 있다고 **진단 도구가 보고**한다. 실제 차단 동작은 확인하지 않았다 |
+| Claude Code | `claude doctor`에 sandbox 항목 없음. 기존 조사(`review-tech-findings.md`)는 Windows 네이티브 내장 sandbox 미지원·WSL2 지원으로 기록 | Windows 네이티브 공통 모드에서 두 CLI의 OS 격리 수준을 같다고 표시할 수 없다 |
+| 공통 | Codex는 `--sandbox {read-only, workspace-write, danger-full-access}`, Claude는 `--permission-mode`·`--allowedTools`·`--tools`·`--restricted`로 권한을 표현 | 권한 모델의 **축이 다르다**. 공통 계약은 요구 권한을 추상 값으로 받고 CLI별로 매핑하되, 매핑할 수 없는 조합은 미지원으로 표시한다 |
+
+Codex 진단의 sandbox 보고는 **설정값**이며 실제 쓰기 차단·네트워크 차단 관찰이 아니다. P1-02에서 허용 밖 경로 쓰기를 시도해 실제 결과를 확인하기 전까지 "격리 확인됨"으로 쓰지 않는다. 어느 쪽도 D-42·44가 전제한 신뢰 모드의 한계를 넘는 OS 완전 격리로 설명하지 않는다.
+
+## 6. 공통 실행 계약 초안 v0 — 입력(RunRequest)
+
+CLI별 인자 형태가 아니라 **제어부가 표현해야 할 의미**를 정의한다. NFR-07에 따라 업무 상태를 특정 CLI의 세션·출력 형식·ID 체계에 종속시키지 않는다.
+
+| 필드 | 의미 | 필수 | 비고 |
+|---|---|---|---|
+| `run_id` | 시스템이 만드는 실행 식별자. 재전송 멱등 키 | 필수 | 같은 `run_id` 재전달은 새 실행을 만들지 않는다 |
+| `case_id` / `task_id` / `role` | 업무 연결과 역할(작성·의미 검토). 검토는 작성과 별도 세션 | 필수 | FR-29의 별도 세션 요구 |
+| `assignment_generation` | 배정 세대 번호(fencing) | 필수 | 오래된 실행자의 갱신 거부용 |
+| `tool_id` / `tool_version_expected` | `codex` / `claude` / `opencode`와 기대 버전 | 필수 | 실제 관측 버전과 불일치하면 결과에 표시 |
+| `mode` | 실행 모드 식별자(예: Codex `exec`, Claude `print`) | 필수 | 모드마다 능력표가 다르다 |
+| `model` | 프로젝트 기본의 Case·역할별 override | 선택 | 미지정이면 CLI 설정을 따른다 |
+| `workspace` | `repo_path`, `worktree_path`, `branch`, `base_commit` | 필수 | 서버 프로젝트 ID와 Runner 실제 경로를 구분 |
+| `permission` | 추상 권한: `read_only` / `workspace_write` / `explicit_escalated` | 필수 | CLI별 매핑은 7절. 매핑 불가는 실행 거부 |
+| `writable_paths` | 추가 쓰기 허용 경로 | 선택 | 워크스페이스 밖 경로는 기본 불허 |
+| `instruction_ref` | 입력 원문의 영속 참조(ID·버전·해시) | 필수 | 원문 자체는 PC 보관. 서버에는 참조만 |
+| `context_refs` | 함께 전달한 자료의 ID·버전 목록 | 필수(빈 목록 허용) | NFR-09의 출처 추적 |
+| `output_schema` | 구조화 결과 스키마 | 선택 | 지원 CLI에서만 적용 |
+| `session` | `new` 또는 `resume(session_ref)` | 필수 | 재개 미지원 CLI·모드는 `new`만 허용 |
+| `limits` | 시간·비용 등 상한 | 선택 | 총 자동 실행 시간의 기본 한도는 두지 않는다(D 기준 유지) |
+| `secrets` | **없음** | — | 시스템은 CLI 자격증명을 읽지도 주입하지도 않는다 |
+
+## 7. 공통 실행 계약 초안 v0 — 이벤트와 결과
+
+### 7.1 정규화 이벤트
+
+모든 이벤트는 `run_id`, 단조 증가 `seq`, `ts`, `native_type`(CLI 원래 이벤트 이름), `raw_ref`(원문 저장 위치)를 갖는다. 정규화 종류는 최소한 아래를 둔다.
+
+`run_started` · `session_identified` · `assistant_message` · `tool_call_started` · `tool_call_finished` · `permission_requested` · `permission_decided` · `usage_reported` · `error` · `run_finished`
+
+CLI가 어떤 종류를 제공하지 않으면 **비어 있는 것으로 두고 추정으로 채우지 않는다.** 예를 들어 `tool_call_started`를 관측할 수 없는 모드는 8절 능력표에서 `tool_boundary_observed = unsupported`가 되고, 그 모드에는 도구 경계 정지 기능을 배정하지 않는다.
+
+이벤트는 Runner 로컬에 먼저 보존한 뒤 전송한다(`execution-workspace-review.md` 3절). 재접속 시 `run_id + seq`로 중복·누락을 대조한다.
+
+### 7.2 결과(RunResult)
+
+| 필드 | 값 | 규칙 |
+|---|---|---|
+| `outcome` | `completed` / `failed` / `cancelled` / `unknown` | **종료 코드만으로 `completed`를 쓰지 않는다**(FR-28). `unknown`은 정상 상태값이며 실패로도 성공으로도 바꾸지 않는다 |
+| `exit_code` | 정수 또는 없음 | 참고 정보 |
+| `final_output` | 최종 메시지 / 구조화 결과 | 원문 참조와 함께 보존 |
+| `session_ref` | CLI가 준 세션·스레드 식별자 | 재개 가능 여부와 함께 기록 |
+| `usage` | 제공값 또는 `not_reported` | **미제공을 0으로 표시하지 않는다**(P6-05 기준) |
+| `workspace_effect` | 실행 전후 HEAD·인덱스·미커밋 변경 비교 결과 | 실행 전후 스냅샷으로 산출 |
+| `residual_activity` | 남은 자식 프로세스·백그라운드 활동 | 확인 불가면 `unknown` |
+| `observed_tool_version` | 실행 시점 CLI 버전 | 능력표 적용 근거 |
+
+`outcome`은 제어부가 **이벤트·결과물·작업공간 변화**를 함께 보고 판정한다. 이 판정 규칙 자체가 P1-02의 검증 대상이다.
+
+## 8. Capability 표 (P1-01 시점)
+
+상태값: `doc_only`(공식 문서·CLI 도움말에 인터페이스 존재, 실행 미확인) · `verified`(이 PC에서 실제 관측) · `unsupported`(없음을 확인) · `unknown`(확인 안 함).
+
+| 능력 | Codex 0.154.0 | Claude Code 2.1.278 | OpenCode | 근거 |
+|---|---|---|---|---|
+| 설치·기동 | `verified` | `verified` | `unsupported`(미설치) | 3절 |
+| 인증 구성 | `verified` | `verified`(파일 존재 + doctor 정상) | — | 4절 |
+| 비대화식 실행 | `doc_only` — `codex exec [PROMPT]` | `doc_only` — `claude -p` | `unknown` | `--help` |
+| 구조화 이벤트 스트림 | `doc_only` — `codex exec --json`(JSONL) | `doc_only` — `--output-format stream-json` | `unknown` | `--help` |
+| 최종 결과 분리 수집 | `doc_only` — `-o/--output-last-message <FILE>` | `doc_only` — `--output-format json` | `unknown` | `--help` |
+| 구조화 출력 스키마 | `doc_only` — `--output-schema <FILE>` | `doc_only` — `--json-schema <schema>` | `unknown` | `--help` |
+| 세션 식별·재개 | `doc_only` — `codex exec resume`, `fork`, `resume --last` | `doc_only` — `--session-id <uuid>`, `--resume`, `--fork-session` | `unknown` | `--help` |
+| 작업 디렉터리 고정 | `doc_only` — `-C/--cd` | `doc_only` — 프로세스 cwd + `--add-dir` | `unknown` | `--help` |
+| 쓰기 범위 제한 | `doc_only` — `--sandbox`, `--add-dir` | `doc_only` — `--permission-mode`, `--allowedTools`, `--restricted` | `unknown` | `--help`, 5절 |
+| 승인 요청 노출 | `doc_only` — `--ask-for-approval on-request` | `doc_only` — `--permission-prompts host\|none` | `unknown` | `--help` |
+| 도구 경계 관찰 | `unknown` | `unknown` | `unknown` | 이벤트 실물 미확인 |
+| **다음 호출 차단** | `unknown` — hooks·app-server가 후보 | `unknown` — PreToolUse·권한 훅이 후보 | `unknown` | `cli-pause-feasibility.md` |
+| 취소·종료 확인 | `unknown` | `doc_only` — `claude stop <id>`(백그라운드 세션) | `unknown` | `--help` |
+| 자식·병렬 활동 추적 | `unknown` | `unknown` | `unknown` | 미확인 |
+| 재연결 결과 대조 | `unknown` | `unknown` | `unknown` | 미확인 |
+| 사용량 제공 | `unknown` | `doc_only` — `--max-budget-usd`(상한 설정) | `unknown` | `--help` |
+| 별도 세션 분리(작성/검토) | `doc_only` — 새 exec 호출 | `doc_only` — 새 `-p` 호출 / 별도 `--session-id` | `unknown` | `--help` |
+
+**이 표에서 `doc_only`는 "지원함"이 아니다.** CLI 도움말에 옵션이 있다는 사실이며, 실제 동작·Windows 네이티브 차이·조합 제약은 P1-02 이후에 확인한다. 특히 **다음 호출 차단**은 P1의 핵심 요구인데 현재 어느 CLI에서도 `unknown`이며, 여기에 필요한 통제가 없으면 관련 기능의 지원을 보류한다.
+
+## 9. P1-02 이후로 넘기는 미검증 항목
+
+| 항목 | 넘긴 하위 작업 | 확인해야 할 것 |
+|---|---|---|
+| 실제 호출 성공과 인증 유효성 | P1-02 | 임시 시험 저장소에서 읽기·작은 변경. 종료 코드 외의 증거 |
+| 이벤트 스키마 실물 | P1-02 | `--json` / `stream-json`의 실제 필드와 도구 경계 표현 |
+| 세션 식별·분리 | P1-02 | 작성·검토 호출이 서로 다른 세션인지 식별자로 확인 |
+| 권한 경계 실동작 | P1-02 | 허용 밖 경로 쓰기 시도의 실제 결과. 5절의 진단 보고와 대조 |
+| 도구 경계 정지 | P1-03 | 단절 감지 → 현재 호출 종료 → 다음 호출 미시작의 증거 |
+| 취소·프로세스 종료·자식 활동 | P1-03 | 요청 수신과 실제 종료 확인의 구분 |
+| 재연결 대조·중복 방지 | P1-03 | 지연 이벤트·응답 유실에서 중복 실행이 없는지 |
+| Python 런타임 고정 | P2-01 | 3.12 / 3.14 중 사용할 버전과 실행 스크립트 반영 |
+| OpenCode | P1-04 | 공식 문서 계약·fixture·계약 시험만. 설치·실행으로 표시하지 않음 |
+| CLI 버전 변동 | 상시 | 자동 업데이트로 버전이 바뀌면 해당 실증의 유효 범위를 다시 표시 |
