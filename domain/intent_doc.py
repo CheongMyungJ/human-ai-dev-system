@@ -20,6 +20,7 @@ import json
 from typing import Any
 
 from domain.models import (
+    AuthoringMode,
     ConfirmationState,
     ContentOrigin,
     DecideAt,
@@ -51,26 +52,46 @@ def _short(text: str) -> str:
     return one_line[: SUMMARY_LIMIT - 1] + "…"
 
 
+#: 작성 주체에 따른 설명. **문서에 적히는 것은 실제로 일어난 일이어야 한다.**
+#:
+#: P2-02까지는 사람만 초안을 쓸 수 있었고 문서에도 그렇게 적었다. P2-03에서 AI
+#: 작성 경로가 생겼으므로 두 경우를 구분한다. 한쪽 문구를 그대로 두면 문서가
+#: 거짓말을 한다.
+AUTHORING_NOTE = {
+    AuthoringMode.HUMAN_TYPED: (
+        "사람이 화면에서 직접 입력한 초안이다. AI가 제시한 것이 아니다."
+    ),
+    AuthoringMode.AI_DRAFTED: (
+        "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다."
+    ),
+}
+
+
 def compose(
     fields: dict[str, dict[str, Any]],
     questions: list[dict[str, Any]],
     case_id: str,
     authored_by: str,
+    authoring_mode: AuthoringMode = AuthoringMode.HUMAN_TYPED,
+    author_run_id: str | None = None,
 ) -> bytes:
     """여섯 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
     비어 있는 항목은 **삭제하지 않고** 본문 없이 `undecided` 로 남긴다
     (intent-artifacts.md 1절). 여기서 값을 추정해 채우지 않는다.
 
-    `authored_by` 는 이 초안을 실제로 쓴 주체다. P2-02에서는 사람이다 —
-    AI 작성자 연결은 P2-03 이후이며 그 사실을 문서에 그대로 적는다.
+    `authored_by` 와 `authoring_mode` 는 이 초안을 **실제로 쓴 주체**다.
+    FR-03의 핵심은 여섯 항목이 기록되는 것이 아니라 AI가 제시하고 사람이 검토하는
+    역할 분리이므로, 둘 중 어느 쪽이 썼는지를 문서가 스스로 말해야 한다.
     """
     body: dict[str, Any] = {
         "doc_type": DOC_TYPE,
         "doc_version": DOC_VERSION,
         "case_id": case_id,
         "authored_by": authored_by,
-        "authoring_note": "P2-02: 사람이 입력한 초안이다. AI 작성자 연결은 P2-03 이후다.",
+        "authoring_mode": AuthoringMode(authoring_mode).value,
+        "author_run_id": author_run_id,
+        "authoring_note": AUTHORING_NOTE[AuthoringMode(authoring_mode)],
         "fields": {},
         "questions": [],
     }

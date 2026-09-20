@@ -89,3 +89,18 @@ class ControllerClient:
 
     def send_intent_structure(self, payload: dict) -> Any:
         return self._post("/api/runner/intent-structure", payload)
+
+    # ----------------------------------------------------------- P2-03
+
+    def create_intent_version(self, payload: dict) -> Any:
+        """AI가 작성한 초안을 의도 버전으로 만든다.
+
+        P2-02의 경로와 **방향이 반대다.** 거기서는 브라우저가 항목을 보내면
+        제어부가 문서를 묶어 내려보냈다. 여기서는 초안이 이 Runner에서 태어나므로
+        본문은 이미 여기 있고 제어부로는 참조만 올라간다.
+        """
+        return self._post("/api/runner/intent-versions", payload)
+
+    def send_gate_review(self, payload: dict) -> Any:
+        """AI 의미 검토가 찾은 것을 올린다. **판정은 제어부가 다시 계산한다.**"""
+        return self._post("/api/runner/gate-reviews", payload)

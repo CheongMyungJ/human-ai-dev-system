@@ -278,3 +278,80 @@ CREATE INDEX IF NOT EXISTS idx_question_case ON intent_question(case_id, state);
 CREATE INDEX IF NOT EXISTS idx_feedback_case ON feedback(case_id, state);
 CREATE INDEX IF NOT EXISTS idx_read_request_pending
     ON artifact_read_request(state, owner_runner_id);
+
+-- ===================================================================
+-- 스키마 v3 (P2-03 진입 제어·제한 실행)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 게이트 검토에 들어간 지시, AI 검토가 낸 서술, 진입 검사가 본 원문은 모두
+-- 소유 Runner에 있고 여기에는 판정·사유 코드·참조·짧은 요약만 남는다.
+-- ===================================================================
+
+-- 품질 게이트 판정. 이번 단계는 QG-01만 만든다.
+--
+-- 판정은 **대상 의도 버전과 그 시점의 원문 해시에 묶인다.** 새 버전이 생기면
+-- 이전 판정을 승계하지 않고 `needs_recheck` 로 바꾼다(quality-gates 2절
+-- "다시 켤 때는 유효한 증거를 재사용", 3절 "변경으로 재검토 필요").
+--
+-- `rule_verdict` 와 `ai_verdict` 를 따로 두는 이유는 두 검사의 성격이 다르기
+-- 때문이다(quality-gates 4절 A~D). 규칙만 통과한 상태는 게이트 통과가 아니다.
+CREATE TABLE IF NOT EXISTS gate_result (
+    id                   TEXT PRIMARY KEY,
+    case_id              TEXT NOT NULL REFERENCES "case"(id),
+    gate                 TEXT NOT NULL,          -- QG-01
+    intent_version_id    TEXT NOT NULL REFERENCES intent_version(id),
+    subject_content_hash TEXT NOT NULL,          -- 판정 대상 원문의 해시
+    verdict              TEXT NOT NULL,          -- pass|fail|hold|not_run|needs_recheck|blocked
+    rule_verdict         TEXT NOT NULL,
+    ai_verdict           TEXT NOT NULL,
+    ai_run_id            TEXT REFERENCES run(run_id),
+    ai_session_ref       TEXT,                   -- 검토 세션 식별자(실제 CLI가 준 값)
+    author_session_ref   TEXT,                   -- 작성 세션 식별자. 같으면 별도 세션이 아니다
+    evaluated_at         TEXT NOT NULL,
+    reviewed_at          TEXT,
+    superseded_at        TEXT,
+    UNIQUE (intent_version_id, gate)
+);
+
+-- 개별 발견 사항. 점수로 합산하지 않고 기준·필수/권고·차단 효과를 각각 남긴다
+-- (quality-gates 3절 "점수 대신 근거와 판정의 분리").
+CREATE TABLE IF NOT EXISTS gate_finding (
+    id                   TEXT PRIMARY KEY,
+    gate_result_id       TEXT NOT NULL REFERENCES gate_result(id),
+    source               TEXT NOT NULL,          -- rule | ai
+    criterion            TEXT NOT NULL,          -- 어떤 기준을 위반하는지
+    severity             TEXT NOT NULL,          -- required | advisory
+    blocking             INTEGER NOT NULL,       -- 이 발견이 진행을 막는가
+    certainty            TEXT NOT NULL,          -- confirmed | suspected
+    target               TEXT NOT NULL,          -- 대상(항목 이름 등)
+    summary              TEXT NOT NULL,          -- 짧은 요약. 원문 대체 아님
+    evidence_artifact_id TEXT,                   -- 근거 원문 참조. 본문은 Runner에
+    created_at           TEXT NOT NULL,
+    CHECK (length(summary) <= 200)
+);
+
+-- 진입 조건 검사 기록. **통과도 거부도 남긴다.**
+-- 거부는 화면 밖(직접 API 호출)에서도 같은 근거로 재현돼야 하므로 결정에 쓴
+-- 상태값을 함께 적는다(FR-29 수용 기준).
+CREATE TABLE IF NOT EXISTS admission_check (
+    id                     TEXT PRIMARY KEY,
+    case_id                TEXT NOT NULL REFERENCES "case"(id),
+    run_id                 TEXT,                 -- 허용된 경우의 Run. 거부면 NULL
+    requested_run_id       TEXT NOT NULL,
+    requested_purpose      TEXT NOT NULL,
+    requested_role         TEXT NOT NULL,
+    requested_permission   TEXT NOT NULL,
+    requested_task_id      TEXT NOT NULL,
+    requested_tool_id      TEXT NOT NULL,
+    profile                TEXT NOT NULL,        -- feature_intent | non_feature_minimal | intent_production
+    outcome                TEXT NOT NULL,        -- admitted | refused
+    refusals_json          TEXT NOT NULL,        -- 사유 코드 목록(본문 없음)
+    intent_version_id      TEXT,
+    intent_agreement_state TEXT,
+    gate_verdict           TEXT,
+    checked_at             TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gate_result_case ON gate_result(case_id, gate);
+CREATE INDEX IF NOT EXISTS idx_gate_finding_result ON gate_finding(gate_result_id);
+CREATE INDEX IF NOT EXISTS idx_admission_case ON admission_check(case_id, checked_at);

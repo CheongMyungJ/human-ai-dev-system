@@ -250,3 +250,97 @@ def test_the_controller_never_parses_the_intent_document(harness):
     assert intent["fields"] == [], "제어부가 본문에서 항목을 만들어 냈다"
     assert intent["questions"] == []
     assert intent["availability"] == "pending"
+
+
+# ===================================================================== P2-03
+
+
+def test_the_gate_review_body_never_reaches_the_controller(harness):
+    """AC-12: 게이트 검토 지시와 검토 서술 본문이 제어부에 남지 않는다.
+
+    게이트는 새로운 종류의 본문을 만든다 — 검토 지시문과 AI가 쓴 지적 내용이다.
+    지적 **요약**은 화면에 필요하므로 제어부에 올라가지만(다른 요약과 같은 규칙),
+    검토가 읽은 초안 본문과 지시문 전체는 Runner에만 있어야 한다.
+    """
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+
+    draft_marker = "ZZMARKER-DRAFT-BODY-P203"
+    harness.agent.cli_executor.draft_response = (
+        '{"fields": {"goal": {"text": "%s 오류 줄만 뽑기", "origin": "user_requirement"}},'
+        ' "questions": []}' % draft_marker
+    )
+    harness.ai_draft(case["id"])
+    intent = harness.latest_intent(case["id"])
+    harness.ai_gate_review(case["id"], intent)
+
+    gate = harness.gate(case["id"])
+    assert gate["verdict"] == "pass"
+
+    # 검토가 읽은 초안 본문은 Runner에 있다.
+    body = harness.agent.store.get(intent["artifact_id"], intent["artifact_rev"])
+    assert draft_marker.encode("utf-8") in body
+
+    # 제어부의 어떤 파일에도 없다. 검토 지시문(프롬프트)도 마찬가지다.
+    prompt_marker = "당신은 **다른 세션이 작성한** 의도 초안을 검토한다"
+    root = harness.controller_config.data_root
+    checked = 0
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        checked += 1
+        raw = path.read_bytes()
+        assert draft_marker.encode("utf-8") not in raw, f"초안 본문이 {path} 에 남았다"
+        assert prompt_marker.encode("utf-8") not in raw, f"검토 지시문이 {path} 에 남았다"
+    assert checked > 0
+
+
+def test_gate_findings_only_carry_short_summaries(harness):
+    """AC-12: AI 검토가 본문을 요약 칸에 밀어 넣지 못한다.
+
+    `gate_finding.summary` 에 길이 상한이 스키마 수준으로 걸려 있고, 넘치는 내용은
+    잘린다. 요약은 원문을 대체하지 않으며 근거는 Runner의 실행 결과 원문에 있다.
+    """
+    import sqlite3
+
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    long_text = "A" * 900
+    harness.agent.cli_executor.review_response = (
+        '{"findings": [{"criterion": "unverifiable_success_criteria", "severity": "required",'
+        ' "certainty": "suspected", "target": "expected_outcome", "summary": "%s"}]}' % long_text
+    )
+    harness.ai_draft(case["id"])
+    intent = harness.latest_intent(case["id"])
+    harness.ai_gate_review(case["id"], intent)
+
+    finding = harness.gate(case["id"])["findings"]
+    ai = [f for f in finding if f["source"] == "ai"]
+    assert len(ai) == 1
+    assert len(ai[0]["summary"]) <= 200
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name = 'gate_finding'"
+    ).fetchone()["sql"]
+    assert "length(summary) <= 200" in sql
+    # 본문 컬럼이 없다는 것을 컬럼 이름으로 확인한다.
+    columns = {r["name"] for r in conn.execute("PRAGMA table_info(gate_finding)")}
+    assert not columns & {"content", "body", "text", "detail", "raw"}
+    conn.close()
+
+
+def test_the_controller_stores_no_prompt_text(harness):
+    """지시문 조립은 Runner의 일이다.
+
+    목적별 지시문이 제어부 코드에 있으면 본문이 제어부를 지나간다. 이 시험은
+    제어부 패키지에 지시문 템플릿이 없다는 것을 코드 수준에서 고정한다.
+    """
+    from pathlib import Path
+
+    controller_dir = Path(__file__).resolve().parent.parent / "controller"
+    for path in controller_dir.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "당신은" not in text, f"{path} 에 CLI 지시문으로 보이는 문구가 있다"
+        assert "prompts" not in text.replace("# ", ""), f"{path} 가 지시문 모듈을 쓴다"

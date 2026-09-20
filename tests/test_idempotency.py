@@ -22,7 +22,7 @@ def _run_rows(harness, run_id: str) -> int:
 def test_same_run_id_resent_to_the_api_creates_one_run(harness):
     """(가) 제어 API 층: 같은 run_id 의 POST 재전송."""
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     art = harness.submit_artifact(case["id"], "지시 원문")
 
     body = {"run_id": "run-dup-1", "instruction_artifact_id": art["artifact_id"]}
@@ -53,7 +53,7 @@ def test_lost_result_response_does_not_cause_re_execution(harness, monkeypatch):
     이것이 P1에서 넘어온 '지연 이벤트·응답 유실에서 중복 호출하지 않음'의 실제 상황이다.
     """
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     art = harness.submit_artifact(case["id"], "지시 원문")
     harness.create_run(case["id"], art["artifact_id"], "run-lost-1")
 
@@ -94,7 +94,7 @@ def test_lost_result_response_does_not_cause_re_execution(harness, monkeypatch):
 def test_stale_generation_report_is_rejected_and_state_untouched(harness):
     """AC-4: 오래된 세대의 보고가 최신 상태를 덮어쓰지 않는다(NFR-03)."""
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     art = harness.submit_artifact(case["id"], "지시 원문")
     harness.create_run(case["id"], art["artifact_id"], "run-fence-1")
 
@@ -132,7 +132,7 @@ def test_stale_generation_report_is_rejected_and_state_untouched(harness):
 def test_duplicate_events_are_not_stored_twice(harness):
     """AC-5: 같은 (run_id, seq) 재전송이 이벤트를 늘리지 않는다."""
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     art = harness.submit_artifact(case["id"], "지시 원문")
     harness.create_run(case["id"], art["artifact_id"], "run-evt-1")
     harness.client.post(f"/api/runner/{harness.runner_config.runner_id}/assignments")
@@ -174,7 +174,7 @@ def test_idempotency_key_replays_the_stored_response(harness):
 def test_finished_run_is_not_overwritten_by_a_different_outcome(harness):
     """이미 끝난 Run에 다른 결과를 쓰려는 보고는 거부한다."""
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     art = harness.submit_artifact(case["id"], "지시 원문")
     harness.create_run(case["id"], art["artifact_id"], "run-final-1")
     harness.agent.poll_once()

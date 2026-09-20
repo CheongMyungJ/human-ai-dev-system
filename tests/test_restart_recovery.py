@@ -23,6 +23,7 @@ import pytest
 
 from domain import intent_doc
 from domain.models import IntentField
+from runner.agent import local_executor_capabilities
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
@@ -110,13 +111,19 @@ def controller(tmp_path):
 
 
 def _register_runner(base_url: str) -> None:
+    """실제 Runner와 같은 능력 보고로 등록한다.
+
+    빈 능력 목록으로 등록하면 P2-03의 진입 검사가 `tool_not_available` 로 거부한다.
+    그것이 옳은 동작이므로(아무 것도 할 수 있다고 보고하지 않은 Runner에 배정하지
+    않는다) 여기서는 제품이 실제로 보고하는 값을 쓴다.
+    """
     httpx.post(
         f"{base_url}/api/runner/register",
         json={
             "runner_id": RUNNER_ID,
             "name": RUNNER_ID,
             "host": "test-host",
-            "capabilities": [],
+            "capabilities": local_executor_capabilities(),
         },
         timeout=10.0,
     ).raise_for_status()
@@ -133,7 +140,9 @@ def test_saved_records_survive_a_forced_kill(controller, tmp_path):
     ).json()
     case = httpx.post(
         f"{base}/api/projects/{project['id']}/cases",
-        json={"title": "재시작 복원 Case", "kind": "feature"},
+        # 이 시험은 실행 배관과 복원을 본다. 기능 Case의 진입 조건은
+        # test_admission.py 가 따로 확인한다(FR-29).
+        json={"title": "재시작 복원 Case", "kind": "analysis"},
         timeout=10.0,
     ).json()
 

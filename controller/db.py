@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 def utc_now() -> str:
@@ -56,6 +56,17 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # v2: 동의가 어떤 원문에 붙은 것인지 기록한다(FR-23 "승인 후 대상이 바뀌면").
     _add_column_if_missing(conn, "decision", "subject_content_hash", "TEXT")
+
+    # v3: 실행의 목적. 진입 조건이 목적마다 다르기 때문에 Run에 남긴다(FR-29).
+    #     v2 이전에 만든 행은 NULL 로 남는다 — 그 시절엔 목적 개념이 없었으므로
+    #     지금 값을 지어내지 않고 "기록되지 않음"으로 둔다.
+    _add_column_if_missing(conn, "run", "purpose", "TEXT")
+
+    # v3: 의도 버전을 **누가 썼는가.** P2-02까지는 사람만 쓸 수 있었으므로 옛 행은
+    #     NULL 로 남는다. 그 행에 지금 와서 "사람이 썼다"고 적지 않는다 —
+    #     기록되지 않은 것과 확인된 것을 구별한다(FR-04).
+    _add_column_if_missing(conn, "intent_version", "authoring_mode", "TEXT")
+    _add_column_if_missing(conn, "intent_version", "author_run_id", "TEXT")
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

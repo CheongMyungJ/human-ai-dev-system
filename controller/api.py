@@ -24,6 +24,7 @@ from domain import ids, intent_doc
 from domain.models import (
     AgreementRefusal,
     ArtifactKind,
+    AuthoringMode,
     Availability,
     CaseKind,
     ConfirmationState,
@@ -33,6 +34,7 @@ from domain.models import (
     Permission,
     ReadRequestState,
     RunOutcome,
+    RunPurpose,
     RunRole,
 )
 
@@ -93,14 +95,25 @@ class DecisionIn(BaseModel):
 
 
 class RunIn(BaseModel):
+    """실행 요청.
+
+    `purpose` 를 기본값 없이 두지 않는 이유는 기존 호출(P2-01·P2-02 시험)이
+    목적 없이 Run을 만들었기 때문이다. 기본값은 가장 좁은 목적인
+    `limited_analysis` 이며, 그 목적이 가장 많은 조건을 받는다 — 기본값을 택해서
+    조건을 덜 받는 일이 없게 한다.
+    """
+
     run_id: str | None = None
     task_id: str = "task-1"
+    purpose: RunPurpose = RunPurpose.LIMITED_ANALYSIS
     role: RunRole = RunRole.AUTHOR
     tool_id: str = "local-echo"
     mode: str = "p2-01-local"
     permission: Permission = Permission.READ_ONLY
     instruction_artifact_id: str
     instruction_artifact_rev: int = 1
+    #: `new` 만 허용한다. 세션을 이어받는 검토는 별도 세션 요구를 어긴다(FR-29).
+    session: str = "new" 
 
 
 class RunnerRegisterIn(BaseModel):
@@ -264,6 +277,10 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     case["feedback"] = repo.list_feedback(case_id)
     case["intent_state"] = repo.intent_state(case_id)
     case["runs"] = repo.list_runs(case_id)
+    # 게이트 판정과 진입 검사 기록을 함께 준다. 사람이 "왜 실행이 시작되지
+    # 않았는가"를 다른 화면을 찾아다니지 않고 알 수 있어야 한다(FR-14).
+    case["gate"] = repo.gate_state(case_id)
+    case["admission_checks"] = repo.list_admission_checks(case_id)
     return case
 
 
@@ -374,31 +391,51 @@ def record_decision(
 def create_run(
     request: Request, case_id: str, payload: RunIn, response: Response
 ) -> dict[str, Any]:
-    """Run 생성. `run_id` 가 멱등 키다.
+    """Run 생성. `run_id` 가 멱등 키이고 **진입 조건 검사를 통과해야 만들어진다.**
 
     같은 `run_id` 로 다시 호출하면 새 Run도 새 배정도 만들지 않고 기존 Run을 돌려준다.
     그 경우 상태 코드는 **200**이다. 만들지 않은 것을 201 Created 로 보고하지 않는다.
-    응답의 `created` 로도 구별할 수 있다.
+
+    조건을 갖추지 못하면 **409**와 함께 사유 코드를 돌려준다. 이 검사는 화면과
+    무관하게 여기서 이뤄지므로 버튼을 우회한 직접 호출도 같은 답을 받는다(FR-29).
     """
     repo = _repo(request)
     run_id = payload.run_id or ids.new_run_id()
     try:
-        run, created = repo.create_run(
-            run_id=run_id,
+        run, created, admission, check = repo.admit_and_create_run(
             case_id=case_id,
+            run_id=run_id,
             task_id=payload.task_id,
+            purpose=payload.purpose,
             role=payload.role,
             tool_id=payload.tool_id,
             mode=payload.mode,
             permission=payload.permission,
             instruction_artifact_id=payload.instruction_artifact_id,
             instruction_artifact_rev=payload.instruction_artifact_rev,
+            session=payload.session,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+
+    if admission is not None and not admission.admitted:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "admission": admission.to_dict(),
+                "admission_check_id": (check or {}).get("id"),
+                "message": "entry conditions are not met; the run was not created",
+            },
+        )
     if not created:
         response.status_code = 200
-    return {"run": run, "created": created}
+    return {
+        "run": run,
+        "created": created,
+        # 재전송이면 검사하지 않았다는 사실을 그대로 돌려준다. 하지 않은 검사를
+        # 통과로 적지 않는다.
+        "admission": admission.to_dict() if admission is not None else None,
+    }
 
 
 @router.get("/api/runs/{run_id}")
@@ -995,6 +1032,129 @@ def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dic
     try:
         return _repo(request).apply_intent_structure(
             payload.intent_version_id, payload.fields, payload.questions
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== P2-03
+#
+# QG-01 게이트 · FR-29 진입 조건 검사 · AI 작성 경로.
+#
+# **본문은 여전히 여기를 지나가지 않는다.** AI가 쓴 초안 본문은 Runner에서 태어나
+# Runner에 남고, 게이트 검토 결과도 짧은 요약만 올라온다.
+
+
+class RunnerIntentVersionIn(BaseModel):
+    """Runner가 작성한 초안을 의도 버전으로 등록한다. **본문 필드가 없다.**"""
+
+    runner_id: str
+    case_id: str
+    artifact_id: str
+    revision: int = 1
+    authoring_mode: AuthoringMode = AuthoringMode.AI_DRAFTED
+    author_run_id: str | None = None
+
+
+class GateReviewIn(BaseModel):
+    """AI 의미 검토 보고.
+
+    **판정값을 받지 않는다.** 실행자가 스스로 통과를 선언하게 두지 않기 위해서이며,
+    제어부가 발견 사항에서 판정을 다시 계산한다(controller/gate.py).
+    """
+
+    runner_id: str
+    run_id: str
+    intent_version_id: str
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/api/cases/{case_id}/gate")
+def get_gate(request: Request, case_id: str) -> dict[str, Any]:
+    """최신 의도 버전에 대한 QG-01 상태."""
+    try:
+        return _repo(request).gate_state(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/gate-results")
+def list_gate_results(request: Request, case_id: str) -> list[dict[str, Any]]:
+    """이 Case의 모든 게이트 판정. 대체된 판정도 남아 있다."""
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).list_gate_results(case_id)
+
+
+@router.post("/api/cases/{case_id}/intent-versions/{intent_id}/gate-rules")
+def run_gate_rules(request: Request, case_id: str, intent_id: str) -> dict[str, Any]:
+    """규칙 검사를 다시 돌린다.
+
+    구조가 보고될 때 자동으로 한 번 돌지만, 원문 상태가 바뀐 뒤(예: Runner 복귀)
+    다시 확인할 수 있어야 한다. **AI 검토 결과는 그대로 둔다.**
+    """
+    repo = _repo(request)
+    try:
+        intent = repo.get_intent_version(intent_id)
+        if intent["case_id"] != case_id:
+            raise NotFoundError(f"intent version not in case {case_id}: {intent_id}")
+        return repo.evaluate_gate_rules(intent_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/admission-checks")
+def list_admission_checks(request: Request, case_id: str) -> list[dict[str, Any]]:
+    """진입 검사 기록. **거부도 남아 있다.**"""
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).list_admission_checks(case_id)
+
+
+@router.post("/api/runner/intent-versions", status_code=201)
+def runner_create_intent_version(
+    request: Request, payload: RunnerIntentVersionIn
+) -> dict[str, Any]:
+    """AI가 작성한 초안을 의도 버전으로 만든다.
+
+    P2-02의 `POST /api/cases/{id}/intent-drafts` 와 **방향이 반대다.** 저쪽은
+    브라우저가 보낸 항목을 제어부가 문서로 묶어 내려보냈고, 이쪽은 이미 Runner에
+    저장된 원문을 가리키기만 한다. 두 경로가 같은 표·같은 문서 형식을 쓴다.
+    """
+    repo = _repo(request)
+    try:
+        ref = repo.get_artifact_ref(payload.artifact_id, payload.revision)
+        if ref["owner_runner_id"] != payload.runner_id:
+            raise ConflictError("only the owning runner can turn its artifact into a version")
+        intent = repo.create_intent_version(
+            payload.case_id,
+            payload.artifact_id,
+            payload.revision,
+            authoring_mode=payload.authoring_mode,
+            author_run_id=payload.author_run_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {
+        "intent_version": intent,
+        # 구조 보고에 필요한 비교 대상. 본문이 아니라 참조다.
+        "intent_context": repo.intent_intake_context(payload.artifact_id, payload.revision),
+    }
+
+
+@router.post("/api/runner/gate-reviews")
+def runner_gate_review(request: Request, payload: GateReviewIn) -> dict[str, Any]:
+    """AI 의미 검토 결과를 게이트에 붙인다."""
+    repo = _repo(request)
+    try:
+        return repo.apply_gate_review(
+            intent_version_id=payload.intent_version_id,
+            run_id=payload.run_id,
+            raw_findings=payload.findings,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

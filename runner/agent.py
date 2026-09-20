@@ -8,6 +8,19 @@
 
 중복 실행 방지는 3에서 실행 원장(`runner.ledger`)이 맡는다. 같은 `run_id` 가
 다시 배정돼도 executor를 부르지 않는다. 자세한 이유는 `runner/ledger.py` 참조.
+
+**P2-03: 실행에는 목적이 있다.** 배정에 실린 `purpose` 에 따라 이 Runner가
+지시문을 조립하고(프롬프트는 본문이므로 제어부에 두지 않는다), 실행 뒤에 할 일도
+달라진다.
+
+    intent_authoring    AI가 쓴 초안을 정규 문서로 묶어 저장하고 **의도 버전을 만든다.**
+                        P2-02와 방향이 반대다 — 초안이 Runner에서 태어난다
+    intent_gate_review  작성과 **다른 세션**에서 초안을 검토하고 발견 사항을 올린다
+    limited_analysis    동의된 의도에 따른 읽기 전용 작업
+
+목적이 요구하는 산출물을 만들지 못했으면 **CLI가 정상 종료했어도 완료가 아니다.**
+`_produce_for_purpose()` 가 그 판정을 한다(FR-28: 종료 코드만으로 완료를 선언하지
+않는다).
 """
 
 from __future__ import annotations
@@ -16,8 +29,18 @@ import base64
 import time
 from typing import Any
 
+from pathlib import Path
+
 from domain import ids, intent_doc
-from domain.models import ArtifactKind, CapabilityState, RunOutcome
+from domain.models import (
+    ArtifactKind,
+    AuthoringMode,
+    CapabilityState,
+    Permission,
+    RunOutcome,
+    RunPurpose,
+)
+from runner import cli_adapter, prompts
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
@@ -25,15 +48,14 @@ from runner.ledger import STATE_FINISHED, ExecutionLedger
 from runner.store import ArtifactStore, content_hash
 
 
-def default_capabilities() -> list[dict[str, Any]]:
-    """이 Runner가 지금 실제로 무엇을 할 수 있는지.
+def local_executor_capabilities() -> list[dict[str, Any]]:
+    """P2-01의 최소 실행기가 할 수 있는 것.
 
-    P2-01의 실행기는 코딩 CLI가 아니므로 CLI 능력을 `verified` 로 올리지 않는다.
-    Codex·Claude 의 실측 능력은 p1-environment-contract.md 8절에 있고,
-    제품 어댑터가 붙는 P2-03에서 그 값을 보고한다.
+    **이것은 코딩 CLI가 아니다.** 골격 시험용 실행기이며 CLI 능력을 `verified` 로
+    올리지 않는다. 남겨 두는 이유는 시험과 화면 골격이 이 경로를 계속 쓰기 때문이다.
     """
     source = "P2-01 local executor (not a coding CLI)"
-    return [
+    rows = [
         {
             "tool_id": TOOL_ID,
             "mode": "p2-01-local",
@@ -42,6 +64,8 @@ def default_capabilities() -> list[dict[str, Any]]:
             "source": source,
         }
         for capability, state in (
+            ("installed", CapabilityState.VERIFIED),
+            (f"permission:{Permission.READ_ONLY.value}", CapabilityState.VERIFIED),
             ("structured_events", CapabilityState.VERIFIED),
             ("session_identity", CapabilityState.UNSUPPORTED),
             ("tool_boundary_observed", CapabilityState.UNSUPPORTED),
@@ -49,6 +73,20 @@ def default_capabilities() -> list[dict[str, Any]]:
             ("safe_stop_next_call", CapabilityState.UNSUPPORTED),
         )
     ]
+    return rows
+
+
+def default_capabilities() -> list[dict[str, Any]]:
+    """이 Runner가 **지금 이 PC에서** 실제로 무엇을 할 수 있는지.
+
+    코딩 CLI 능력은 `runner.cli_adapter.capabilities_for()` 가 만든다. 설치 여부는
+    기동 시점에 직접 확인하고, 실행 능력은 P1에서 실측한 값을 근거 위치와 함께
+    올린다. 확인하지 않은 것을 `verified` 로 올리지 않는다.
+    """
+    rows = local_executor_capabilities()
+    for tool_id in cli_adapter.SUPPORTED_TOOLS:
+        rows.extend(cli_adapter.capabilities_for(tool_id))
+    return rows
 
 
 class RunnerAgent:
@@ -57,6 +95,8 @@ class RunnerAgent:
         config: RunnerConfig,
         client: ControllerClient,
         executor: LocalEchoExecutor | None = None,
+        cli_executor: Any | None = None,
+        capabilities: list[dict[str, Any]] | None = None,
     ) -> None:
         config.ensure_dirs()
         self.config = config
@@ -64,6 +104,12 @@ class RunnerAgent:
         self.store = ArtifactStore(config.artifacts_dir)
         self.ledger = ExecutionLedger(config.ledger_dir)
         self.executor = executor or LocalEchoExecutor(config.effects_dir)
+        # 실제 CLI 실행기. 시험은 여기에 가짜를 넣어 CLI를 부르지 않는다 —
+        # 자동 시험과 실제 CLI 실증을 섞지 않는다는 P1-02의 구분을 유지한다.
+        self.cli_executor = cli_executor or cli_adapter.CliExecutor(config.effects_dir)
+        # 보고할 능력. 기본값은 이 PC를 실제로 조회한 결과다. 시험은 가짜 실행기에
+        # 맞는 값을 넣어 **설치된 CLI 유무에 시험이 좌우되지 않게** 한다.
+        self._capabilities = capabilities
 
     # ------------------------------------------------------------------ 등록
 
@@ -72,7 +118,9 @@ class RunnerAgent:
             self.config.runner_id,
             name=self.config.runner_id,
             host=self.config.host_name,
-            capabilities=default_capabilities(),
+            capabilities=(
+                self._capabilities if self._capabilities is not None else default_capabilities()
+            ),
         )
 
     # ------------------------------------------------------------------ 원문
@@ -175,7 +223,14 @@ class RunnerAgent:
         instruction = self.store.get(
             assignment["instruction_artifact_id"], assignment["instruction_artifact_rev"]
         )
-        output = self.executor.execute(run_id, case_id, instruction)
+        purpose = assignment.get("purpose") or RunPurpose.LIMITED_ANALYSIS.value
+
+        if assignment["tool_id"] == TOOL_ID:
+            # P2-01 골격 실행기. 코딩 CLI가 아니며 목적별 산출물을 만들지 않는다.
+            output = self.executor.execute(run_id, case_id, instruction)
+            produced: dict[str, Any] = {"purpose": purpose, "produced": "none"}
+        else:
+            output, produced = self._execute_with_cli(assignment, instruction, purpose)
 
         output_artifact_id = ids.new_artifact_id()
         stored = self.store.put(output_artifact_id, 1, output.output_body)
@@ -201,7 +256,9 @@ class RunnerAgent:
             "output_artifact_rev": 1,
             "usage": output.usage,
             "residual_activity": output.residual_activity,
-            "observed_tool_version": f"{TOOL_ID}/{TOOL_VERSION}",
+            "session_ref": getattr(output, "session_ref", None),
+            "observed_tool_version": getattr(output, "observed_tool_version", None)
+            or f"{TOOL_ID}/{TOOL_VERSION}",
         }
         # 결과를 **보고하기 전에** 원장에 확정한다. 보고가 유실돼도
         # 같은 run_id 가 다시 오면 재실행하지 않고 이 결과를 다시 보낸다.
@@ -211,7 +268,127 @@ class RunnerAgent:
         send_payload["runner_id"] = self.config.runner_id
         send_payload["generation"] = generation
         self.client.send_result(run_id, send_payload)
-        return {"run_id": run_id, "action": "executed"}
+
+        # 게이트 검토 결과는 결과 보고 **뒤에** 올린다. 제어부가 "작성 세션과 검토
+        # 세션이 달랐는가"를 판단하려면 이 실행의 session_ref 가 먼저 기록돼 있어야
+        # 한다(FR-29 별도 세션 요구).
+        if produced.get("gate_findings") is not None:
+            self.client.send_gate_review(
+                {
+                    "runner_id": self.config.runner_id,
+                    "run_id": run_id,
+                    "intent_version_id": produced["intent_version_id"],
+                    "findings": produced["gate_findings"],
+                }
+            )
+            produced["gate_review_sent"] = True
+
+        return {"run_id": run_id, "action": "executed", "purpose": purpose, "produced": produced}
+
+    # ------------------------------------------------------- 목적별 실행·산출물
+
+    def _execute_with_cli(
+        self, assignment: dict[str, Any], instruction: bytes, purpose: str
+    ) -> tuple[Any, dict[str, Any]]:
+        """실제 코딩 CLI로 실행하고 목적이 요구하는 산출물을 만든다.
+
+        지시문 조립이 여기 있는 이유는 지시문이 **본문**이기 때문이다. 제어부는
+        목적과 원문 참조만 내려보내고, 원문을 가진 쪽이 둘을 합친다.
+        """
+        prompt = prompts.build(purpose, instruction)
+        output = self.cli_executor.execute(
+            run_id=assignment["run_id"],
+            case_id=assignment["case_id"],
+            prompt=prompt,
+            tool_id=assignment["tool_id"],
+            mode=assignment["mode"],
+            permission=Permission(assignment["permission"]),
+            workspace=Path(assignment["repo_path"]),
+            raw_dir=self.config.raw_dir,
+        )
+        produced = self._produce_for_purpose(assignment, purpose, output)
+        return output, produced
+
+    def _produce_for_purpose(
+        self, assignment: dict[str, Any], purpose: str, output: Any
+    ) -> dict[str, Any]:
+        """실행 결과에서 목적이 요구하는 산출물을 만든다.
+
+        **산출물을 만들지 못하면 실행은 완료가 아니다.** CLI가 정상 종료해도
+        의도 초안이 없거나 검토 결과가 형식에 맞지 않으면 `outcome` 을 `failed` 로
+        내린다. 형식을 못 맞춘 응답을 추측으로 고쳐 진행하지 않는다 — 지어낸 의도에
+        사람이 동의하게 만들지 않기 위해서다.
+        """
+        produced: dict[str, Any] = {"purpose": purpose, "produced": "none"}
+        if output.outcome is not RunOutcome.COMPLETED:
+            return produced
+
+        try:
+            if purpose == RunPurpose.INTENT_AUTHORING.value:
+                produced.update(self._produce_intent_draft(assignment, output))
+            elif purpose == RunPurpose.INTENT_GATE_REVIEW.value:
+                target = assignment.get("target_intent_version_id")
+                if not target:
+                    raise ValueError("검토할 의도 버전을 배정에서 찾지 못했다")
+                produced["gate_findings"] = prompts.parse_gate_review(output.final_message)
+                produced["intent_version_id"] = target
+                produced["produced"] = "gate_review"
+        except (ValueError, KeyError) as exc:
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = f"{type(exc).__name__}: {exc}"
+            produced.pop("gate_findings", None)
+        return produced
+
+    def _produce_intent_draft(self, assignment: dict[str, Any], output: Any) -> dict[str, Any]:
+        """AI가 쓴 초안을 정규 문서로 저장하고 **의도 버전을 만든다.**
+
+        P2-02의 경로와 방향이 반대다. 거기서는 사람이 화면에 입력한 항목이 제어부
+        메모리를 지나 이 Runner로 왔다. 여기서는 초안이 이 Runner에서 태어나므로
+        제어부에는 참조와 구조만 올라간다 — **본문은 올라가지 않는다.**
+        """
+        fields, questions = prompts.parse_intent_draft(output.final_message)
+        case_id = assignment["case_id"]
+        run_id = assignment["run_id"]
+        body = intent_doc.compose(
+            fields=fields,
+            questions=questions,
+            case_id=case_id,
+            authored_by=f"{assignment['tool_id']}/{assignment['mode']}",
+            authoring_mode=AuthoringMode.AI_DRAFTED,
+            author_run_id=run_id,
+        )
+        artifact_id = ids.new_artifact_id()
+        stored = self.store.put(artifact_id, 1, body)
+        self.client.register_artifact(
+            {
+                "runner_id": self.config.runner_id,
+                "case_id": case_id,
+                "kind": ArtifactKind.INTENT.value,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "content_hash": stored.content_hash,
+                "byte_size": stored.byte_size,
+                # 요약은 본문 발췌가 아니라 이 경로가 만든 짧은 설명이다.
+                "summary": f"AI 작성 의도 초안 ({assignment['tool_id']}, run {run_id})",
+            }
+        )
+        created = self.client.create_intent_version(
+            {
+                "runner_id": self.config.runner_id,
+                "case_id": case_id,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "authoring_mode": AuthoringMode.AI_DRAFTED.value,
+                "author_run_id": run_id,
+            }
+        )
+        self.report_intent_structure(body, created["intent_context"])
+        return {
+            "produced": "intent_version",
+            "intent_version_id": created["intent_version"]["id"],
+            "artifact_id": artifact_id,
+        }
 
     # -------------------------------------------------------------- 루프 한 회
 

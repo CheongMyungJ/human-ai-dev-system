@@ -41,8 +41,17 @@ class RunnerConfig:
         """
         return self.data_root / "effects"
 
+    @property
+    def raw_dir(self) -> Path:
+        """CLI가 낸 원문 스트림을 그대로 두는 곳.
+
+        정규화하기 전의 바이트를 남긴다. 분류 규칙이 틀렸을 때 무엇을 봤는지
+        되짚을 수 있어야 하기 때문이며, 이것도 **Runner에만** 남는 원문이다.
+        """
+        return self.data_root / "raw"
+
     def ensure_dirs(self) -> None:
-        for path in (self.artifacts_dir, self.ledger_dir, self.effects_dir):
+        for path in (self.artifacts_dir, self.ledger_dir, self.effects_dir, self.raw_dir):
             path.mkdir(parents=True, exist_ok=True)
 
 

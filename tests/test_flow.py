@@ -12,7 +12,10 @@ from domain.models import Availability, CaseStatus, DecisionKind, IntentStatus
 
 def test_end_to_end_case_to_run_result(harness):
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    # 이 시험이 보는 것은 **실행 배관**이지 기능 개발의 진입 조건이 아니다.
+    # 기능 Case는 P2-03부터 의도 동의·QG-01 통과를 요구하므로(FR-29) 여기서는
+    # 그 조건이 붙지 않는 조사 유형을 쓴다. 기능 Case의 조건은 test_admission.py.
+    case = harness.create_case(project["id"], kind="analysis")
 
     instruction = harness.submit_artifact(case["id"], "파일 두 개를 읽고 요약해줘.\n두 번째 줄.")
     created = harness.create_run(case["id"], instruction["artifact_id"], "run-flow-1")
@@ -143,7 +146,7 @@ def test_the_generic_decision_endpoint_cannot_record_an_intent_agreement(harness
 def test_run_is_refused_when_instruction_is_not_persisted(harness):
     """Runner가 읽을 수 없는 지시로는 실행을 배정하지 않는다."""
     project = harness.create_project()
-    case = harness.create_case(project["id"])
+    case = harness.create_case(project["id"], kind="analysis")
     accepted = harness.client.post(
         f"/api/cases/{case['id']}/artifacts",
         json={
@@ -160,17 +163,34 @@ def test_run_is_refused_when_instruction_is_not_persisted(harness):
         json={"run_id": "run-not-ready", "instruction_artifact_id": accepted["artifact_id"]},
     )
     assert response.status_code == 409
-    assert "pending" in response.json()["detail"]
+    # 진입 검사가 사유 코드로 구별해 돌려준다(P2-03). 사유는 사람이 무엇을 해야
+    # 하는지 알 수 있는 형태여야 한다.
+    detail = response.json()["detail"]
+    assert detail["admission"]["refusals"] == ["instruction_not_available"]
+    assert "pending" in detail["admission"]["reasons"]["instruction_not_available"]
 
 
 def test_capabilities_are_reported_without_promoting_cli_support(harness):
-    """P2-01 실행기는 코딩 CLI가 아니다. CLI 능력을 verified 로 올리지 않는다."""
+    """P2-01 실행기는 코딩 CLI가 아니다. CLI 능력을 verified 로 올리지 않는다.
+
+    P2-03에서 같은 Runner가 실제 코딩 CLI 능력도 보고하므로 **도구별로** 본다.
+    한 사전에 합치면 도구가 서로의 값을 덮어써 "누구의 능력인가"가 사라진다.
+    """
     runners = harness.client.get("/api/runners").json()
     assert len(runners) == 1
-    caps = {c["capability"]: c["state"] for c in runners[0]["capabilities"]}
-    assert caps["safe_stop_next_call"] == "unsupported"
-    assert caps["session_identity"] == "unsupported"
-    assert set(caps.values()) <= {"doc_only", "verified", "unsupported", "unknown"}
+
+    by_tool: dict[str, dict[str, str]] = {}
+    for cap in runners[0]["capabilities"]:
+        by_tool.setdefault(cap["tool_id"], {})[cap["capability"]] = cap["state"]
+
+    local = by_tool["local-echo"]
+    assert local["safe_stop_next_call"] == "unsupported"
+    assert local["session_identity"] == "unsupported"
+    for states in by_tool.values():
+        assert set(states.values()) <= {"doc_only", "verified", "unsupported", "unknown"}
+
+    # 모든 능력에 근거가 붙어 있어야 한다. 근거 없는 verified 를 만들지 않는다.
+    assert all(c["source"] for c in runners[0]["capabilities"])
 
 
 def test_case_starts_in_received_state(harness):

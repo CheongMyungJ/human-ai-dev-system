@@ -13,10 +13,15 @@ import json
 import sqlite3
 from typing import Any, Iterable
 
+from controller import gate as gatemod
+from controller.admission import AdmissionRequest, AdmissionResult
+from controller.admission import evaluate as evaluate_admission
 from controller.db import transaction, utc_now
 from domain import ids
 from domain.models import (
+    AdmissionOutcome,
     ArtifactKind,
+    AuthoringMode,
     Availability,
     CapabilityState,
     CaseKind,
@@ -27,6 +32,11 @@ from domain.models import (
     DecisionKind,
     FeedbackState,
     FieldChange,
+    FindingCertainty,
+    FindingSeverity,
+    FindingSource,
+    GateId,
+    GateVerdict,
     IntentAgreementState,
     IntentField,
     IntentStatus,
@@ -34,6 +44,7 @@ from domain.models import (
     QuestionState,
     ReadRequestState,
     RunOutcome,
+    RunPurpose,
     RunRole,
     RunStatus,
 )
@@ -390,8 +401,20 @@ class Repository:
     # --------------------------------------------------------- intent/decision
 
     def create_intent_version(
-        self, case_id: str, artifact_id: str, artifact_rev: int
+        self,
+        case_id: str,
+        artifact_id: str,
+        artifact_rev: int,
+        authoring_mode: AuthoringMode = AuthoringMode.HUMAN_TYPED,
+        author_run_id: str | None = None,
     ) -> dict[str, Any]:
+        """의도 버전을 만든다.
+
+        `authoring_mode` 는 **실제로 누가 썼는가**다. 사람이 화면에서 입력한 초안과
+        AI가 작성한 초안은 같은 형식·같은 표를 쓰지만 작성 주체는 다르고, 그 차이를
+        지우지 않는다(FR-04). AI가 썼으면 그 실행(`author_run_id`)도 함께 남겨
+        검토 세션이 작성 세션과 달랐는지 확인할 수 있게 한다(FR-29).
+        """
         self.get_case(case_id)
         ref = self.get_artifact_ref(artifact_id, artifact_rev)
         if ref["kind"] != ArtifactKind.INTENT.value:
@@ -406,8 +429,19 @@ class Repository:
             # 새 행을 먼저 넣는다. 이전 버전의 superseded_by 가 이 행을 가리키기 때문이다.
             self.conn.execute(
                 "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
-                " status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (intent_id, case_id, revision, artifact_id, artifact_rev, IntentStatus.DRAFT.value, now),
+                " status, created_at, authoring_mode, author_run_id)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    intent_id,
+                    case_id,
+                    revision,
+                    artifact_id,
+                    artifact_rev,
+                    IntentStatus.DRAFT.value,
+                    now,
+                    authoring_mode.value,
+                    author_run_id,
+                ),
             )
             if revision > 1:
                 # 이전 버전은 대체됨으로 바꾼다. 그 버전에 붙은 동의 기록은 지우지 않는다.
@@ -421,6 +455,13 @@ class Repository:
                         intent_id,
                         IntentStatus.SUPERSEDED.value,
                     ),
+                )
+                # 이전 버전의 게이트 판정을 새 버전으로 승계하지 않는다.
+                # 대상이 바뀌었으므로 **재검토 필요**다(quality-gates 3절).
+                self.conn.execute(
+                    "UPDATE gate_result SET verdict = ?, superseded_at = ?"
+                    " WHERE case_id = ? AND intent_version_id != ? AND superseded_at IS NULL",
+                    (GateVerdict.NEEDS_RECHECK.value, now, case_id, intent_id),
                 )
         return self.get_intent_version(intent_id)
 
@@ -497,11 +538,16 @@ class Repository:
         permission: Permission,
         instruction_artifact_id: str,
         instruction_artifact_rev: int,
+        purpose: RunPurpose = RunPurpose.LIMITED_ANALYSIS,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
         반환값의 두 번째 항목이 True면 이번 호출이 실제로 만든 것이다.
         이것이 중복 실행 방지의 첫 번째 층이다(P1 이월 항목).
+
+        **진입 조건 검사는 여기서 하지 않는다.** `admit_and_create_run()` 이 검사한
+        뒤에 이 메서드를 부른다. 두 가지를 한 함수에 섞으면 "검사를 건너뛰는 생성
+        경로"가 생기기 때문에 호출 순서를 그 한 곳으로 모은다.
         """
         existing = self.conn.execute("SELECT * FROM run WHERE run_id = ?", (run_id,)).fetchone()
         if existing is not None:
@@ -520,8 +566,8 @@ class Repository:
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
-                    " assignment_generation, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " assignment_generation, created_at, purpose)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -535,6 +581,7 @@ class Repository:
                         RunStatus.PENDING.value,
                         1,
                         now,
+                        purpose.value,
                     ),
                 )
         except sqlite3.IntegrityError:
@@ -587,7 +634,29 @@ class Repository:
                     ),
                 )
                 claimed.append(row["run_id"])
-        return [self.get_run(rid) for rid in claimed]
+        return [self.assignment_payload(rid) for rid in claimed]
+
+    def assignment_payload(self, run_id: str) -> dict[str, Any]:
+        """Runner가 실행에 필요한 것만 담은 배정 내용.
+
+        **본문은 들어가지 않는다.** 지시 원문은 참조로만 주고 Runner가 자기 저장소에서
+        읽는다. `repo_path` 는 Runner 호스트에서 해석할 작업공간이고, `purpose` 는
+        Runner가 어떤 지시문으로 CLI를 부를지 정하는 데 쓴다(프롬프트 조립은 Runner가
+        한다 — 목적별 지시문을 제어부에 두면 본문이 제어부에 남는다).
+        """
+        run = self.get_run(run_id)
+        case = self.get_case(run["case_id"])
+        project = self.get_project(case["project_id"])
+        run["repo_path"] = project["repo_path"]
+        run["case_title"] = case["title"]
+        run["case_kind"] = case["kind"]
+        # 의미 검토의 대상 의도 버전은 지시 원문에서 끌어낸다. 별도 컬럼을 두면
+        # 지시와 대상이 어긋날 수 있다.
+        target = self.intent_version_for_artifact(
+            run["instruction_artifact_id"], run["instruction_artifact_rev"]
+        )
+        run["target_intent_version_id"] = target["id"] if target else None
+        return run
 
     def bump_generation(self, run_id: str) -> dict[str, Any]:
         """재배정. 세대를 올리고 다시 대기 상태로 돌린다.
@@ -793,6 +862,10 @@ class Repository:
                         now,
                     ),
                 )
+        # 구조가 보고된 순간이 규칙 검사가 가능해진 순간이다. 여기서 한 번 돌려
+        # 게이트 상태를 항상 최신 구조에 맞춰 둔다. **AI 검토는 건드리지 않는다** —
+        # 규칙만 통과한 상태는 여전히 `not_run` 이다.
+        self.evaluate_gate_rules(intent_version_id)
         return self.get_intent_detail(intent_version_id)
 
     def list_intent_fields(self, intent_version_id: str) -> list[dict[str, Any]]:
@@ -1293,3 +1366,462 @@ class Repository:
                 " 각각 열람해 비교한다 — 원문은 소유 Runner에 있다."
             ),
         }
+
+    # ===================================================================== P2-03
+    #
+    # QG-01 게이트 판정과 FR-29 진입 조건 검사.
+    #
+    # 두 기능 모두 **본문을 다루지 않는다.** 게이트는 보고된 항목 구조와 AI 검토가
+    # 올린 짧은 요약만 보고, 진입 검사는 상태값만 본다.
+
+    # ------------------------------------------------------------- CLI 능력 조회
+
+    def tool_capability(self, tool_id: str, capability: str) -> str | None:
+        """등록된 Runner들이 보고한 이 능력의 상태 중 가장 강한 값.
+
+        `verified` 가 하나라도 있으면 `verified` 다. 아무도 보고하지 않았으면
+        `None` 이며 이것은 `unsupported` 와 다르다 — 확인하지 않은 것이다.
+        """
+        rows = self.conn.execute(
+            "SELECT DISTINCT state FROM runner_capability WHERE tool_id = ? AND capability = ?",
+            (tool_id, capability),
+        ).fetchall()
+        states = {r["state"] for r in rows}
+        for candidate in (
+            CapabilityState.VERIFIED.value,
+            CapabilityState.DOC_ONLY.value,
+            CapabilityState.UNKNOWN.value,
+            CapabilityState.UNSUPPORTED.value,
+        ):
+            if candidate in states:
+                return candidate
+        return None
+
+    def tool_installed(self, tool_id: str) -> bool:
+        """실제로 실행할 수 있다고 **관측된** 도구인가.
+
+        `doc_only` 는 사용 가능이 아니다. 미설치·미인증을 사용 가능으로 표시하지
+        않는다(FR-28 수용 기준).
+        """
+        return self.tool_capability(tool_id, "installed") == CapabilityState.VERIFIED.value
+
+    def permission_mapped(self, tool_id: str, permission: Permission) -> bool:
+        """추상 권한을 이 도구의 실제 인자로 옮길 수 있는가.
+
+        매핑이 없으면 더 넓은 권한으로 대체하지 않고 실행을 거부한다(P1 계약 6절).
+        """
+        state = self.tool_capability(tool_id, f"permission:{permission.value}")
+        return state == CapabilityState.VERIFIED.value
+
+    # --------------------------------------------------------------- QG-01 게이트
+
+    def _gate_row(self, intent_version_id: str, gate: GateId = GateId.QG_01):
+        return self.conn.execute(
+            "SELECT * FROM gate_result WHERE intent_version_id = ? AND gate = ?",
+            (intent_version_id, gate.value),
+        ).fetchone()
+
+    def get_gate_result(self, gate_result_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM gate_result WHERE id = ?", (gate_result_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"gate result not found: {gate_result_id}")
+        result = dict(row)
+        result["findings"] = self.list_gate_findings(gate_result_id)
+        return result
+
+    def list_gate_findings(self, gate_result_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM gate_finding WHERE gate_result_id = ? ORDER BY source, criterion",
+            (gate_result_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _replace_findings(
+        self, gate_result_id: str, source: str, findings: Iterable[gatemod.Finding]
+    ) -> None:
+        """한 출처의 발견 사항을 통째로 다시 쓴다.
+
+        규칙과 AI를 따로 지우는 이유는 한쪽을 다시 돌려도 다른 쪽 결과가 사라지면
+        안 되기 때문이다. 재검사가 이전 발견을 조용히 없애는 경로를 막는다.
+        """
+        now = utc_now()
+        self.conn.execute(
+            "DELETE FROM gate_finding WHERE gate_result_id = ? AND source = ?",
+            (gate_result_id, source),
+        )
+        for finding in findings:
+            row = finding.to_row()
+            self.conn.execute(
+                "INSERT INTO gate_finding (id, gate_result_id, source, criterion, severity,"
+                " blocking, certainty, target, summary, evidence_artifact_id, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("finding"),
+                    gate_result_id,
+                    row["source"],
+                    row["criterion"],
+                    row["severity"],
+                    row["blocking"],
+                    row["certainty"],
+                    row["target"],
+                    row["summary"],
+                    row["evidence_artifact_id"],
+                    now,
+                ),
+            )
+
+    def evaluate_gate_rules(
+        self, intent_version_id: str, gate: GateId = GateId.QG_01
+    ) -> dict[str, Any]:
+        """규칙 검사를 수행하고 판정을 갱신한다.
+
+        **AI 검토 결과는 건드리지 않는다.** 이미 이 버전을 검토한 기록이 있으면
+        그대로 두고, 없으면 `not_run` 으로 남는다. 규칙만 통과한 상태를 게이트
+        통과로 만들지 않기 위해 두 판정을 따로 저장한다.
+        """
+        detail = self.get_intent_detail(intent_version_id)
+        latest = self.latest_intent_version(detail["case_id"])
+        is_latest = latest is not None and latest["id"] == intent_version_id
+        rule_verdict, findings = gatemod.rule_check(detail, is_latest)
+
+        existing = self._gate_row(intent_version_id, gate)
+        now = utc_now()
+        with transaction(self.conn):
+            if existing is None:
+                gate_result_id = ids.new_id("gate")
+                self.conn.execute(
+                    "INSERT INTO gate_result (id, case_id, gate, intent_version_id,"
+                    " subject_content_hash, verdict, rule_verdict, ai_verdict, evaluated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        gate_result_id,
+                        detail["case_id"],
+                        gate.value,
+                        intent_version_id,
+                        detail["content_hash"],
+                        gatemod.combine_verdicts(rule_verdict, GateVerdict.NOT_RUN).value,
+                        rule_verdict.value,
+                        GateVerdict.NOT_RUN.value,
+                        now,
+                    ),
+                )
+            else:
+                gate_result_id = existing["id"]
+                ai_verdict = GateVerdict(existing["ai_verdict"])
+                self.conn.execute(
+                    "UPDATE gate_result SET rule_verdict = ?, verdict = ?, evaluated_at = ?,"
+                    " subject_content_hash = ? WHERE id = ?",
+                    (
+                        rule_verdict.value,
+                        gatemod.combine_verdicts(rule_verdict, ai_verdict).value,
+                        now,
+                        detail["content_hash"],
+                        gate_result_id,
+                    ),
+                )
+            self._replace_findings(gate_result_id, "rule", findings)
+        return self.get_gate_result(gate_result_id)
+
+    def apply_gate_review(
+        self,
+        intent_version_id: str,
+        run_id: str,
+        raw_findings: list[dict[str, Any]],
+        gate: GateId = GateId.QG_01,
+    ) -> dict[str, Any]:
+        """AI 의미 검토 결과를 게이트에 붙인다.
+
+        **판정은 발견 사항에서 다시 계산한다.** 실행자가 스스로 "통과"를 선언하게
+        두지 않는다. 검토한 run 의 세션과 이 초안을 작성한 세션이 같으면 별도 세션
+        요구가 깨진 것이므로 통과로 반영하지 않고 판단 보류로 남긴다(FR-29).
+        """
+        detail = self.get_intent_detail(intent_version_id)
+        run = self.get_run(run_id)
+        if run["case_id"] != detail["case_id"]:
+            raise ConflictError("review run belongs to another case")
+        if run["role"] != RunRole.REVIEWER.value:
+            raise ConflictError("gate review must run in the reviewer role")
+
+        findings = gatemod.normalize_ai_findings(raw_findings)
+        ai_verdict = gatemod.ai_verdict_from(findings)
+
+        author_session = self.author_session_ref(intent_version_id)
+        review_session = run["session_ref"]
+        if (
+            author_session is not None
+            and review_session is not None
+            and author_session == review_session
+        ):
+            ai_verdict = GateVerdict.HOLD
+            findings.append(
+                gatemod.Finding(
+                    source=FindingSource.AI,
+                    criterion="review_session_not_separate",
+                    severity=FindingSeverity.REQUIRED,
+                    blocking=False,
+                    certainty=FindingCertainty.CONFIRMED,
+                    target="session",
+                    summary="검토 세션이 작성 세션과 같다. 별도 세션 요구를 충족하지 않는다",
+                )
+            )
+
+        existing = self._gate_row(intent_version_id, gate)
+        if existing is None:
+            self.evaluate_gate_rules(intent_version_id, gate)
+            existing = self._gate_row(intent_version_id, gate)
+        # 대상 원문이 그 사이 바뀌었으면 이 검토는 다른 것을 본 결과다.
+        if existing["subject_content_hash"] != detail["content_hash"]:
+            raise ConflictError("the reviewed original is not the current one")
+
+        rule_verdict = GateVerdict(existing["rule_verdict"])
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE gate_result SET ai_verdict = ?, verdict = ?, ai_run_id = ?,"
+                " ai_session_ref = ?, author_session_ref = ?, reviewed_at = ? WHERE id = ?",
+                (
+                    ai_verdict.value,
+                    gatemod.combine_verdicts(rule_verdict, ai_verdict).value,
+                    run_id,
+                    review_session,
+                    author_session,
+                    now,
+                    existing["id"],
+                ),
+            )
+            self._replace_findings(existing["id"], "ai", findings)
+        return self.get_gate_result(existing["id"])
+
+    def author_session_ref(self, intent_version_id: str) -> str | None:
+        """이 의도 버전을 작성한 실행의 세션 식별자.
+
+        사람이 직접 쓴 초안에는 작성 실행이 없으므로 `None` 이다. 그 경우
+        "같은 세션인가"라는 질문 자체가 성립하지 않는다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        run_id = intent.get("author_run_id")
+        if not run_id:
+            return None
+        row = self.conn.execute(
+            "SELECT session_ref FROM run WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return row["session_ref"] if row else None
+
+    def gate_state(self, case_id: str, gate: GateId = GateId.QG_01) -> dict[str, Any]:
+        """Case 의 **최신 의도 버전**에 대한 게이트 상태.
+
+        최신 버전에 판정이 없으면 `not_run` 이다. 이전 버전의 통과를 끌어오지 않는다.
+        """
+        self.get_case(case_id)
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return {
+                "gate": gate.value,
+                "intent_version_id": None,
+                "verdict": GateVerdict.NOT_APPLICABLE.value,
+                "rule_verdict": GateVerdict.NOT_APPLICABLE.value,
+                "ai_verdict": GateVerdict.NOT_APPLICABLE.value,
+                "findings": [],
+            }
+        row = self._gate_row(latest["id"], gate)
+        if row is None:
+            return {
+                "gate": gate.value,
+                "intent_version_id": latest["id"],
+                "verdict": GateVerdict.NOT_RUN.value,
+                "rule_verdict": GateVerdict.NOT_RUN.value,
+                "ai_verdict": GateVerdict.NOT_RUN.value,
+                "findings": [],
+            }
+        return self.get_gate_result(row["id"])
+
+    def list_gate_results(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id FROM gate_result WHERE case_id = ? ORDER BY evaluated_at DESC",
+            (case_id,),
+        ).fetchall()
+        return [self.get_gate_result(r["id"]) for r in rows]
+
+    # ------------------------------------------------------ FR-29 진입 조건 검사
+
+    def check_admission(
+        self,
+        case_id: str,
+        run_id: str,
+        task_id: str,
+        purpose: RunPurpose,
+        role: RunRole,
+        permission: Permission,
+        tool_id: str,
+        instruction_artifact_id: str,
+        instruction_artifact_rev: int,
+        session: str = "new",
+        target_intent_version_id: str | None = None,
+    ) -> AdmissionResult:
+        """진입 조건을 검사한다. **판단 근거를 전부 DB에서 다시 읽는다.**
+
+        메모리에 "이 Case는 통과했다"를 두지 않는 이유는 재시작으로 우회하지
+        못하게 하기 위해서다(FR-29 수용 기준).
+        """
+        case = self.get_case(case_id)
+        try:
+            ref = self.get_artifact_ref(instruction_artifact_id, instruction_artifact_rev)
+            availability = ref["availability"]
+        except NotFoundError:
+            availability = "missing"
+
+        latest = self.latest_intent_version(case_id)
+        author_sessions: list[str] = []
+        if latest is not None:
+            session_ref = self.author_session_ref(latest["id"])
+            if session_ref:
+                author_sessions.append(session_ref)
+
+        request = AdmissionRequest(
+            case_id=case_id,
+            case_kind=CaseKind(case["kind"]),
+            run_id=run_id,
+            task_id=task_id,
+            purpose=purpose,
+            role=role,
+            permission=permission,
+            tool_id=tool_id,
+            session=session,
+            instruction_availability=availability,
+            intent_state=self.intent_state(case_id),
+            gate_state=self.gate_state(case_id),
+            target_intent_version_id=target_intent_version_id,
+            tool_installed=self.tool_installed(tool_id),
+            permission_mapped=self.permission_mapped(tool_id, permission),
+            author_session_refs=author_sessions,
+        )
+        return evaluate_admission(request)
+
+    def record_admission(
+        self,
+        case_id: str,
+        run_id: str,
+        task_id: str,
+        purpose: RunPurpose,
+        role: RunRole,
+        permission: Permission,
+        tool_id: str,
+        result: AdmissionResult,
+        created_run_id: str | None,
+    ) -> dict[str, Any]:
+        """검사 결과를 남긴다. **거부도 기록한다.**
+
+        무엇을 거부했는지가 남지 않으면 사람은 왜 실행이 시작되지 않았는지 알 수 없고
+        (FR-14), 우회 시도도 드러나지 않는다.
+        """
+        check_id = ids.new_id("admission")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO admission_check (id, case_id, run_id, requested_run_id,"
+                " requested_purpose, requested_role, requested_permission, requested_task_id,"
+                " requested_tool_id, profile, outcome, refusals_json, intent_version_id,"
+                " intent_agreement_state, gate_verdict, checked_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    check_id,
+                    case_id,
+                    created_run_id,
+                    run_id,
+                    purpose.value,
+                    role.value,
+                    permission.value,
+                    task_id,
+                    tool_id,
+                    result.profile.value,
+                    result.outcome.value,
+                    json.dumps([r.value for r in result.refusals], ensure_ascii=False),
+                    result.intent_version_id,
+                    result.intent_agreement_state,
+                    result.gate_verdict,
+                    utc_now(),
+                ),
+            )
+        return self.get_admission_check(check_id)
+
+    def get_admission_check(self, check_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM admission_check WHERE id = ?", (check_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"admission check not found: {check_id}")
+        check = dict(row)
+        check["refusals"] = json.loads(check.pop("refusals_json"))
+        return check
+
+    def list_admission_checks(self, case_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id FROM admission_check WHERE case_id = ? ORDER BY checked_at DESC LIMIT ?",
+            (case_id, limit),
+        ).fetchall()
+        return [self.get_admission_check(r["id"]) for r in rows]
+
+    def admit_and_create_run(
+        self,
+        case_id: str,
+        run_id: str,
+        task_id: str,
+        purpose: RunPurpose,
+        role: RunRole,
+        tool_id: str,
+        mode: str,
+        permission: Permission,
+        instruction_artifact_id: str,
+        instruction_artifact_rev: int,
+        session: str = "new",
+    ) -> tuple[dict[str, Any] | None, bool, AdmissionResult | None, dict[str, Any] | None]:
+        """**Run을 만드는 유일한 경로.** 진입 검사를 통과해야 만들어진다.
+
+        반환: (Run 또는 None, 이번에 만들었는지, 검사 결과 또는 None, 검사 기록)
+
+        같은 `run_id` 의 재전송은 검사보다 **먼저** 처리하고 검사 결과를 `None` 으로
+        돌려준다. 이미 만들어진 실행에 대해서는 "만들어도 되는가"가 아니라 "무엇이
+        만들어졌는가"가 답이고, 재전송이 두 번째 실행을 만들지 않는다는 보장
+        (P1 이월 항목)이 여기에 걸려 있기 때문이다. 없는 검사를 했다고 적지도 않는다.
+        """
+        existing = self.conn.execute(
+            "SELECT run_id FROM run WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if existing is not None:
+            return self.get_run(run_id), False, None, None
+
+        result = self.check_admission(
+            case_id=case_id,
+            run_id=run_id,
+            task_id=task_id,
+            purpose=purpose,
+            role=role,
+            permission=permission,
+            tool_id=tool_id,
+            instruction_artifact_id=instruction_artifact_id,
+            instruction_artifact_rev=instruction_artifact_rev,
+            session=session,
+        )
+        if not result.admitted:
+            check = self.record_admission(
+                case_id, run_id, task_id, purpose, role, permission, tool_id, result, None
+            )
+            return None, False, result, check
+
+        run, created = self.create_run(
+            run_id=run_id,
+            case_id=case_id,
+            task_id=task_id,
+            role=role,
+            tool_id=tool_id,
+            mode=mode,
+            permission=permission,
+            instruction_artifact_id=instruction_artifact_id,
+            instruction_artifact_rev=instruction_artifact_rev,
+            purpose=purpose,
+        )
+        check = self.record_admission(
+            case_id, run_id, task_id, purpose, role, permission, tool_id, result, run["run_id"]
+        )
+        return run, created, result, check

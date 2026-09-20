@@ -347,3 +347,122 @@ class AgreementRefusal(str, Enum):
     ORIGINAL_NOT_READ = "original_not_read"
     CONTENT_CHANGED = "content_changed"
     OPEN_INTENT_QUESTIONS = "open_intent_questions"
+
+
+# --------------------------------------------------------------------- P2-03
+
+
+class RunPurpose(str, Enum):
+    """실행의 목적. **진입 조건은 목적마다 다르다**(FR-29).
+
+    목적을 도입한 이유는 순환을 피하기 위해서다. 의도 초안을 **쓰는** 실행에
+    "최신 의도에 동의했는가"를 요구하면 어떤 Case도 시작할 수 없다. 반대로 모든
+    실행에서 조건을 빼면 진입 검사가 무의미해진다. 그래서 목적별 조건표를 둔다
+    (plans/P2-PLAN-03.md "목적별 진입 조건표").
+
+    `FEATURE_IMPLEMENTATION` 은 정의만 있고 이번 단계에서는 **항상 거부된다.**
+    선행 조건인 설계·계획 검토가 아직 없기 때문이며, 없는 조건을 통과로
+    처리하지 않는다는 P2 제외 범위를 코드로 드러내기 위한 값이다.
+    """
+
+    INTENT_AUTHORING = "intent_authoring"
+    INTENT_GATE_REVIEW = "intent_gate_review"
+    LIMITED_ANALYSIS = "limited_analysis"
+    FEATURE_IMPLEMENTATION = "feature_implementation"
+
+
+class AdmissionOutcome(str, Enum):
+    ADMITTED = "admitted"
+    REFUSED = "refused"
+
+
+class AdmissionProfile(str, Enum):
+    """어떤 조건표를 적용했는지.
+
+    `FEATURE_INTENT` 는 의도 동의·게이트를 요구하는 기능 개발 조건표다.
+    Case의 `kind` 가 아니라 **의도 버전의 존재**로 정한다 — 유형만 바꿔서
+    조건을 벗어나지 못하게 하기 위해서다(FR-29 "유형 변경으로 우회하지 않는다").
+    """
+
+    FEATURE_INTENT = "feature_intent"
+    NON_FEATURE_MINIMAL = "non_feature_minimal"
+    INTENT_PRODUCTION = "intent_production"
+
+
+class AdmissionRefusal(str, Enum):
+    """진입을 거부한 이유.
+
+    **P2-02의 `AgreementRefusal` 과 다른 검사다.** 저쪽은 "사람의 동의를 기록할 수
+    있는가", 이쪽은 "실행을 배정해도 되는가"이다. 두 목록을 합치지 않는다.
+    """
+
+    INTENT_NOT_AGREED = "intent_not_agreed"
+    OPEN_INTENT_QUESTIONS = "open_intent_questions"
+    INTENT_GATE_NOT_PASSED = "intent_gate_not_passed"
+    INTENT_ORIGINAL_NOT_AVAILABLE = "intent_original_not_available"
+    INSTRUCTION_NOT_AVAILABLE = "instruction_not_available"
+    PERMISSION_NOT_ALLOWED_IN_STAGE = "permission_not_allowed_in_stage"
+    PERMISSION_NOT_MAPPED = "permission_not_mapped"
+    ROLE_MISMATCH = "role_mismatch"
+    PREREQUISITE_NOT_IMPLEMENTED = "prerequisite_not_implemented"
+    TOOL_NOT_AVAILABLE = "tool_not_available"
+    REVIEW_SESSION_NOT_SEPARATE = "review_session_not_separate"
+    INTENT_VERSION_MISSING = "intent_version_missing"
+
+
+class GateId(str, Enum):
+    """이번 단계가 구현하는 게이트. QG-02~07은 아직 값으로 두지 않는다 —
+    정의만 있고 동작이 없는 게이트를 상태표에 노출하지 않기 위해서다."""
+
+    QG_01 = "QG-01"
+
+
+class GateVerdict(str, Enum):
+    """게이트 판정. quality-gates.md 3절의 목록을 그대로 쓴다.
+
+    **`NOT_RUN` 을 `PASS` 로 승격시키지 않는 것이 핵심이다.** 규칙 검사만 하고
+    AI 의미 검토를 실행하지 않은 상태는 통과가 아니다(quality-gates 4절 A·D 구분).
+    `BLOCKED` 는 검사를 수행할 수 없었던 상태(예: CLI 미설치)이며 실패와 다르다.
+    """
+
+    PASS = "pass"
+    FAIL = "fail"
+    HOLD = "hold"
+    NOT_RUN = "not_run"
+    NEEDS_RECHECK = "needs_recheck"
+    BLOCKED = "blocked"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class FindingSource(str, Enum):
+    RULE = "rule"
+    AI = "ai"
+
+
+class FindingSeverity(str, Enum):
+    """필수 기준 위반과 권고를 구분한다(quality-gates 3절).
+
+    "AI의 막연한 의견이 새 필수 요구를 만들지는 않는다" — AI가 올린 발견은
+    기본적으로 권고이며, 필수로 올리려면 연결된 기준이 있어야 한다.
+    """
+
+    REQUIRED = "required"
+    ADVISORY = "advisory"
+
+
+class FindingCertainty(str, Enum):
+    """증거가 있는 위반과 의심을 구분한다. 의심을 확정 실패로 과장하지 않는다."""
+
+    CONFIRMED = "confirmed"
+    SUSPECTED = "suspected"
+
+
+class AuthoringMode(str, Enum):
+    """의도 초안을 **실제로 누가 썼는가.**
+
+    P2-02는 사람만 가능했고 그 사실을 문서에 적었다. P2-03에서 AI 작성 경로가
+    생겼으므로 두 값을 구분해 기록한다. 실제와 다른 값을 적지 않는다(FR-04).
+    """
+
+    HUMAN_TYPED = "human_typed"
+    AI_DRAFTED = "ai_drafted"
