@@ -183,3 +183,98 @@ CREATE INDEX IF NOT EXISTS idx_run_pending ON run(status, assigned_runner_id);
 CREATE INDEX IF NOT EXISTS idx_intake_pending ON intake(state, target_runner_id);
 CREATE INDEX IF NOT EXISTS idx_artifact_case ON artifact_ref(case_id);
 CREATE INDEX IF NOT EXISTS idx_decision_case ON decision(case_id, kind);
+
+-- ===================================================================
+-- 스키마 v2 (P2-02 의도·피드백)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 의도 여섯 필드의 본문, 피드백 원문, 질문의 대상·근거·선택·영향,
+-- 열람으로 오간 원문은 모두 소유 Runner에 있고 여기에는 상태·참조·짧은 요약만 남는다.
+-- tests/test_data_boundary.py 가 이 규칙을 파일 바이트 수준에서 확인한다.
+-- ===================================================================
+
+-- 의도 초안의 여섯 필드. 버전마다 여섯 행이 모두 존재한다.
+-- 정보가 없으면 행을 지우는 것이 아니라 state='undecided' 로 남긴다
+-- (intent-artifacts 1절: "정보가 없으면 항목을 삭제하거나 AI가 채우지 않고 미정으로 남긴다").
+CREATE TABLE IF NOT EXISTS intent_field (
+    intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    field             TEXT NOT NULL,   -- goal|expected_outcome|scope|exclusions|constraints|open_questions
+    state             TEXT NOT NULL,   -- undecided|proposed|user_confirmed|needs_recheck|superseded
+    origin            TEXT NOT NULL,   -- none|user_requirement|project_rule|observation|ai_proposal|ai_assumption
+    change_from_prev  TEXT NOT NULL,   -- initial|unchanged|changed
+    PRIMARY KEY (intent_version_id, field)
+);
+
+-- 미정 질문. 본문(대상·근거·선택·영향)은 의도 원문 안에 있다.
+-- 여기에는 목록에 보일 짧은 요약과 결정 시점·상태만 둔다(FR-13, intent-artifacts 2·3절).
+CREATE TABLE IF NOT EXISTS intent_question (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    question_key      TEXT NOT NULL,   -- 버전이 바뀌어도 같은 질문을 잇는 키
+    summary           TEXT NOT NULL,   -- 짧은 요약. 원문 대체 아님
+    decide_at         TEXT NOT NULL,   -- intent | design | plan  (이월 시점)
+    state             TEXT NOT NULL,   -- open | answered | withdrawn
+    answered_by       TEXT,
+    answered_at       TEXT,
+    answer_artifact_id TEXT,           -- 답변 원문 참조. 본문은 Runner에
+    created_at        TEXT NOT NULL,
+    UNIQUE (intent_version_id, question_key),
+    CHECK (length(summary) <= 200)
+);
+
+-- 피드백. 원문은 Runner에 있고 여기에는 대상 버전·상태·짧은 요약만 남는다.
+CREATE TABLE IF NOT EXISTS feedback (
+    id                      TEXT PRIMARY KEY,
+    case_id                 TEXT NOT NULL REFERENCES "case"(id),
+    target_intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    target_intent_revision  INTEGER NOT NULL,
+    artifact_id             TEXT NOT NULL,
+    artifact_rev            INTEGER NOT NULL,
+    author                  TEXT NOT NULL,
+    summary                 TEXT NOT NULL,
+    state                   TEXT NOT NULL,   -- received | reflected | not_reflected
+    reflected_in_version_id TEXT REFERENCES intent_version(id),
+    disposition_note        TEXT,            -- 미반영 이유의 짧은 요약
+    created_at              TEXT NOT NULL,
+    resolved_at             TEXT,
+    CHECK (length(summary) <= 200),
+    CHECK (disposition_note IS NULL OR length(disposition_note) <= 200)
+);
+
+-- 초안 열람 기록. **조회는 동의가 아니다.**
+-- decision 과 별개 표로 두어 "요약만 읽은 상태를 원문 확인으로 기록하지 않는다"를
+-- 검사 가능하게 만든다(intent-artifacts 5절).
+CREATE TABLE IF NOT EXISTS intent_view (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    actor             TEXT NOT NULL,
+    content_hash      TEXT NOT NULL,   -- 실제로 본 원문의 해시
+    viewed_at         TEXT NOT NULL
+);
+
+-- 원문 열람 요청(일시중계). **본문 컬럼 없음.**
+-- 본문은 소유 Runner가 올려 제어부 메모리 버퍼에만 잠시 있다가 브라우저가
+-- 한 번 받아 가면 버려진다. 제어부가 그 사이 재시작하면 요청은 expired 가 된다
+-- (data-boundary-review 3절: 임시 메모리 중계와 영구 보관의 분리).
+CREATE TABLE IF NOT EXISTS artifact_read_request (
+    id              TEXT PRIMARY KEY,
+    case_id         TEXT NOT NULL REFERENCES "case"(id),
+    artifact_id     TEXT NOT NULL,
+    revision        INTEGER NOT NULL,
+    owner_runner_id TEXT NOT NULL REFERENCES runner(id),
+    requested_by    TEXT NOT NULL,
+    state           TEXT NOT NULL,   -- pending | relayed | delivered | expired
+    content_hash    TEXT,            -- Runner가 실제로 읽은 원문의 해시
+    byte_size       INTEGER,
+    requested_at    TEXT NOT NULL,
+    relayed_at      TEXT,
+    delivered_at    TEXT,
+    FOREIGN KEY (artifact_id, revision) REFERENCES artifact_ref(artifact_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_question_case ON intent_question(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_feedback_case ON feedback(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_read_request_pending
+    ON artifact_read_request(state, owner_runner_id);

@@ -15,15 +15,15 @@
 | 저장소 | https://github.com/CheongMyungJ/human-ai-dev-system — 비공개 |
 | 기본 작업 디렉터리 | `C:\git\human-ai-dev-system-design` |
 | 설계 기준 | v0.6, 사용자 결정 D-01~58 |
-| 전체 개발 상태 | **제품 코드 P2-01까지 구현**. 제어부(FastAPI·SQLite)·로컬 Runner·React/TS 화면이 실제로 연결되고 시험 19건이 통과한다. 실제 코딩 CLI 실행 연결·진입 조건 검사·게이트·GitHub·원격은 아직이다 |
+| 전체 개발 상태 | **제품 코드 P2-02까지 구현**. 제어부(FastAPI·SQLite)·로컬 Runner·React/TS 화면이 연결되고, 기능 개발 Case가 여섯 항목 의도 초안·원문 열람·피드백·명시 동의를 실제로 거친다. 시험 39건이 통과한다. 실제 코딩 CLI 실행 연결·진입 조건 검사·게이트·GitHub·원격은 아직이다 |
 | 현재 단계 | **P2 — 최소 업무 흐름** (P1은 제한 수용으로 종료) |
-| 현재 단계 상태 | `IN_PROGRESS` — P2-01 완료, P2-02부터 남음 |
-| 다음 하위 작업 | **P2-02 — 의도·피드백.** 여섯 필드 초안, 원문/가정/질문, 피드백 반영과 버전 차이, 명시 동의 |
-| 활성 plan | 없음. `P2-PLAN-01`(P2-01)은 완료로 종료했고 원문은 [plans/P2-PLAN-01.md](plans/P2-PLAN-01.md)에 있다. 다음 세션이 `P2-PLAN-02`를 작성해야 함 |
-| 마지막 구현 검증 | 2026-09-20 — P2-01: 실제 프로세스·브라우저로 제어부·Runner·화면 연결, 강제 종료 후 복원, 같은 요청 재전송의 중복 실행 방지, 원문 비보관을 확인([P2-01 결과](p2/evidence/P2-01-results.md)). pytest 19 + P1 계약 unittest 18 통과 |
-| 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함. **P2-01의 Runner 실행기는 코딩 CLI가 아니다** — CLI 연결은 P2-03 |
+| 현재 단계 상태 | `IN_PROGRESS` — P2-01·P2-02 완료, P2-03부터 남음 |
+| 다음 하위 작업 | **P2-03 — 진입 제어·제한 실행.** QG-01 최소 규칙·별도 의미 검토, 서버 측 실행 조건, P1에서 검증한 Runner 연결로 읽기·결과 작성 수준의 제한 작업 |
+| 활성 plan | 없음. `P2-PLAN-02`(P2-02)는 완료로 종료했고 원문은 [plans/P2-PLAN-02.md](plans/P2-PLAN-02.md)에 있다. 다음 세션이 `P2-PLAN-03`을 작성해야 함 |
+| 마지막 구현 검증 | 2026-09-20 — P2-02: 실제 프로세스·브라우저로 여섯 항목 초안·원문 열람·피드백·명시 동의 한 바퀴, 오래된 동의가 최신 버전에 적용되지 않음, 동의 거절 5조건, 의도·피드백·답변·열람 본문이 제어부 파일 바이트에 없음을 확인([P2-02 결과](p2/evidence/P2-02-results.md)). pytest 39 + P1 계약 unittest 18 통과 |
+| 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함. **현재 Runner 실행기는 코딩 CLI가 아니다** — CLI 연결은 P2-03. **P2-02의 의도 초안은 사람이 쓴다** — AI 작성자 연결도 P2-03 이후다. **FR-29 진입 조건 검사는 아직 없다** — 지금은 의도 동의 없이도 Run을 만들 수 있으며 임시 통과 처리를 넣지 않았다 |
 | 필요한 사용자 결정 | 현재 없음. 2026-09-20에 P1 제한 수용을 결정받았다(아래 제한 수용 기록 참조) |
-| 다음 세션 첫 행동 | 시작 절차 → `scripts\bootstrap.ps1` · `scripts\run-tests.ps1` 로 현재 코드가 실제로 도는지 먼저 확인 → P2 필수 참조 중 [의도 산출물](intent-artifacts.md) 1~4절과 FR-03/04/13 다시 읽기 → `P2-PLAN-02` 작성·공유 → P2-02 구현 |
+| 다음 세션 첫 행동 | 시작 절차 → `scripts\bootstrap.ps1` · `scripts\run-tests.ps1` 로 현재 코드가 실제로 도는지 먼저 확인(39 + 18이 기준선) → [품질 게이트](quality-gates.md)의 QG-01, FR-29, [P1 공통 실행 계약](p1-environment-contract.md) 6~8절 읽기 → `P2-PLAN-03` 작성·공유 → P2-03 구현 |
 
 위 표는 시작 시점의 기록이다. **이 표만 믿지 말고 실제 Git 상태·코드·검증 증거와 대조한다.** 코드가 이미 있는데 구현 미착수로 표시되거나, 이전 세션이 끝나지 않은 상태면 중복 구현하지 말고 먼저 상태를 복구한다.
 
@@ -57,9 +57,12 @@
 | Plan ID | 대상 | 상태 | 원문 |
 |---|---|---|---|
 | `P1-PLAN-01` | P1-01~04 | 완료 (2026-09-20) | [plans/P1-PLAN-01.md](plans/P1-PLAN-01.md) |
-| `P2-PLAN-01` | P2-01 | **완료 (2026-09-20)** — 성공 기준 7개 모두 통과, [결과](p2/evidence/P2-01-results.md) | [plans/P2-PLAN-01.md](plans/P2-PLAN-01.md) |
+| `P2-PLAN-01` | P2-01 | 완료 (2026-09-20) — 성공 기준 7개 모두 통과, [결과](p2/evidence/P2-01-results.md) | [plans/P2-PLAN-01.md](plans/P2-PLAN-01.md) |
+| `P2-PLAN-02` | P2-02 | **완료 (2026-09-20)** — 성공 기준 AC-1~10 모두 통과, [결과](p2/evidence/P2-02-results.md) | [plans/P2-PLAN-02.md](plans/P2-PLAN-02.md) |
 
-다음 세션은 P2-02를 위한 `P2-PLAN-02`를 같은 양식으로 새로 작성한다. 양식은 위 두 plan을 따른다.
+`P2-PLAN-02`가 이전 세션에서 넘어온 미결 항목 하나를 정하고 구현했다. **원문 일시중계 읽기 경로를 P2-04로 미루지 않고 P2-02에 넣었다.** 근거는 읽을 수 없는 초안에 대한 동의를 기록하지 않기 위해서다(data-boundary-review 3절, intent-artifacts 3·5절). 구현 중 계획을 두 번 고쳤고 그 기록은 plan 끝의 수정 기록에 있다.
+
+다음 세션은 P2-03을 위한 `P2-PLAN-03`을 같은 양식으로 새로 작성한다.
 
 
 새 계획으로 대체할 때 이전 plan을 삭제하지 말고 이 문서의 세션 기록에 완료·대체 이유와 결과를 남긴다. 기록이 커지면 상세 로그만 저장소의 별도 문서로 옮길 수 있지만 이 문서에는 현재 plan·진행 상태·요약·정확한 참조를 유지한다. 사용자가 다음 파일을 찾아다니게 하지 않는다.
@@ -71,7 +74,7 @@
 | 단계 | 상태 | 다음 하위 작업 | 완료 증거·인계 |
 |---|---|---|---|
 | P1 CLI 연결 검증 | ACCEPTED_WITH_LIMITATIONS | — | P1-01~04 완료 — [계약](p1-environment-contract.md), [P1-02 결과](p1/evidence/P1-02-results.md), [P1-03 결과](p1/evidence/P1-03-results.md), [OpenCode 계약](p1/opencode/contract.md). **제한: 중복 호출 방지 미검증(2026-09-20 사용자 수용, P2-01 이월) → [P2-01에서 검증해 닫음](p2/evidence/P2-01-results.md)** |
-| P2 최소 업무 흐름 | IN_PROGRESS | P2-02 | P2-01 완료 — [실행 결과](p2/evidence/P2-01-results.md), [`P2-PLAN-01`](plans/P2-PLAN-01.md). 제어부·Runner·화면 연결, 강제 종료 복원, 중복 실행 방지(P1 이월 항목 닫음), 원문 비보관 확인 |
+| P2 최소 업무 흐름 | IN_PROGRESS | P2-03 | P2-01·02 완료 — [P2-01 결과](p2/evidence/P2-01-results.md), [P2-02 결과](p2/evidence/P2-02-results.md), [`P2-PLAN-01`](plans/P2-PLAN-01.md), [`P2-PLAN-02`](plans/P2-PLAN-02.md). 제어부·Runner·화면 연결, 강제 종료 복원, 중복 실행 방지(P1 이월 항목 닫음), 원문 비보관, 여섯 항목 초안·원문 열람·피드백·명시 동의 |
 | P3 기능 개발 흐름 | PENDING | P3-01 | 없음 |
 | P4 품질·다양한 업무 | PENDING | P4-01 | 없음 |
 | P5 GitHub 연동 | PENDING | P5-01 | 없음 |
@@ -131,7 +134,7 @@ P2 이후 해당 기능을 구현할 때 확인한다.
 | 하위 작업 | 범위 | 성공 기준·검증 |
 |---|---|---|
 | P2-01 최소 골격·영속 상태 — **DONE** | Python/FastAPI·SQLite·React/TS 골격, Project/Case/의도 버전/결정/Run의 최소 모델, 로컬 Runner 계약. **P1에서 이월: 같은 요청 재전송이 중복 실행을 만들지 않는지 실증** | 실제 API·DB·화면 연결과 재시작 복원. 제어 상태·요약과 Runner 원문 저장을 논리적으로 처음부터 분리. 기본 실행/시험 명령 문서화. **`run_id` 멱등성을 실제 재전송으로 확인하고 P1 이월 항목을 닫는다** → 결과: [P2-01 실행 결과](p2/evidence/P2-01-results.md), 코드 `controller/` `runner/` `domain/` `web/`, 시험 `tests/` 19건 |
-| P2-02 의도·피드백 | 여섯 필드 초안, 원문/가정/질문, 피드백 반영과 버전 차이, 명시 동의 | 작은 기능도 초안·피드백·동의 흐름을 거침. 무응답/조회/단순 질문이 동의가 되지 않음. 오래된 의도 동의가 최신 버전에 적용되지 않음 |
+| P2-02 의도·피드백 — **DONE** | 여섯 필드 초안, 원문/가정/질문, 피드백 반영과 버전 차이, 명시 동의. **원문 일시중계 읽기 경로를 여기서 만들었다** | 작은 기능도 초안·피드백·동의 흐름을 거침. 무응답/조회/단순 질문이 동의가 되지 않음. 오래된 의도 동의가 최신 버전에 적용되지 않음 → 결과: [P2-02 실행 결과](p2/evidence/P2-02-results.md), 코드 `domain/intent_doc.py` `controller/` `runner/agent.py` `web/src/IntentPanel.tsx`, 시험 `tests/` 39건 |
 | P2-03 진입 제어·제한 실행 | QG-01의 최소 규칙·별도 의미 검토, 서버 측 실행 조건, P1에서 검증한 Runner 연결로 읽기·결과 작성 수준의 제한 작업 | UI 버튼 우회 API 호출도 미동의·필수 질문·게이트 미완료면 거부. 실제 실행 ID/결과 저장. 같은 요청 재전송은 중복 실행하지 않음 |
 | P2-04 결과·재시작 | 기준별 결과와 근거 열람, 기본 사람 최종 확인의 최소 흐름, 제어부/Runner 재시작 | 입력·동의·Run·원문 참조가 보존되고 실행 불명 상태가 성공이 되지 않음. 화면에서 처음부터 끝까지 재현 가능한 시연 절차 제공 |
 
@@ -146,6 +149,24 @@ P2 이후 해당 기능을 구현할 때 확인한다.
 | 제어 상태·요약과 Runner 원문 저장의 논리적 분리 | 충족 — 제어부 스키마에 본문 컬럼 없음. 표식 문자열이 제어부 DB·로그에 없고 Runner 저장소에 있음을 파일 바이트로 확인 |
 | 기본 실행/시험 명령 문서화 | 충족 — `scripts/` 4개와 [README 실행 방법](README.md) |
 | **`run_id` 멱등성을 실제 재전송으로 확인** (P1 이월) | **충족** — 제어 API 재전송과 '결과 보고 유실 후 재배정' 두 경우 모두 실행 부수효과가 1회 |
+
+**P2-02 완료 점검 (2026-09-20):**
+
+| P2-02 성공 기준 | 결과 |
+|---|---|
+| 작은 기능도 초안·피드백·동의 흐름을 거침 | 충족 — 한 항목짜리 요청도 여섯 항목이 모두 기록되고 같은 흐름을 통과해야 동의가 된다 |
+| 무응답·조회·단순 질문이 동의가 되지 않음 | 충족 — 열람·피드백·질문 답변을 모두 한 뒤에도 동의 상태는 `동의 없음`이고 decision 행이 0개다 |
+| 오래된 의도 동의가 최신 버전에 적용되지 않음 | 충족 — v1 동의 뒤 v2가 생기면 `stale_agreement` 이며 v1 동의 기록은 보존된다. v1 재동의는 거절 |
+| (추가) 여섯 항목과 미정 유지 | 충족 — 비운 항목은 `undecided`/`none` 으로 남고 시스템이 채우지 않는다 |
+| (추가) 원문 본문 비보관 | 충족 — 의도·질문·피드백·답변·열람 본문이 제어부 DB·WAL·SHM·로그 바이트에 없고 Runner에만 있다 |
+
+**의도 동의를 만드는 경로는 하나뿐이다.** 일반 결정 경로 `POST /api/cases/{id}/decisions` 는
+`intent_agreement` 를 409로 거절한다. 화면에서 버튼을 없애는 것만으로는 API 직접 호출을
+막지 못하기 때문이다. 거절 사유 다섯 가지와 검사 순서는
+[P2-02 결과](p2/evidence/P2-02-results.md) 6절에 있다.
+
+**이 거절들은 FR-29 진입 조건 검사가 아니다.** 실행 배정을 여는 조건은 P2-03에서 따로 만든다.
+지금은 의도 동의와 무관하게 Run을 만들 수 있으며 임시 통과 처리를 넣지 않았다.
 
 **P1 이월 항목 종료 (2026-09-20):** P1에서 `ACCEPTED_WITH_LIMITATIONS` 로 남긴
 '지연 이벤트·응답 유실에서 중복 호출하지 않음'을 P2-01에서 실제로 검증해 닫았다.
@@ -249,98 +270,133 @@ P2 이후 해당 기능을 구현할 때 확인한다.
 ### 최신 세션 인계
 
 ```text
-세션 기록 ID / 수행 시점: S-003 / 2026-09-20
-작업 단계·하위 작업 / 사용한 Plan ID: P2 — 최소 업무 흐름 / P2-01 최소 골격·영속 상태 / P2-PLAN-01
+세션 기록 ID / 수행 시점: S-004 / 2026-09-20
+작업 단계·하위 작업 / 사용한 Plan ID: P2 — 최소 업무 흐름 / P2-02 의도·피드백 / P2-PLAN-02
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
-  C:\git\human-ai-dev-system-design, main. 시작 HEAD 3c8f122(작업 트리 clean, origin/main과 동기).
-  이 세션의 커밋은 P2-01 커밋 7d1cbe0 과 이 인계를 고친 커밋. 사용자 승인으로 origin/main 에 push 함
+  C:\git\human-ai-dev-system-design, main. 시작 HEAD 21e568f(작업 트리 clean, origin/main과 동기).
+  이 세션의 커밋은 P2-02 커밋 1건. **push 하지 않았다** — 외부 반영 허용을 이번에 받지 않았다.
 미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
-  var\ (제어부 DB·Runner 원문·로그), .venv\, web\node_modules\, web\dist\ 는
-  .gitignore 대상이며 커밋하지 않았다. 지워도 bootstrap 으로 다시 만들어진다
+  var\, .venv\, web\node_modules\, web\dist\ 는 .gitignore 대상이며 커밋하지 않았다.
+  단 web\dist 는 빌드 산출물이므로 다음 세션에서 bootstrap 또는 npm run build 로 다시 만든다
 구현·변경 내용:
-  **제품 코드 첫 골격을 만들었다.** 이전까지 제품 코드는 없었다.
-  requirements.txt / requirements.lock.txt / pyproject.toml 신규 — 런타임을 Python 3.12로 고정.
-    설치 버전 잠금(fastapi 0.141.1, uvicorn 0.53.0, httpx 0.28.1, pytest 8.4.2 등)
-  domain/ 신규 — models.py(Case·Run·Decision·Availability·EventType 등 상태값,
-    RunRequest/RunResult 자료구조), ids.py
-  controller/ 신규 — schema.sql(상태 DB. **원문 본문 컬럼 없음**), db.py(WAL + synchronous=FULL),
-    repository.py, api.py, app.py(본문을 남기지 않는 요청 로그), relay.py(메모리 일시중계), config.py
-  runner/ 신규 — store.py(원문 영속 저장, fsync), ledger.py(run_id 실행 원장),
-    executor.py(**코딩 CLI 아님**. 실행마다 부수효과 파일에 한 줄), agent.py(폴링 루프), client.py
-  web/ 신규 — Vite + React 19 + TS 최소 화면. 제어부가 web/dist 를 직접 서빙
-  scripts/ 신규 — bootstrap.ps1, run-controller.ps1, run-runner.ps1, run-tests.ps1
-  tests/ 신규 — 19건(흐름 5, 멱등 6, 데이터 경계 5, 재시작 3)
-  p2/evidence/ 신규 — P2-01-results.md 와 실제 실행 로그·응답·화면 캡처
-  plans/ 신규 — 완료된 P1-PLAN-01·P2-PLAN-01 원문 이관(내용 무수정).
-    DEVELOPMENT.md 가 길어져 활성 plan 자리를 비우고 표로 참조한다
-  README.md — "실행 방법(P2-01 기준)" 추가. DEVELOPMENT.md — 상태표·plan 표·진행표·P2 절·인계
-  .gitignore(var/ 추가), .gitattributes(p2/evidence 줄바꿈·바이너리 규칙)
+  **의도 초안 → 원문 열람 → 피드백 → 새 버전·차이 → 명시 동의 흐름을 만들었다.**
+  domain/intent_doc.py 신규 — 정규 의도 문서 형식(UTF-8 JSON), 구조 추출, 항목 단위 차이.
+    제어부는 compose() 만 부르고 parse()/structure() 는 부르지 않는다. 본문 해석은 Runner가 한다
+  domain/models.py — ConfirmationState·ContentOrigin·IntentField·FieldChange·DecideAt·
+    QuestionState·FeedbackState·ReadRequestState·IntentAgreementState·AgreementRefusal 추가
+  controller/schema.sql — **스키마 v2.** intent_field / intent_question / feedback /
+    intent_view / artifact_read_request 신규(전부 본문 컬럼 없음) + decision.subject_content_hash
+  controller/db.py — SCHEMA_VERSION=2, 컬럼 추가용 idempotent 마이그레이션
+  controller/repository.py — 의도 구조·질문·피드백·열람·동의·열람요청 접근자
+  controller/api.py — 의도 초안 제출, 의도 상태, 버전 차이, 명시 동의, 피드백, 질문 답변,
+    원문 열람 요청·수령, Runner용 열람 응답·구조 보고
+  controller/app.py — 재시작 시 중계 중이던 열람 응답을 expired 로 닫는다
+  runner/agent.py, client.py — 의도 원문 저장 후 구조 보고, 열람 요청에 고정 버전으로 응답
+  web/src/IntentPanel.tsx 신규 + api.ts, App.tsx, styles.css — 의도 화면
+  tests/ — 19 → 39건. test_intent.py 신규 13건, test_migration.py 신규 1건,
+    나머지 파일에 6건 추가
+  scripts/run-tests.ps1 — 안내 문구를 단계 중립으로 바꿈
+  README.md — 실행 방법을 P2-02 기준으로 갱신하고 화면 절차 추가
+  p2/evidence/P2-02-* 신규, plans/P2-PLAN-02.md 신규, DEVELOPMENT.md 갱신
 성공 기준별 결과: 통과 / 실패 / 미검증 / 사용자 수용 제한
-  AC-1 통과 — 제어부·Runner를 실제 프로세스로 띄우고 설치된 Edge로 화면을 눌러
-    Case·원문·Run을 만든 뒤 SQLite를 직접 열어 대조. p2/evidence/P2-01-ui-driven.log
-  AC-2 통과 — uvicorn 자식 프로세스를 taskkill /F /T 로 죽이고 재기동해 Case·결정·Run·참조 복원 확인.
-    정상 종료가 아니라 강제 종료로 확인했다
-  AC-3 통과 — (가) 같은 run_id POST 2회 → run 행 1개·실행 1회, 응답은 201 다음 200
-    (나) 결과 보고 유실 후 같은 run_id 재배정 → Runner가 원장을 보고 재실행하지 않고
-    저장된 결과를 다시 보고. 실행 부수효과는 여전히 1회. **P1 이월 항목을 이것으로 닫았다**
-  AC-4 통과 — generation 1의 결과·이벤트 보고가 409로 거부되고 DB 상태가 바뀌지 않음
-  AC-5 통과 — 같은 (run_id, seq) 재전송이 {"stored":0,"duplicate":2}로 처리되고 이벤트 수 2 유지
-  AC-6 통과 — 표식 문자열이 제어부 sqlite(+WAL/SHM)·로그 바이트에 없고 Runner 저장소에는 있음.
-    "셋 다 없음"이 아니라 "Runner에만 있음"을 확인했다
-  AC-7 통과 — py -3.12 로 만든 .venv 를 스크립트가 직접 가리킨다. README 명령으로 재현 가능
+  AC-1 통과 — 여섯 항목이 버전마다 모두 존재하고 비운 항목은 undecided/none 으로 남는다.
+    내용이 있는데 출처가 none 이면 400으로 거부한다
+  AC-2 통과 — 브라우저에서 원문 본문이 실제로 표시됐다. Runner를 멈추면 pending(PC 연결 필요)
+    으로 남고 본문이 오지 않으며, 원문이 사라진 것으로 표시하지 않는다
+  AC-3 통과 — v2의 changed_fields 가 ["exclusions"], 반영 피드백은 reflected + 반영 버전 연결,
+    미반영 피드백은 이유와 함께 not_reflected
+  AC-4 통과 — 열람·피드백·질문 답변을 모두 한 뒤에도 agreement_state=never_agreed,
+    intent_agreement decision 0건
+  AC-5 통과 — 명시 동의에 subject_id·subject_revision·subject_content_hash·actor 기록.
+    agree 표시나 문구가 없으면 400
+  AC-6 통과 — v1 동의 후 v2 생성 → stale_agreement, v2는 draft, v1 동의 기록 보존,
+    v1 재동의는 409 not_latest_version
+  AC-7 통과 — 거절 **5조건**을 사유 코드로 구별(not_explicit / not_latest_version /
+    original_not_available / content_changed / open_intent_questions / original_not_read).
+    계획은 4조건이었고 구현 중 original_not_read 를 더했다(plan 수정 기록 참조).
+    설계·계획으로 이월한 질문은 동의를 막지 않음도 함께 확인
+  AC-8 통과 — 목표 한 줄짜리 작은 요청도 여섯 항목이 기록되고 같은 흐름을 통과해야 동의가 된다
+  AC-9 통과 — 라이브 실행에서 의도·질문·피드백·답변 본문의 표식이 제어부 sqlite·WAL·SHM·
+    로그 바이트에 없고 Runner 저장소에는 있다. **읽지 못한 파일 0개**를 함께 확인했다
+  AC-10 통과 — 실제 uvicorn 자식 프로세스를 taskkill /F /T 로 죽이고 재기동해 의도 버전·
+    항목 상태·질문·피드백·동의 복원 확인. 중계 중이던 열람 응답은 expired 로 드러남
 실행한 검증 명령·환경·결과·증거 위치:
-  PowerShell 7.6.6 / Windows 11 Home 10.0.26200 / Python 3.12.10 / Node v22.15.1
-  scripts\bootstrap.ps1        → .venv 생성·의존성 설치·web 빌드 성공
-  scripts\run-tests.ps1        → pytest 19 passed (7.16s) + P1 unittest Ran 18, OK
-  scripts\run-controller.ps1 / run-runner.ps1 상당의 명령으로 실제 프로세스 기동 후
-    브라우저(headless Edge) 클릭과 API 경로로 각각 한 바퀴. 종료 후 포트 8765 잔여 연결 0,
-    잔여 python 프로세스 0을 확인
-  증거: p2/evidence/P2-01-results.md 와 같은 디렉터리의 P2-01-ui-driven.log/.png,
-    P2-01-live-session.log, P2-01-live-run.json, P2-01-live-case.json,
-    P2-01-ui.png, P2-01-ui-case.png, live-controller.out, live-runner.out
+  PowerShell 7 / Windows 11 Home 10.0.26200 / Python 3.12.10 / Node v22.15.1
+  scripts\run-tests.ps1   → pytest 39 passed (13.9s) + P1 unittest Ran 18, OK
+  web: npm run build      → tsc -b 통과, vite 빌드 성공
+  실제 프로세스: uvicorn(127.0.0.1:8766)과 runner.agent 를 별도 프로세스로 띄워
+    진짜 HTTP로 한 바퀴. 이어서 설치된 Edge(headless)로 화면을 눌러 한 바퀴.
+    라이브 데이터는 %LOCALAPPDATA%\Temp\hads-p2-02-live 에 두어 저장소 var\ 를 건드리지 않았다
+  증거: p2/evidence/P2-02-results.md 와 같은 디렉터리의 P2-02-live-api.log,
+    P2-02-live-boundary.log, P2-02-live-offline.log, P2-02-ui-driven.log,
+    P2-02-ui-draft.png, P2-02-ui-original.png, P2-02-ui-agreed.png
   **P1 계약 시험 18건은 CLI를 실행하지 않는 문서 계약 시험이며 OpenCode 실환경 검증이 아니다**
 변경 검토 결과 / 남은 위험:
   변경 diff 검토함. 비밀값·토큰·계정 식별자 없음. .venv/node_modules/dist/var 가 커밋에 들어가지
-  않음을 확인. 검토 중 발견해 고친 것 1건: 같은 run_id 재전송이 201 Created 를 돌려주고 있었다.
-  만들지 않은 것을 Created 로 보고하지 않도록 200으로 바꾸고 증거를 다시 수집했다
-  남은 위험 (1) synchronous=FULL 은 SQLite 수준 내구성이며 백업 요구를 대신하지 않는다
-  (2) 규모 시험(프로젝트 10개·Runner 3대) 미수행
-  (3) starlette.testclient 의 httpx deprecation 경고. 다음 주요 버전에서 바뀔 수 있다
-  (4) 배정이 폴링(기본 1초)이다. 실시간 제어가 필요하면 바꿔야 한다
-  (5) runner_offline 상태값은 있으나 하트비트 만료 판정을 구현하지 않았다 — 미검증
-  (6) bump_generation 은 fencing 일 뿐 정지 증거가 아니다. 실제 정지 확인은 P6-03
+  않음을 확인. 검토·시험 중 발견해 고친 것 3건:
+  (1) 데이터 경계 시험이 **질문 본문이 제어부 DB에 남는 것**을 잡았다. Runner가 질문 본문
+      앞부분을 잘라 요약으로 올리고 있었다. 시험이 아니라 설계를 고쳐, 요약을 작성자가
+      따로 쓰도록 필수 입력으로 바꿨다
+  (2) 동의가 **원문을 한 번도 받지 않고도** 가능했다. 해시는 상태 조회로 알 수 있기 때문이다.
+      열람 기록을 전달 시점에만 만들도록 바꾸고(호출자가 만드는 경로 제거) 동의의 선행
+      조건으로 넣었다. 거절 사유 original_not_read 추가
+  (3) 브라우저 캡처에서 **P2-01의 옛 '이 버전에 동의' 버튼**이 남아 있는 것을 발견했다.
+      그 버튼은 일반 결정 경로로 동의를 만들어 P2-02 검사를 통째로 건너뛴다.
+      화면에서 없애고 **서버에서도** 일반 경로의 intent_agreement 를 409로 막았다
+  남은 위험 (1) 열람 요청에 만료 시간·크기 한도가 없다. 아무도 받아 가지 않은 relayed 본문은
+      제어부 재시작이나 수령 때까지 메모리에 남는다
+  (2) 질문의 blocks(의존 작업)는 기록만 하고 차단을 강제하지 않는다 — 작업 그래프는 P3-02
+  (3) 피드백이 어느 항목을 겨냥했는지는 구조화하지 않았다. 대상 의도 버전까지만 연결한다
+  (4) 버전 차이는 항목 단위다. 전체 본문 차이는 두 원문을 각각 열람해 사람이 비교한다
+  (5) 열람은 한 사용자·로컬 루프백에서만 확인했다. 인증·LAN/VPN 암호화는 P6-01.
+      메모리 중계가 "서버로 전송되지 않음"을 뜻하지 않는다는 설명은 그대로다
+  (6) P2-01의 남은 위험(하트비트 만료 미구현, 폴링 배정, bump_generation 이 정지 증거가
+      아님, starlette.testclient 의 httpx deprecation 경고)은 그대로다
   (7) P1에서 넘어온 위험(두 CLI 자동 업데이트, Claude 훅 fail-open, Codex 훅 신뢰 요구,
-      프로세스 트리 종료 미구현)은 그대로다. 해당 기능을 붙일 때 확인한다
+      프로세스 트리 종료 미구현, 재연결 대조·병렬 호출 경계 미검증)은 그대로다
 새 사용자 결정·연결한 설계 변경:
-  제품 설계 결정은 없다(D-01~58 변경 없음). 합의 범위 안의 구현 선택 2건을 근거와 함께 진행했다.
-  (가) Python 3.12.10 고정 — P1이 P2-01로 넘긴 항목. py -3.12 로 명시해 세션 간 흔들림 제거
-  (나) 저장소 로컬 .venv\ · web\node_modules\ 설치 — implementation-baseline 2절의
-      "별도 가상환경과 데이터 경로". 사용자 전역 설정은 바꾸지 않았다
-  검증용으로 playwright 를 **저장소 밖 임시 가상환경**에 설치했다. 제품 의존성이 아니며
-  requirements.txt 에 없다. 같은 확인을 사람이 직접 클릭해 재현할 수 있다
+  제품 설계 결정은 없다(D-01~58 변경 없음). 합의 범위 안의 구현 선택 3건을 근거와 함께 진행했다.
+  (가) **원문 일시중계 읽기 경로를 P2-02에 포함** — 이전 세션이 "plan에서 먼저 정하라"고
+      넘긴 항목이다. 읽을 수 없는 초안에 대한 동의를 기록하면 "요약을 동의한 원문으로
+      대체하지 않는다"(intent-artifacts 3·5절)를 어긴다. plan 설계 선택 (가)에 근거를 남겼다
+  (나) **의도 초안 본문은 사람이 입력한다** — CLI 연결이 P2-03이므로 AI 작성자는 아직 없다.
+      문서에 authoring_note 로, 화면에 문구로 이 제한을 그대로 표시한다
+  (다) **동의 전 원문 전달 기록을 요구** — 계획에 없던 다섯 번째 거절 조건이다.
+      코드보다 계획을 먼저 고쳐 plans/P2-PLAN-02.md 끝에 수정 기록으로 남겼다
+  검증용 playwright 를 **저장소 밖 임시 가상환경**(%LOCALAPPDATA%\Temp\hads-playwright)에
+  설치했다. 제품 의존성이 아니며 requirements.txt 에 없다. 같은 확인을 사람이 직접
+  브라우저에서 클릭해 재현할 수 있다
 남은 프로세스·실험 저장소·외부 게시 상태:
-  남은 프로세스 없음(포트 8765 잔여 연결 0, uvicorn/runner 프로세스 0 확인).
-  GitHub 이슈·PR 등 외부 게시는 없다. 사용자 승인으로 origin/main 에 push 했고
-  원격 main 은 7d1cbe0(P2-01) 이후 상태다.
-  P1 시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 이전 세션 상태 그대로 두었다.
-  P2 런타임 데이터는 저장소 안 var\ 이며 커밋하지 않았다
+  남은 프로세스 없음(uvicorn/runner 프로세스 0 확인). 포트 8766 에 TimeWait 소켓 2개가
+  남아 있었으나 소유 프로세스가 없는 정상적인 TCP 종료 상태다.
+  GitHub 이슈·PR 등 외부 게시는 없다. **이번 세션은 push 하지 않았다** —
+  원격 main 은 21e568f 상태이고 로컬이 P2-02 커밋 1개만큼 앞서 있다.
+  라이브 시험 데이터 %LOCALAPPDATA%\Temp\hads-p2-02-live 와 검증용 가상환경
+  %LOCALAPPDATA%\Temp\hads-playwright 는 지워도 된다(저장소 밖).
+  P1 시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 이전 세션 상태 그대로 두었다
 단계 완료 여부와 이유:
-  P2 = IN_PROGRESS. **P2-01만 완료**했고 P2-02·03·04가 남았다.
-  P2-01 성공 기준 7개를 모두 실제 실행으로 확인했으며 수용 제한을 새로 만들지 않았다.
-  P1에서 이월받은 '중복 호출 방지'는 여기서 검증해 닫았다. 이 종료는 그 한 항목에만 적용되며
-  P1의 다른 미검증 항목(재연결 대조, 병렬 호출 경계, 훅 적용 공백, 훅 timeout,
-  프로세스 트리 종료, 훅 신뢰 영속화)은 그대로 남아 있다
+  P2 = IN_PROGRESS. **P2-01·P2-02 완료**했고 P2-03·04가 남았다.
+  P2-02 성공 기준 AC-1~10을 모두 실제 실행으로 확인했으며 수용 제한을 새로 만들지 않았다.
+  **P2-02가 만든 거절 규칙은 FR-29 진입 조건 검사가 아니다.** 동의를 기록할 수 있는지의
+  조건일 뿐이고, 지금은 의도 동의 없이도 Run을 만들 수 있다. 임시 통과 처리를 넣지 않았다
 다음 단계·하위 작업 / 다음 세션 첫 명령 또는 읽을 위치:
-  P2-02 의도·피드백. 먼저 scripts\bootstrap.ps1 과 scripts\run-tests.ps1 로 현재 코드가
-  실제로 도는지 확인한다(19 + 18 통과가 기준선이다). 그다음 intent-artifacts.md 1~4절과
-  FR-03/04/13, 6절 P2 표의 P2-02 행을 읽고 `P2-PLAN-02` 를 작성해 공유한 뒤 구현한다.
-  **P2-02에서 유의할 것**: 의도 버전과 Decision 테이블·API는 이미 있다(자리만 있고 흐름이 없다).
-  동의는 대상 버전에만 붙고 새 버전으로 승계되지 않게 이미 만들어 두었으며
-  tests/test_flow.py::test_intent_version_and_agreement_are_separate_records 가 지킨다.
-  **진입 조건 검사(FR-29)는 P2-03이다. P2-02에서 앞당겨 넣지 않는다.**
-  원문 본문 열람 경로는 아직 없다. 의도 초안 본문을 화면에서 보여 줘야 한다면
-  일시중계 읽기 경로를 P2-02에서 만들지 P2-04로 미룰지 plan에서 먼저 정한다
-막힌 조건과 필요한 사용자 답변: 없음
+  P2-03 진입 제어·제한 실행. 먼저 scripts\bootstrap.ps1 과 scripts\run-tests.ps1 로 현재
+  코드가 실제로 도는지 확인한다(39 + 18 통과가 기준선이다. bootstrap 이 web\dist 를 다시 만든다).
+  그다음 quality-gates.md 의 QG-01, FR-29, p1-environment-contract.md 6~8절(공통 실행 계약)을
+  읽고 `P2-PLAN-03` 을 작성해 공유한 뒤 구현한다.
+  **P2-03에서 유의할 것**:
+  - 진입 조건 검사가 쓸 재료는 이미 있다 — repository.intent_state() 의 agreement_state,
+    open_intent_stage_questions(), artifact_ref.availability, decision.subject_content_hash.
+    지금 Run 생성은 이 중 어느 것도 보지 않는다. 그 연결이 P2-03의 일이다
+  - **동의 거절(P2-02)과 실행 거부(P2-03)는 다른 검사다.** 같은 함수로 합치지 않는다
+  - 실제 CLI 어댑터를 붙일 때 runner/executor.py 를 교체하되 RunResult·정규화 이벤트 계약은
+    그대로 쓴다(그래야 제어부가 달라지지 않는다). capability 를 doc_only 에서 verified 로
+    올리려면 실측 근거가 있어야 한다
+  - AI 의도 초안 작성자를 P2-03에서 붙인다면 domain/intent_doc.py 의 authoring_note 와
+    화면 문구("이 초안은 사람이 직접 쓴다")를 함께 고쳐야 한다. 지금 문구를 남겨 두면 거짓이 된다
+막힌 조건과 필요한 사용자 답변:
+  없음. 다만 이번 세션 커밋을 origin/main 에 push 할지는 사용자 확인이 필요하다 —
+  이전 세션의 push 허용을 이번 커밋으로 확대하지 않았다
 ```
 
 - **주의:** OpenCode는 조사 범위에서 설치 흔적이 없어 문서 계약만 다룬다(P1-04). 기존 CLI 로그인 정보·비밀값을 원문 로그로 기록하지 않는다.
@@ -370,6 +426,7 @@ P2 이후 해당 기능을 구현할 때 확인한다.
 | S-001 | 2026-09-20 | 설계 정리 | 설계 v0.6 문서와 이 안내서 준비. 제품 코드·실증 없음 |
 | S-002 | 2026-09-20 | P1-01~04 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0와 `P1-PLAN-01` 기록. harness로 두 CLI의 읽기·쓰기·권한 거절·세션 분리를 실제 실행. 이어서 PreToolUse 훅으로 단절 주입 시험을 해 **다음 도구 호출이 실제로 시작되지 않음**을 부수효과로 확인하고, 강제 종료가 안전 중지가 아님을 프로세스 잔류로 확인. 이어서 OpenCode V2 문서 계약·재구성 fixture·계약 시험 18개를 만들고 세 도구 capability 표를 채움. P1은 '중복 호출 방지' 미검증 1건을 사용자 수용으로 제한 종료(ACCEPTED_WITH_LIMITATIONS)하고 P2-01로 이월. P2 READY |
 | S-003 | 2026-09-20 | P2-01 | **제품 코드 첫 골격.** Python 3.12 고정, FastAPI 제어부·SQLite·로컬 Runner·React/TS 화면을 만들고 실제 프로세스와 브라우저로 한 줄 연결을 확인. 강제 종료 후 복원, 같은 (run_id, seq) 이벤트·같은 run_id 요청의 중복 방지, 결과 보고 유실 후 재배정에서도 실행 1회를 부수효과로 확인해 **P1 이월 항목을 닫음**. 원문이 제어부 DB·로그에 없고 Runner에만 있음을 파일 바이트로 확인. pytest 19 + P1 계약 unittest 18 통과. P2-02~04 남음 |
+| S-004 | 2026-09-20 | P2-02 | **의도·피드백 흐름.** 여섯 항목 초안·원문 열람·피드백·미정 질문·명시 동의를 만들고 실제 프로세스와 브라우저로 한 바퀴 확인. 원문 일시중계 읽기 경로를 P2-02에 넣기로 정하고 구현(이전 세션 이월 항목). 조회·피드백·질문 답변·무응답이 동의가 되지 않고, 오래된 동의가 최신 버전에 적용되지 않음을 실증. 동의 거절 5조건을 사유로 구별. 의도·질문·피드백·답변·열람 본문이 제어부 파일 바이트에 없음을 확인. 시험 중 발견해 고친 것 3건(질문 요약이 본문 발췌였던 것, 원문을 읽지 않고 동의 가능했던 것, P2-01의 옛 동의 버튼이 검사를 우회하던 것). pytest 39 + P1 계약 unittest 18 통과. P2-03·04 남음 |
 
 안내서·계약 문서 작성 자체를 P1 완료로 기록하지 않는다.
 

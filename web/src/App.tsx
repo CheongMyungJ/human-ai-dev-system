@@ -1,8 +1,7 @@
-// P2-01 최소 화면.
+// P2-01 최소 화면 + P2-02 의도 흐름.
 //
-// 이 화면이 보여 주는 것은 제어부 상태 · 요약 · 원문 참조뿐이다.
-// 원문 본문 열람(인증된 일시중계)은 P2-04 범위이므로 여기서는 참조와
-// availability 만 표시하고 "원문은 Runner에 있음"을 그대로 드러낸다.
+// 제어부에서 오는 것은 상태 · 요약 · 원문 참조뿐이다. 원문 본문은 의도 화면의
+// 열람 경로(일시중계)로만 나타나며 제어부에 보관되지 않는다.
 
 import { useCallback, useEffect, useState } from 'react'
 import {
@@ -12,6 +11,7 @@ import {
   type Project,
   type RunnerInfo,
 } from './api'
+import { IntentPanel } from './IntentPanel'
 
 const AVAILABILITY_LABEL: Record<string, string> = {
   pending: '저장 대기 (아직 저장 완료 아님)',
@@ -95,7 +95,9 @@ export function App() {
     <div className="app">
       <header>
         <h1>사람–AI 개발 협업 시스템</h1>
-        <p className="sub">P2-01 최소 골격 · 제어부 상태와 원문 참조만 표시한다</p>
+        <p className="sub">
+          P2-02 의도·피드백 · 제어부는 상태와 참조만 보관하고 원문은 Runner에 있다
+        </p>
       </header>
 
       {error && <div className="error">오류: {error}</div>}
@@ -122,6 +124,15 @@ export function App() {
           <CaseDetailPanel
             detail={selectedCase}
             runners={runners}
+            onChanged={() => openCase(selectedCase.id)}
+          />
+        )}
+
+        {selectedCase && selectedCase.kind === 'feature' && (
+          <IntentPanel
+            key={selectedCase.id}
+            caseId={selectedCase.id}
+            runnerId={runners[0]?.id}
             onChanged={() => openCase(selectedCase.id)}
           />
         )}
@@ -341,20 +352,13 @@ function CaseDetailPanel(props: {
       </form>
 
       <h3>의도 버전과 결정</h3>
+      {/* 여기에는 동의 버튼을 두지 않는다. 의도 동의는 원문 열람·미해결 질문 검사를
+          거치는 아래 의도 화면에서만 할 수 있다(FR-03). 목록에서 바로 누르는 버튼은
+          그 검사를 건너뛰게 만든다. */}
       <ul className="list">
         {detail.intent_versions.map((intent) => (
-          <li key={intent.id}>
-            v{intent.revision} · {intent.status}{' '}
-            {intent.status === 'draft' && (
-              <button
-                onClick={async () => {
-                  await api.agreeToIntent(detail.id, intent)
-                  props.onChanged()
-                }}
-              >
-                이 버전에 동의
-              </button>
-            )}
+          <li key={intent.id} className="small">
+            v{intent.revision} · {intent.status}
           </li>
         ))}
         {detail.intent_versions.length === 0 && <li className="muted">아직 없음</li>}

@@ -1,0 +1,15 @@
+[1] project/case prj-b44493bbf50fe004 / case-807a147f581a7e7d runner=runner-live-p202
+[2] 초안 접수 {"artifact_id": "art-0957a96137c2bb3b", "revision": 1, "content_hash": "sha256:54b5d9dfa4249ab6b80b43d00dcc8dab2e781f7f3ba96e3cbd8f1fe529485c3c"}
+[3] AC-1 여섯 항목 {"goal": "proposed/user_requirement", "expected_outcome": "proposed/ai_proposal", "scope": "proposed/user_requirement", "exclusions": "undecided/none", "constraints": "undecided/none", "open_questions": "undecided/none"}
+[4] AC-7 명시 표시 없음 400 not_explicit
+[5] AC-7 원문이 바뀜 409 content_changed
+[6] AC-7 의도 단계 질문 미해결 409 open_intent_questions
+[7] AC-2 열람 요청 read-d71d0fcd404b2112 state=pending
+[8] AC-2 원문 수령 state=delivered bytes=1487
+[9] AC-2 재수령 불가 content=None state=delivered
+[10] AC-4 열람+피드백+답변 후 동의 상태 never_agreed
+[11] AC-5 명시 동의 201 hash=sha256:54b5d9dfa4249ab6…
+[12] AC-3 버전 차이 {"compared_with": 1, "changed": ["exclusions"], "q_removed": ["row-scope"], "full_text_diff": "not_on_controller"}
+[13] AC-6 v2 생성 후 동의 상태 stale_agreement (동의한 버전 v1)
+[14] AC-6 옛 버전 재동의 거절 409 not_latest_version
+[OK] 라이브 API 한 바퀴 통과

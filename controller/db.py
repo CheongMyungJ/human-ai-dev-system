@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def utc_now() -> str:
@@ -34,11 +34,32 @@ def connect(db_path: Path) -> sqlite3.Connection:
     return conn
 
 
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, ddl: str
+) -> bool:
+    """기존 표에 컬럼을 더한다. 이미 있으면 아무 것도 하지 않는다.
+
+    `CREATE TABLE IF NOT EXISTS` 로는 기존 표의 컬럼이 추가되지 않기 때문에 필요하다.
+    기존 행의 새 컬럼은 NULL로 남는다. 그 값을 나중에 지어내지 않고
+    "기록되지 않음"으로 표시한다.
+    """
+    existing = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+    if column in existing:
+        return False
+    conn.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {ddl}')
+    return True
+
+
 def migrate(conn: sqlite3.Connection) -> None:
     """스키마를 적용한다. 이미 적용돼 있으면 아무 것도 바꾸지 않는다."""
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+
+    # v2: 동의가 어떤 원문에 붙은 것인지 기록한다(FR-23 "승인 후 대상이 바뀌면").
+    _add_column_if_missing(conn, "decision", "subject_content_hash", "TEXT")
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
-    if row is None or row["v"] is None:
+    current = row["v"] if row is not None else None
+    if current is None or current < SCHEMA_VERSION:
         conn.execute(
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, utc_now()),

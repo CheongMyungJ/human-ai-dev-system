@@ -58,7 +58,21 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
             for intake in repo.list_pending_intakes(runner["id"]):
                 repo.mark_intake_lost(intake["id"])
                 recovered += 1
-        app.state.logger.info("startup db=%s lost_pending_intakes=%d", config.db_path, recovered)
+
+        # 같은 이유로 중계 중이던 **열람 응답**도 이 프로세스에 없다.
+        # 원문이 사라진 것이 아니라 중계가 끊긴 것이므로 요청만 expired 로 닫고
+        # 사람은 다시 요청하면 된다(data-boundary-review 3절).
+        expired = 0
+        for pending in repo.list_unfinished_read_requests():
+            repo.mark_read_expired(pending["id"])
+            expired += 1
+
+        app.state.logger.info(
+            "startup db=%s lost_pending_intakes=%d expired_read_requests=%d",
+            config.db_path,
+            recovered,
+            expired,
+        )
         try:
             yield
         finally:

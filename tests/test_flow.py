@@ -59,38 +59,31 @@ def test_end_to_end_case_to_run_result(harness):
 def test_intent_version_and_agreement_are_separate_records(harness):
     """의도 버전과 사람의 동의는 별개 기록이다(FR-23).
 
-    P2-01은 기록 구조만 만든다. 동의가 실행을 열어 주는지의 검사는 P2-03이다.
+    P2-02에서 동의는 전용 경로에서만 만들어진다. 이 시험은 그 경로를 거친 뒤에도
+    두 기록이 서로 독립이고, 새 버전이 이전 동의를 승계하지 않음을 확인한다.
     """
     project = harness.create_project()
     case = harness.create_case(project["id"])
-    art = harness.submit_artifact(case["id"], "목표: ...\n범위: ...", kind="intent", summary="의도 초안 v1")
-
-    intent = harness.client.post(
-        f"/api/cases/{case['id']}/intent-versions",
-        json={"artifact_id": art["artifact_id"], "revision": 1},
-    ).json()
+    harness.submit_intent_draft(
+        case["id"],
+        {"goal": {"text": "목표: ...", "state": "proposed", "origin": "user_requirement"}},
+        summary="의도 초안 v1",
+    )
+    intent = harness.latest_intent(case["id"])
     assert intent["status"] == IntentStatus.DRAFT.value
 
-    decision = harness.client.post(
-        f"/api/cases/{case['id']}/decisions",
-        json={
-            "kind": DecisionKind.INTENT_AGREEMENT.value,
-            "subject_type": "intent_version",
-            "subject_id": intent["id"],
-            "subject_revision": intent["revision"],
-            "actor": "owner",
-        },
-    ).json()
+    harness.read_intent_original(intent)
+    decision = harness.agree(case["id"], intent).json()["decision"]
     assert decision["kind"] == "intent_agreement"
 
     detail = harness.client.get(f"/api/cases/{case['id']}").json()
     assert detail["intent_versions"][0]["status"] == IntentStatus.AGREED.value
 
     # 새 의도 버전이 생기면 이전 동의가 새 버전으로 승계되지 않는다.
-    art2 = harness.submit_artifact(case["id"], "목표: 바뀜", kind="intent", summary="의도 초안 v2")
-    harness.client.post(
-        f"/api/cases/{case['id']}/intent-versions",
-        json={"artifact_id": art2["artifact_id"], "revision": 1},
+    harness.submit_intent_draft(
+        case["id"],
+        {"goal": {"text": "목표: 바뀜", "state": "proposed", "origin": "user_requirement"}},
+        summary="의도 초안 v2",
     )
     detail = harness.client.get(f"/api/cases/{case['id']}").json()
     by_rev = {iv["revision"]: iv for iv in detail["intent_versions"]}
@@ -99,6 +92,52 @@ def test_intent_version_and_agreement_are_separate_records(harness):
     # 동의 기록 자체는 지우지 않는다. 대상 버전에 묶여 보존된다.
     assert len(detail["decisions"]) == 1
     assert detail["decisions"][0]["subject_id"] == intent["id"]
+
+
+def test_the_generic_decision_endpoint_cannot_record_an_intent_agreement(harness):
+    """의도 동의로 가는 두 번째 입구를 만들지 않는다.
+
+    일반 결정 경로로 intent_agreement 를 넣을 수 있으면 최신 버전·원문 확인·열람
+    기록·미해결 질문 검사를 통째로 건너뛴다. 화면에서 버튼을 없애는 것만으로는
+    부족하므로 서버가 거절한다.
+    """
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    harness.submit_intent_draft(
+        case["id"],
+        {"goal": {"text": "목표", "state": "proposed", "origin": "user_requirement"}},
+    )
+    intent = harness.latest_intent(case["id"])
+
+    refused = harness.client.post(
+        f"/api/cases/{case['id']}/decisions",
+        json={
+            "kind": DecisionKind.INTENT_AGREEMENT.value,
+            "subject_type": "intent_version",
+            "subject_id": intent["id"],
+            "subject_revision": intent["revision"],
+            "actor": "owner",
+        },
+    )
+    assert refused.status_code == 409
+    assert "intent-versions" in refused.json()["detail"]
+
+    # 상태도 바뀌지 않았다.
+    assert harness.latest_intent(case["id"])["status"] == IntentStatus.DRAFT.value
+    assert harness.intent_state(case["id"])["agreement_state"] == "never_agreed"
+
+    # 다른 종류의 결정은 이 경로로 계속 기록된다.
+    other = harness.client.post(
+        f"/api/cases/{case['id']}/decisions",
+        json={
+            "kind": DecisionKind.DESIGN_REVIEW.value,
+            "subject_type": "case",
+            "subject_id": case["id"],
+            "subject_revision": 1,
+            "actor": "owner",
+        },
+    )
+    assert other.status_code == 201
 
 
 def test_run_is_refused_when_instruction_is_not_persisted(harness):

@@ -222,3 +222,128 @@ class RunResult:
     workspace_effect: dict[str, Any] | None = None
     residual_activity: str = "unknown"
     observed_tool_version: str | None = None
+
+
+# --------------------------------------------------------------------- P2-02
+
+
+class IntentField(str, Enum):
+    """의도 초안의 필수 여섯 항목(intent-artifacts.md 1절).
+
+    이 집합은 줄이지 않는다. 정보가 없는 항목도 행으로 남기고 `UNDECIDED` 로 표시한다.
+    """
+
+    GOAL = "goal"
+    EXPECTED_OUTCOME = "expected_outcome"
+    SCOPE = "scope"
+    EXCLUSIONS = "exclusions"
+    CONSTRAINTS = "constraints"
+    OPEN_QUESTIONS = "open_questions"
+
+
+class ConfirmationState(str, Enum):
+    """항목의 확인 상태(intent-artifacts.md 3절 "확인 상태").
+
+    `USER_CONFIRMED` 는 실제 확인 근거가 있는 항목에만 쓴다.
+    """
+
+    UNDECIDED = "undecided"
+    PROPOSED = "proposed"
+    USER_CONFIRMED = "user_confirmed"
+    NEEDS_RECHECK = "needs_recheck"
+    SUPERSEDED = "superseded"
+
+
+class ContentOrigin(str, Enum):
+    """내용의 성격(FR-04, intent-artifacts.md 3절).
+
+    AI 추정을 확정 요구로 표시하지 않기 위해 값을 합치지 않는다.
+    `NONE` 은 "아직 아무 내용이 없다"이며 출처가 불명이라는 뜻이 아니다.
+    """
+
+    NONE = "none"
+    USER_REQUIREMENT = "user_requirement"
+    PROJECT_RULE = "project_rule"
+    OBSERVATION = "observation"
+    AI_PROPOSAL = "ai_proposal"
+    AI_ASSUMPTION = "ai_assumption"
+
+
+class FieldChange(str, Enum):
+    """이전 의도 버전과 비교한 항목 단위 변화."""
+
+    INITIAL = "initial"
+    UNCHANGED = "unchanged"
+    CHANGED = "changed"
+
+
+class DecideAt(str, Enum):
+    """질문을 어느 단계에서 결정하는지(intent-artifacts.md 2절, FR-03 질문 처리).
+
+    `INTENT` 질문은 의도 단계에서 사람이 결정해야 한다.
+    `DESIGN`/`PLAN` 은 그 단계와 의존 작업을 표시해 이월한 질문이다.
+    """
+
+    INTENT = "intent"
+    DESIGN = "design"
+    PLAN = "plan"
+
+
+class QuestionState(str, Enum):
+    OPEN = "open"
+    ANSWERED = "answered"
+    WITHDRAWN = "withdrawn"
+
+
+class FeedbackState(str, Enum):
+    """피드백의 처리 상태.
+
+    `NOT_REFLECTED` 는 이유를 함께 남긴다. 반영하지 않은 것을 조용히 닫지 않는다.
+    """
+
+    RECEIVED = "received"
+    REFLECTED = "reflected"
+    NOT_REFLECTED = "not_reflected"
+
+
+class ReadRequestState(str, Enum):
+    """원문 열람 요청의 상태(data-boundary-review.md 3절).
+
+    `PENDING`   소유 Runner가 아직 가져가지 않음 → 화면은 "PC 연결 필요"로 표시한다
+    `RELAYED`   Runner가 올린 본문이 제어부 **메모리에만** 있다
+    `DELIVERED` 브라우저가 한 번 받아 갔고 버퍼에서 버렸다
+    `EXPIRED`   중계 중이던 본문이 사라졌다(대표 사례: 제어부 재시작)
+    """
+
+    PENDING = "pending"
+    RELAYED = "relayed"
+    DELIVERED = "delivered"
+    EXPIRED = "expired"
+
+
+class IntentAgreementState(str, Enum):
+    """Case 수준에서 본 의도 동의 상태(FR-03, FR-23).
+
+    `STALE_AGREEMENT` 가 핵심이다. 과거 버전에 대한 동의는 기록으로 남지만
+    최신 버전에 적용되지 않는다. 이 상태를 `AGREED_CURRENT` 로 승격시키지 않는다.
+    """
+
+    NO_INTENT = "no_intent"
+    NEVER_AGREED = "never_agreed"
+    STALE_AGREEMENT = "stale_agreement"
+    AGREED_CURRENT = "agreed_current"
+
+
+class AgreementRefusal(str, Enum):
+    """동의를 기록할 수 없는 이유.
+
+    **이것은 FR-29 진입 조건 검사가 아니다.** 실행 배정을 여는 조건이 아니라
+    "사람의 동의를 기록할 수 있는가"의 조건이며, P2-03에서 붙일 진입 검사와 구별한다.
+    """
+
+    NOT_EXPLICIT = "not_explicit"
+    NOT_LATEST_VERSION = "not_latest_version"
+    ORIGINAL_NOT_AVAILABLE = "original_not_available"
+    ORIGINAL_NOT_READ = "original_not_read"
+    CONTENT_CHANGED = "content_changed"
+    OPEN_INTENT_QUESTIONS = "open_intent_questions"

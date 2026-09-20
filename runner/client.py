@@ -69,3 +69,23 @@ class ControllerClient:
 
     def send_result(self, run_id: str, payload: dict) -> Any:
         return self._post(f"/api/runner/runs/{run_id}/result", payload)
+
+    # ------------------------------------------------- 원문 열람·의도 구조
+
+    def pending_read_requests(self, runner_id: str) -> list[dict]:
+        return self._get(f"/api/runner/{runner_id}/read-requests")
+
+    def send_read_content(
+        self, request_id: str, runner_id: str, content_b64: str, content_hash: str
+    ) -> Any:
+        return self._post(
+            f"/api/runner/read-requests/{request_id}/content",
+            {
+                "runner_id": runner_id,
+                "content_b64": content_b64,
+                "content_hash": content_hash,
+            },
+        )
+
+    def send_intent_structure(self, payload: dict) -> Any:
+        return self._post("/api/runner/intent-structure", payload)

@@ -10,6 +10,7 @@ NFR-01은 "저장 완료로 응답한 요청·결정·승인·상태는 프로�
 
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import subprocess
@@ -19,6 +20,9 @@ from pathlib import Path
 
 import httpx
 import pytest
+
+from domain import intent_doc
+from domain.models import IntentField
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
@@ -159,10 +163,12 @@ def test_saved_records_survive_a_forced_kill(controller, tmp_path):
     ).json()
     assert run["created"] is True
 
+    # 의도 동의는 전용 경로에서만 만들어진다(tests/test_intent.py). 여기서는 다른 종류의
+    # 사람 결정이 강제 종료 후에도 남는지만 본다.
     decision = httpx.post(
         f"{base}/api/cases/{case['id']}/decisions",
         json={
-            "kind": "intent_agreement",
+            "kind": "design_review",
             "subject_type": "case",
             "subject_id": case["id"],
             "subject_revision": 1,
@@ -255,3 +261,147 @@ def test_runner_ledger_survives_its_own_restart(tmp_path):
     should_run, existing = ledger_b.claim("run-x", 2)
     assert should_run is False
     assert existing["result"]["outcome"] == "completed"
+
+
+def test_intent_agreement_and_structure_survive_a_forced_kill(controller):
+    """AC-10 — 의도 버전·항목 상태·질문·피드백·동의가 강제 종료 후에도 복원된다.
+
+    그리고 중계 중이던 **열람 응답**은 사라진다. 원문이 사라진 것이 아니라
+    중계가 끊긴 것이므로 요청만 `expired` 로 닫히고 다시 요청할 수 있다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "intent-restart", "repo_path": "C:/tmp/demo", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "의도 재시작 Case", "kind": "feature"},
+        timeout=10.0,
+    ).json()
+
+    draft = httpx.post(
+        f"{base}/api/cases/{case['id']}/intent-drafts",
+        json={
+            "summary": "의도 초안 v1",
+            "target_runner_id": RUNNER_ID,
+            "fields": {
+                "goal": {
+                    "text": "재시작 뒤에도 남아야 하는 목표",
+                    "state": "proposed",
+                    "origin": "user_requirement",
+                }
+            },
+            "questions": [
+                {
+                    "key": "later",
+                    "text": "설계에서 정할 질문",
+                    "summary": "설계 단계 질문",
+                    "decide_at": "design",
+                }
+            ],
+        },
+        timeout=10.0,
+    ).json()
+
+    # Runner 역할로 원문을 저장하고 구조를 보고한다.
+    intakes = httpx.get(f"{base}/api/runner/{RUNNER_ID}/intakes", timeout=10.0).json()
+    assert len(intakes) == 1 and intakes[0]["intent"]["intent_version_id"]
+    body = base64.b64decode(intakes[0]["content_b64"])
+    httpx.post(
+        f"{base}/api/runner/intakes/{draft['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": draft["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    structure = intent_doc.structure(body, None)
+    httpx.post(
+        f"{base}/api/runner/intent-structure",
+        json={
+            "runner_id": RUNNER_ID,
+            "intent_version_id": intakes[0]["intent"]["intent_version_id"],
+            "fields": structure["fields"],
+            "questions": structure["questions"],
+        },
+        timeout=10.0,
+    ).raise_for_status()
+
+    feedback = httpx.post(
+        f"{base}/api/cases/{case['id']}/feedback",
+        json={
+            "target_intent_version_id": draft["intent_version"]["id"],
+            "content": "재시작 뒤에도 남아야 하는 피드백",
+            "summary": "피드백 하나",
+            "target_runner_id": RUNNER_ID,
+        },
+        timeout=10.0,
+    ).json()
+
+    def relay_read() -> dict:
+        """열람 요청을 열고 Runner 역할로 본문을 올린다(= 제어부 메모리에만 있는 상태)."""
+        opened = httpx.post(
+            f"{base}/api/artifacts/{draft['artifact_id']}/{draft['revision']}/read-requests",
+            json={},
+            timeout=10.0,
+        ).json()
+        httpx.post(
+            f"{base}/api/runner/read-requests/{opened['id']}/content",
+            json={
+                "runner_id": RUNNER_ID,
+                "content_b64": base64.b64encode(body).decode("ascii"),
+                "content_hash": draft["content_hash"],
+            },
+            timeout=10.0,
+        ).raise_for_status()
+        return opened
+
+    # 사람이 원문을 실제로 받아 봐야 동의할 수 있다.
+    delivered = httpx.get(
+        f"{base}/api/read-requests/{relay_read()['id']}", timeout=10.0
+    ).json()
+    assert delivered["content"] is not None
+
+    agreed = httpx.post(
+        f"{base}/api/cases/{case['id']}/intent-versions/{draft['intent_version']['id']}/agreement",
+        json={
+            "agree": True,
+            "statement": "이 의도에 동의합니다.",
+            "content_hash": draft["content_hash"],
+            "actor": "owner",
+        },
+        timeout=10.0,
+    )
+    assert agreed.status_code == 201, agreed.text
+
+    # 두 번째 열람은 **받아 가기 전에** 재시작을 맞는다.
+    read_request = relay_read()
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    state = httpx.get(f"{base}/api/cases/{case['id']}/intent-state", timeout=10.0).json()
+    assert state["agreement_state"] == "agreed_current"
+    assert state["agreed_version"]["subject_content_hash"] == draft["content_hash"]
+
+    latest = state["latest_intent_version"]
+    assert {f["field"] for f in latest["fields"]} == {f.value for f in IntentField}
+    assert [q["question_key"] for q in latest["questions"]] == ["later"]
+
+    stored_feedback = httpx.get(f"{base}/api/cases/{case['id']}/feedback", timeout=10.0).json()
+    assert [f["id"] for f in stored_feedback] == [feedback["feedback"]["id"]]
+
+    # 중계 중이던 열람 응답은 이 프로세스에 없다. 빈 본문으로 채우지 않는다.
+    after = httpx.get(f"{base}/api/read-requests/{read_request['id']}", timeout=10.0).json()
+    assert after["content"] is None
+    assert after["request"]["state"] == "expired"
+
+    # 다시 요청하면 된다 — 원문은 Runner에 그대로 있다.
+    retry = httpx.post(
+        f"{base}/api/artifacts/{draft['artifact_id']}/{draft['revision']}/read-requests",
+        json={},
+        timeout=10.0,
+    ).json()
+    assert retry["state"] == "pending"

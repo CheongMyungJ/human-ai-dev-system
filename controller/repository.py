@@ -21,9 +21,18 @@ from domain.models import (
     CapabilityState,
     CaseKind,
     CaseStatus,
+    ConfirmationState,
+    ContentOrigin,
+    DecideAt,
     DecisionKind,
+    FeedbackState,
+    FieldChange,
+    IntentAgreementState,
+    IntentField,
     IntentStatus,
     Permission,
+    QuestionState,
+    ReadRequestState,
     RunOutcome,
     RunRole,
     RunStatus,
@@ -439,10 +448,13 @@ class Repository:
         actor: str,
         evidence_ref: str | None = None,
     ) -> dict[str, Any]:
-        """사람의 결정을 기록한다.
+        """사람의 결정을 기록한다(의도 동의 **제외**).
 
-        P2-01은 기록만 한다. 이 결정이 실행을 열어 주는지의 검사(FR-29 진입 조건)는
-        P2-03에서 붙인다. 지금 통과 처리를 넣어 두지 않는다.
+        의도 동의는 `record_intent_agreement` 한 곳에서만 만들어진다. 여기서도 만들 수
+        있으면 최신 버전·원문 확인·열람 기록 검사를 우회하는 두 번째 입구가 생긴다.
+
+        이 결정이 실행을 열어 주는지의 검사(FR-29 진입 조건)는 P2-03에서 붙인다.
+        지금 통과 처리를 넣어 두지 않는다.
         """
         self.get_case(case_id)
         decision_id = ids.new_decision_id()
@@ -463,12 +475,6 @@ class Repository:
                     evidence_ref,
                 ),
             )
-            if kind is DecisionKind.INTENT_AGREEMENT and subject_type == "intent_version":
-                # 동의는 그 버전에만 붙는다. 이후 버전으로 자동 승계되지 않는다(FR-23).
-                self.conn.execute(
-                    "UPDATE intent_version SET status = ? WHERE id = ? AND revision = ?",
-                    (IntentStatus.AGREED.value, subject_id, subject_revision),
-                )
         row = self.conn.execute("SELECT * FROM decision WHERE id = ?", (decision_id,)).fetchone()
         return dict(row)
 
@@ -719,3 +725,571 @@ class Repository:
                 " VALUES (?, ?, ?, ?, ?)",
                 (request_key, endpoint, json.dumps(body), status_code, utc_now()),
             )
+
+    # =================================================================== P2-02
+    #
+    # 아래 접근자에는 본문을 받는 인자가 없다. 의도 여섯 항목의 본문, 피드백 원문,
+    # 질문의 대상·근거·선택·영향, 열람으로 오간 원문은 전부 Runner에 있고
+    # 여기에는 상태·참조·짧은 요약만 들어온다.
+
+    # ------------------------------------------------------- 의도 구조·질문
+
+    def apply_intent_structure(
+        self,
+        intent_version_id: str,
+        fields: Iterable[dict[str, Any]],
+        questions: Iterable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Runner가 계산한 의도 구조를 반영한다.
+
+        여섯 항목이 모두 와야 한다. 하나라도 빠지면 거부한다 —
+        "정보가 없으면 항목을 삭제한다"가 아니라 `undecided` 로 남기는 것이 규칙이다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        rows = list(fields)
+        given = {row["field"] for row in rows}
+        required = {f.value for f in IntentField}
+        if given != required:
+            missing = sorted(required - given)
+            extra = sorted(given - required)
+            raise ConflictError(
+                f"intent structure must carry all six fields; missing={missing} extra={extra}"
+            )
+
+        now = utc_now()
+        with transaction(self.conn):
+            for row in rows:
+                self.conn.execute(
+                    "INSERT INTO intent_field"
+                    " (intent_version_id, field, state, origin, change_from_prev)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT(intent_version_id, field) DO UPDATE SET"
+                    "   state = excluded.state, origin = excluded.origin,"
+                    "   change_from_prev = excluded.change_from_prev",
+                    (
+                        intent_version_id,
+                        IntentField(row["field"]).value,
+                        ConfirmationState(row["state"]).value,
+                        ContentOrigin(row["origin"]).value,
+                        FieldChange(row["change_from_prev"]).value,
+                    ),
+                )
+            for question in questions:
+                self.conn.execute(
+                    "INSERT INTO intent_question"
+                    " (id, case_id, intent_version_id, question_key, summary, decide_at,"
+                    "  state, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(intent_version_id, question_key) DO UPDATE SET"
+                    "   summary = excluded.summary, decide_at = excluded.decide_at",
+                    (
+                        ids.new_question_id(),
+                        intent["case_id"],
+                        intent_version_id,
+                        str(question["key"]),
+                        _summary(question["summary"]),
+                        DecideAt(question["decide_at"]).value,
+                        QuestionState.OPEN.value,
+                        now,
+                    ),
+                )
+        return self.get_intent_detail(intent_version_id)
+
+    def list_intent_fields(self, intent_version_id: str) -> list[dict[str, Any]]:
+        order = {f.value: i for i, f in enumerate(IntentField)}
+        rows = self.conn.execute(
+            "SELECT * FROM intent_field WHERE intent_version_id = ?", (intent_version_id,)
+        ).fetchall()
+        return sorted((dict(r) for r in rows), key=lambda r: order.get(r["field"], 99))
+
+    def list_questions(
+        self, intent_version_id: str, state: QuestionState | None = None
+    ) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM intent_question WHERE intent_version_id = ?"
+        args: list[Any] = [intent_version_id]
+        if state is not None:
+            sql += " AND state = ?"
+            args.append(state.value)
+        rows = self.conn.execute(sql + " ORDER BY created_at, question_key", args).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_question(self, question_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM intent_question WHERE id = ?", (question_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"question not found: {question_id}")
+        return dict(row)
+
+    def answer_question(
+        self, question_id: str, actor: str, answer_artifact_id: str | None
+    ) -> dict[str, Any]:
+        """질문에 답한다. **이것은 의도 동의가 아니다.**
+
+        FR-03: "질문 답변·수정 요청·무응답·시간 경과·AI 평가를 전체 의도 동의로
+        확대하지 않는다." 그래서 이 메서드는 decision 표를 건드리지 않는다.
+        """
+        question = self.get_question(question_id)
+        if question["state"] != QuestionState.OPEN.value:
+            raise ConflictError(f"question is {question['state']}")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE intent_question SET state = ?, answered_by = ?, answered_at = ?,"
+                " answer_artifact_id = ? WHERE id = ?",
+                (
+                    QuestionState.ANSWERED.value,
+                    actor,
+                    utc_now(),
+                    answer_artifact_id,
+                    question_id,
+                ),
+            )
+        return self.get_question(question_id)
+
+    def open_intent_stage_questions(self, intent_version_id: str) -> list[dict[str, Any]]:
+        """의도 단계에서 결정해야 하는데 아직 열려 있는 질문.
+
+        설계·계획으로 이월한 질문은 여기 들어오지 않는다. 이월한 질문이
+        의도 동의를 막지는 않으며, 해당 단계의 작업 전에 해결한다(FR-03 질문 처리).
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM intent_question WHERE intent_version_id = ?"
+            " AND state = ? AND decide_at = ? ORDER BY created_at",
+            (intent_version_id, QuestionState.OPEN.value, DecideAt.INTENT.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_intent_detail(self, intent_version_id: str) -> dict[str, Any]:
+        intent = self.get_intent_version(intent_version_id)
+        ref = self.get_artifact_ref(intent["artifact_id"], intent["artifact_rev"])
+        intent["fields"] = self.list_intent_fields(intent_version_id)
+        intent["questions"] = self.list_questions(intent_version_id)
+        intent["content_hash"] = ref["content_hash"]
+        intent["availability"] = ref["availability"]
+        intent["summary"] = ref["summary"]
+        return intent
+
+    def latest_intent_version(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM intent_version WHERE case_id = ? ORDER BY revision DESC LIMIT 1",
+            (case_id,),
+        ).fetchone()
+        return self.get_intent_detail(row["id"]) if row else None
+
+    # --------------------------------------------------------------- 피드백
+
+    def record_feedback(
+        self,
+        case_id: str,
+        target_intent_version_id: str,
+        artifact_id: str,
+        artifact_rev: int,
+        author: str,
+        summary: str,
+    ) -> dict[str, Any]:
+        """피드백을 접수한다. **이것은 의도 동의가 아니다.**
+
+        피드백을 줬다는 사실이 초안 전체에 동의했다는 뜻이 되지 않게
+        decision 표와 완전히 분리해 둔다(FR-03 수용 기준).
+        """
+        intent = self.get_intent_version(target_intent_version_id)
+        if intent["case_id"] != case_id:
+            raise ConflictError("intent version belongs to another case")
+        feedback_id = ids.new_feedback_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO feedback (id, case_id, target_intent_version_id,"
+                " target_intent_revision, artifact_id, artifact_rev, author, summary,"
+                " state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    feedback_id,
+                    case_id,
+                    target_intent_version_id,
+                    intent["revision"],
+                    artifact_id,
+                    artifact_rev,
+                    author,
+                    _summary(summary),
+                    FeedbackState.RECEIVED.value,
+                    utc_now(),
+                ),
+            )
+        return self.get_feedback(feedback_id)
+
+    def get_feedback(self, feedback_id: str) -> dict[str, Any]:
+        row = self.conn.execute("SELECT * FROM feedback WHERE id = ?", (feedback_id,)).fetchone()
+        if row is None:
+            raise NotFoundError(f"feedback not found: {feedback_id}")
+        return dict(row)
+
+    def list_feedback(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM feedback WHERE case_id = ? ORDER BY created_at", (case_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def resolve_feedback(
+        self,
+        feedback_ids: Iterable[str],
+        reflected_in_version_id: str | None,
+        not_reflected: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """피드백의 처리 결과를 기록한다.
+
+        미반영은 이유와 함께 남긴다. 반영하지 않은 피드백을 조용히 닫지 않는다
+        (intent-artifacts 3절: "반영 내용과 상태, 남은 질문").
+        """
+        not_reflected = not_reflected or {}
+        now = utc_now()
+        touched: list[str] = []
+        with transaction(self.conn):
+            for feedback_id in feedback_ids:
+                self.conn.execute(
+                    "UPDATE feedback SET state = ?, reflected_in_version_id = ?, resolved_at = ?"
+                    " WHERE id = ? AND state = ?",
+                    (
+                        FeedbackState.REFLECTED.value,
+                        reflected_in_version_id,
+                        now,
+                        feedback_id,
+                        FeedbackState.RECEIVED.value,
+                    ),
+                )
+                touched.append(feedback_id)
+            for feedback_id, reason in not_reflected.items():
+                self.conn.execute(
+                    "UPDATE feedback SET state = ?, disposition_note = ?, resolved_at = ?"
+                    " WHERE id = ? AND state = ?",
+                    (
+                        FeedbackState.NOT_REFLECTED.value,
+                        _summary(reason),
+                        now,
+                        feedback_id,
+                        FeedbackState.RECEIVED.value,
+                    ),
+                )
+                touched.append(feedback_id)
+        return [self.get_feedback(fid) for fid in touched]
+
+    # ----------------------------------------------------------- 열람·동의
+
+    def record_intent_view(
+        self, intent_version_id: str, actor: str, content_hash: str
+    ) -> dict[str, Any]:
+        """초안을 열람했다는 사실을 남긴다. **이것은 동의가 아니다.**
+
+        별도 표에 두는 이유는 "요약만 읽은 상태를 상세 원문에 대한 확인으로
+        기록하지 않는다"(intent-artifacts 5절)를 검사 가능하게 만들기 위해서다.
+
+        **호출자가 직접 부르는 경로가 없다.** 이 기록은 원문이 실제로 전달된
+        순간에만 생긴다(controller/api.py 의 열람 수령). 화면이나 호출자가
+        "읽었다"고 주장해서 만들 수 있으면 동의의 선행 조건으로 쓸 수 없다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        view_id = ids.new_view_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO intent_view (id, case_id, intent_version_id, actor,"
+                " content_hash, viewed_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (view_id, intent["case_id"], intent_version_id, actor, content_hash, utc_now()),
+            )
+        row = self.conn.execute("SELECT * FROM intent_view WHERE id = ?", (view_id,)).fetchone()
+        return dict(row)
+
+    def list_intent_views(self, intent_version_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM intent_view WHERE intent_version_id = ? ORDER BY viewed_at",
+            (intent_version_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def intent_version_for_artifact(
+        self, artifact_id: str, revision: int
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM intent_version WHERE artifact_id = ? AND artifact_rev = ?",
+            (artifact_id, revision),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def has_read_the_original(
+        self, intent_version_id: str, actor: str, content_hash: str
+    ) -> bool:
+        """이 사람이 **이 원문 그대로**를 실제로 받아 본 적이 있는가."""
+        row = self.conn.execute(
+            "SELECT 1 FROM intent_view WHERE intent_version_id = ? AND actor = ?"
+            " AND content_hash = ? LIMIT 1",
+            (intent_version_id, actor, content_hash),
+        ).fetchone()
+        return row is not None
+
+    def agreement_for(self, intent_version_id: str) -> dict[str, Any] | None:
+        """이 의도 버전에 붙은, 취소되지 않은 동의 기록."""
+        row = self.conn.execute(
+            "SELECT * FROM decision WHERE kind = ? AND subject_type = 'intent_version'"
+            " AND subject_id = ? AND revoked_at IS NULL ORDER BY decided_at DESC LIMIT 1",
+            (DecisionKind.INTENT_AGREEMENT.value, intent_version_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def record_intent_agreement(
+        self,
+        case_id: str,
+        intent_version_id: str,
+        actor: str,
+        content_hash: str,
+        evidence_ref: str | None = None,
+    ) -> dict[str, Any]:
+        """명시 동의를 기록한다. 동의는 **그 버전 그 원문**에만 붙는다."""
+        intent = self.get_intent_version(intent_version_id)
+        decision_id = ids.new_decision_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, evidence_ref, subject_content_hash)"
+                " VALUES (?, ?, ?, 'intent_version', ?, ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    case_id,
+                    DecisionKind.INTENT_AGREEMENT.value,
+                    intent_version_id,
+                    intent["revision"],
+                    actor,
+                    utc_now(),
+                    evidence_ref,
+                    content_hash,
+                ),
+            )
+            self.conn.execute(
+                "UPDATE intent_version SET status = ? WHERE id = ?",
+                (IntentStatus.AGREED.value, intent_version_id),
+            )
+            # 동의한 버전에서 내용이 있는 항목은 '사용자 확인됨'이 된다.
+            # 내용이 없는 항목은 확인할 대상이 없으므로 미정 그대로 둔다 —
+            # 빈 항목을 사람이 확인한 것으로 올리지 않는다.
+            self.conn.execute(
+                "UPDATE intent_field SET state = ? WHERE intent_version_id = ? AND state != ?",
+                (
+                    ConfirmationState.USER_CONFIRMED.value,
+                    intent_version_id,
+                    ConfirmationState.UNDECIDED.value,
+                ),
+            )
+        row = self.conn.execute("SELECT * FROM decision WHERE id = ?", (decision_id,)).fetchone()
+        return dict(row)
+
+    def intent_state(self, case_id: str) -> dict[str, Any]:
+        """Case 수준의 의도·동의 상태.
+
+        **오래된 동의를 최신 동의로 승격시키지 않는 곳이 여기다.** 최신 버전에 붙은
+        동의가 없으면 과거 동의가 있어도 `stale_agreement` 이며, 그 사실과
+        어느 버전에 동의했는지를 함께 돌려준다(FR-23, FR-14).
+        """
+        self.get_case(case_id)
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return {
+                "case_id": case_id,
+                "latest_intent_version": None,
+                "agreement_state": IntentAgreementState.NO_INTENT.value,
+                "agreed_version": None,
+                "open_intent_questions": [],
+                "unresolved_feedback": [],
+                "views": [],
+            }
+
+        current_agreement = self.agreement_for(latest["id"])
+        prior = self.conn.execute(
+            "SELECT d.*, iv.revision AS intent_revision FROM decision d"
+            " JOIN intent_version iv ON iv.id = d.subject_id"
+            " WHERE d.kind = ? AND d.subject_type = 'intent_version' AND d.case_id = ?"
+            "   AND d.revoked_at IS NULL"
+            " ORDER BY iv.revision DESC LIMIT 1",
+            (DecisionKind.INTENT_AGREEMENT.value, case_id),
+        ).fetchone()
+
+        if current_agreement is not None:
+            state = IntentAgreementState.AGREED_CURRENT
+            agreed: dict[str, Any] | None = dict(current_agreement)
+        elif prior is not None:
+            state = IntentAgreementState.STALE_AGREEMENT
+            agreed = dict(prior)
+        else:
+            state = IntentAgreementState.NEVER_AGREED
+            agreed = None
+
+        unresolved = [
+            f for f in self.list_feedback(case_id) if f["state"] == FeedbackState.RECEIVED.value
+        ]
+        return {
+            "case_id": case_id,
+            "latest_intent_version": latest,
+            "agreement_state": state.value,
+            "agreed_version": agreed,
+            "open_intent_questions": self.open_intent_stage_questions(latest["id"]),
+            "unresolved_feedback": unresolved,
+            "views": self.list_intent_views(latest["id"]),
+        }
+
+    # ------------------------------------------------------ 원문 열람 요청
+
+    def open_read_request(
+        self, artifact_id: str, revision: int, requested_by: str
+    ) -> dict[str, Any]:
+        """원문 열람을 요청한다. 대상은 Case에 속한 (artifact_id, revision) 뿐이다.
+
+        경로를 받지 않는다 — 임의 파일 다운로드 API로 만들지 않기 위해서다
+        (data-boundary-review 3절).
+        """
+        ref = self.get_artifact_ref(artifact_id, revision)
+        if ref["availability"] == Availability.LOST_BEFORE_PERSIST.value:
+            raise ConflictError("original was lost before it was persisted; nothing to read")
+        request_id = ids.new_read_request_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO artifact_read_request (id, case_id, artifact_id, revision,"
+                " owner_runner_id, requested_by, state, requested_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    request_id,
+                    ref["case_id"],
+                    artifact_id,
+                    revision,
+                    ref["owner_runner_id"],
+                    requested_by,
+                    ReadRequestState.PENDING.value,
+                    utc_now(),
+                ),
+            )
+        return self.get_read_request(request_id)
+
+    def get_read_request(self, request_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM artifact_read_request WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"read request not found: {request_id}")
+        return dict(row)
+
+    def list_pending_read_requests(self, runner_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM artifact_read_request WHERE state = ? AND owner_runner_id = ?"
+            " ORDER BY requested_at",
+            (ReadRequestState.PENDING.value, runner_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def mark_read_relayed(
+        self, request_id: str, runner_id: str, content_hash: str, byte_size: int
+    ) -> dict[str, Any]:
+        request = self.get_read_request(request_id)
+        if request["owner_runner_id"] != runner_id:
+            raise ConflictError("read request belongs to another runner")
+        if request["state"] != ReadRequestState.PENDING.value:
+            raise ConflictError(f"read request is {request['state']}")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE artifact_read_request SET state = ?, content_hash = ?, byte_size = ?,"
+                " relayed_at = ? WHERE id = ?",
+                (ReadRequestState.RELAYED.value, content_hash, byte_size, utc_now(), request_id),
+            )
+        return self.get_read_request(request_id)
+
+    def mark_read_delivered(self, request_id: str) -> dict[str, Any]:
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE artifact_read_request SET state = ?, delivered_at = ? WHERE id = ?",
+                (ReadRequestState.DELIVERED.value, utc_now(), request_id),
+            )
+        return self.get_read_request(request_id)
+
+    def mark_read_expired(self, request_id: str) -> dict[str, Any]:
+        """중계 중이던 본문이 사라졌다. 대표 사례는 제어부 재시작이다.
+
+        내용이 없는 상태를 빈 문서나 삭제로 표시하지 않는다(data-boundary 3절).
+        """
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE artifact_read_request SET state = ? WHERE id = ? AND state IN (?, ?)",
+                (
+                    ReadRequestState.EXPIRED.value,
+                    request_id,
+                    ReadRequestState.PENDING.value,
+                    ReadRequestState.RELAYED.value,
+                ),
+            )
+        return self.get_read_request(request_id)
+
+    def list_unfinished_read_requests(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM artifact_read_request WHERE state IN (?, ?)",
+            (ReadRequestState.PENDING.value, ReadRequestState.RELAYED.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def intent_intake_context(self, artifact_id: str, revision: int) -> dict[str, Any] | None:
+        """이 원문이 어떤 의도 버전의 것인지, 그리고 직전 버전의 원문은 무엇인지.
+
+        Runner가 버전 차이를 계산하려면 직전 버전의 원문이 필요하다. 제어부는
+        본문을 모르지만 **어느 원문과 비교해야 하는지**는 참조로 알려 줄 수 있다.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM intent_version WHERE artifact_id = ? AND artifact_rev = ?",
+            (artifact_id, revision),
+        ).fetchone()
+        if row is None:
+            return None
+        previous = self.conn.execute(
+            "SELECT artifact_id, artifact_rev FROM intent_version"
+            " WHERE case_id = ? AND revision < ? ORDER BY revision DESC LIMIT 1",
+            (row["case_id"], row["revision"]),
+        ).fetchone()
+        return {
+            "intent_version_id": row["id"],
+            "intent_revision": row["revision"],
+            "prev_artifact_id": previous["artifact_id"] if previous else None,
+            "prev_artifact_rev": previous["artifact_rev"] if previous else None,
+        }
+
+    def intent_diff(self, intent_version_id: str) -> dict[str, Any]:
+        """이전 버전과의 차이. **항목 단위 변화와 질문의 추가·해소만** 돌려준다.
+
+        전체 본문 차이는 여기서 만들지 않는다. 두 버전의 원문을 각각 열람해
+        비교하며, 그 원문은 Runner에 있다(data-boundary 1절).
+        """
+        intent = self.get_intent_version(intent_version_id)
+        previous = self.conn.execute(
+            "SELECT * FROM intent_version WHERE case_id = ? AND revision < ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (intent["case_id"], intent["revision"]),
+        ).fetchone()
+
+        fields = self.list_intent_fields(intent_version_id)
+        changed = [f["field"] for f in fields if f["change_from_prev"] == FieldChange.CHANGED.value]
+
+        current_q = {q["question_key"]: q for q in self.list_questions(intent_version_id)}
+        prev_q = {q["question_key"]: q for q in self.list_questions(previous["id"])} if previous else {}
+
+        reflected = self.conn.execute(
+            "SELECT * FROM feedback WHERE reflected_in_version_id = ? ORDER BY created_at",
+            (intent_version_id,),
+        ).fetchall()
+
+        return {
+            "intent_version_id": intent_version_id,
+            "revision": intent["revision"],
+            "compared_with_revision": previous["revision"] if previous else None,
+            "fields": fields,
+            "changed_fields": changed,
+            "questions_added": sorted(set(current_q) - set(prev_q)),
+            "questions_removed": sorted(set(prev_q) - set(current_q)),
+            "open_questions": [
+                q for q in current_q.values() if q["state"] == QuestionState.OPEN.value
+            ],
+            "reflected_feedback": [dict(r) for r in reflected],
+            "full_text_diff": "not_on_controller",
+            "note": (
+                "항목 단위 변화만 제어부에 있다. 전체 본문 차이는 두 버전의 원문을"
+                " 각각 열람해 비교한다 — 원문은 소유 Runner에 있다."
+            ),
+        }

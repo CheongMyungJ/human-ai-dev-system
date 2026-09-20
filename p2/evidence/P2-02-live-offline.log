@@ -1,0 +1,7 @@
+== AC-2 Runner 오프라인 중 원문 열람 (라이브) ==
+Runner 프로세스를 멈춘 뒤 같은 원문을 요청했다.
+열람 요청 상태: pending
+본문: null (전달되지 않음)
+원문 참조 availability: available  해시: sha256:e58b16cd6d510604985fa8cf43b883be1070d5f83d44df80c460ecf217c611df
+→ 원문이 사라진 것이 아니라 소유 Runner 에 닿지 못하는 상태다.
+   빈 문서나 삭제로 표시하지 않는다.

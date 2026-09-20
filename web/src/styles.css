@@ -189,3 +189,66 @@ th {
   margin-bottom: 12px;
   color: var(--warn);
 }
+
+/* P2-02 의도 화면 */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.field label {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+/* 열람한 원문. 이 화면에만 있고 서버에 보관되지 않는다. */
+.original {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+  font-size: 12px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.notice.muted {
+  background: var(--bg);
+  border-color: var(--line);
+  color: var(--muted);
+}
+
+/* 의도 초안 입력은 한 항목씩 세로로 쌓는다. 여섯 항목을 가로로 늘어놓으면
+   어떤 항목을 쓰고 있는지 알아보기 어렵다. */
+.draft-form {
+  display: block;
+  max-width: 820px;
+}
+
+.draft-form input,
+.draft-form textarea {
+  display: block;
+  width: 100%;
+}
+
+/* 출처 선택은 내용 폭만 차지한다. 늘어나면 입력칸처럼 보인다. */
+.draft-form select,
+.field select {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  width: auto;
+  min-width: 160px;
+}

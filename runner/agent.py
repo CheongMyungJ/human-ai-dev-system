@@ -16,8 +16,8 @@ import base64
 import time
 from typing import Any
 
-from domain import ids
-from domain.models import CapabilityState, RunOutcome
+from domain import ids, intent_doc
+from domain.models import ArtifactKind, CapabilityState, RunOutcome
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
@@ -89,7 +89,58 @@ class RunnerAgent:
             self.store.put(intake["artifact_id"], intake["revision"], body)
             self.client.report_stored(intake["intake_id"], self.config.runner_id, digest)
             stored.append(intake["intake_id"])
+            if intake["kind"] == ArtifactKind.INTENT.value and intake.get("intent"):
+                self.report_intent_structure(body, intake["intent"])
         return stored
+
+    def report_intent_structure(self, body: bytes, context: dict[str, Any]) -> dict[str, Any]:
+        """방금 저장한 의도 원문에서 구조를 뽑아 제어부에 보고한다.
+
+        **여기가 본문을 읽는 유일한 쪽이다.** 제어부는 어느 원문과 비교할지만 알려
+        주고, 이전 버전의 본문도 이 Runner의 저장소에서 읽는다. 올라가는 것은
+        항목별 상태·출처·변화 여부와 질문의 짧은 요약뿐이다.
+        """
+        previous: bytes | None = None
+        prev_id = context.get("prev_artifact_id")
+        if prev_id:
+            try:
+                previous = self.store.get(prev_id, context["prev_artifact_rev"])
+            except FileNotFoundError:
+                # 이전 버전 원문이 이 Runner에 없다. 비교하지 않은 사실을 그대로 둔다 —
+                # 없는 비교 결과를 "변화 없음"으로 지어내지 않는다.
+                previous = None
+        structure = intent_doc.structure(body, previous)
+        payload = {
+            "runner_id": self.config.runner_id,
+            "intent_version_id": context["intent_version_id"],
+            "fields": structure["fields"],
+            "questions": structure["questions"],
+        }
+        return self.client.send_intent_structure(payload)
+
+    # ------------------------------------------------------------- 원문 열람
+
+    def serve_read_requests(self) -> list[str]:
+        """사람이 요청한 원문을 제어부로 올린다.
+
+        고정 버전 `(artifact_id, revision)` 만 읽는다. 경로를 받지 않으므로
+        임의 파일 조회가 되지 않는다(data-boundary-review 3절).
+        """
+        served: list[str] = []
+        for request in self.client.pending_read_requests(self.config.runner_id):
+            try:
+                body = self.store.get(request["artifact_id"], request["revision"])
+            except FileNotFoundError:
+                # 이 Runner에 원문이 없다. 빈 본문을 올리지 않고 요청을 그대로 둔다.
+                continue
+            self.client.send_read_content(
+                request["id"],
+                self.config.runner_id,
+                base64.b64encode(body).decode("ascii"),
+                content_hash(body),
+            )
+            served.append(request["id"])
+        return served
 
     # ------------------------------------------------------------------ 실행
 
@@ -167,10 +218,11 @@ class RunnerAgent:
     def poll_once(self) -> dict[str, Any]:
         self.client.heartbeat(self.config.runner_id)
         stored = self.persist_pending_intakes()
+        served = self.serve_read_requests()
         actions = []
         for assignment in self.client.claim_assignments(self.config.runner_id):
             actions.append(self.handle_assignment(assignment))
-        return {"stored_intakes": stored, "assignments": actions}
+        return {"stored_intakes": stored, "served_reads": served, "assignments": actions}
 
     def run_forever(self, interval: float = 1.0) -> None:
         self.register()

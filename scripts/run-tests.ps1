@@ -4,7 +4,7 @@
   전체 시험을 실행한다.
 
 .DESCRIPTION
-  P2-01 제품 시험(pytest)과 P1의 OpenCode 계약 시험(unittest)을 모두 돌린다.
+  제품 시험(pytest)과 P1의 OpenCode 계약 시험(unittest)을 모두 돌린다.
   두 묶음은 성격이 다르다. P1 계약 시험은 CLI를 실행하지 않는 문서 계약 시험이며
   OpenCode 실환경 검증이 아니다.
 #>
@@ -20,7 +20,7 @@ if (-not (Test-Path $python)) {
     throw '.venv 가 없다. 먼저 scripts\bootstrap.ps1 을 실행한다.'
 }
 
-Write-Host '== P2-01 제품 시험 (pytest) ==' -ForegroundColor Cyan
+Write-Host '== 제품 시험 (pytest) ==' -ForegroundColor Cyan
 & $python -m pytest
 if ($LASTEXITCODE -ne 0) { throw "pytest 실패 (exit $LASTEXITCODE)" }
 

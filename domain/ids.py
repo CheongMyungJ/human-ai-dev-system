@@ -51,3 +51,19 @@ def new_decision_id() -> str:
 
 def new_intake_id() -> str:
     return new_id("intake")
+
+
+def new_question_id() -> str:
+    return new_id("q")
+
+
+def new_feedback_id() -> str:
+    return new_id("fb")
+
+
+def new_view_id() -> str:
+    return new_id("view")
+
+
+def new_read_request_id() -> str:
+    return new_id("read")

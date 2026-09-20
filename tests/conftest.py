@@ -88,6 +88,108 @@ class Harness:
     def effect_count(self, case_id: str) -> int:
         return self.agent.executor.count_effects(case_id)
 
+    # ------------------------------------------------------ P2-02 도우미
+
+    def submit_intent_draft(
+        self,
+        case_id: str,
+        fields: dict[str, Any],
+        questions: list[dict[str, Any]] | None = None,
+        summary: str = "의도 초안",
+        reflects_feedback: list[str] | None = None,
+        not_reflected: dict[str, str] | None = None,
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        """의도 초안을 제출하고(기본으로) Runner가 저장·구조 보고까지 하게 한다.
+
+        `persist=False` 는 "아직 Runner가 저장하지 않은" 상태를 만들기 위한 것이다.
+        """
+        response = self.client.post(
+            f"/api/cases/{case_id}/intent-drafts",
+            json={
+                "summary": summary,
+                "target_runner_id": RUNNER_ID,
+                "fields": fields,
+                "questions": questions or [],
+                "reflects_feedback": reflects_feedback or [],
+                "not_reflected": not_reflected or {},
+            },
+        )
+        assert response.status_code == 202, response.text
+        accepted = response.json()
+        if persist:
+            self.agent.persist_pending_intakes()
+        return accepted
+
+    def submit_feedback(
+        self,
+        case_id: str,
+        intent_version_id: str,
+        content: str,
+        summary: str = "피드백",
+        persist: bool = True,
+    ) -> dict[str, Any]:
+        response = self.client.post(
+            f"/api/cases/{case_id}/feedback",
+            json={
+                "target_intent_version_id": intent_version_id,
+                "content": content,
+                "summary": summary,
+                "target_runner_id": RUNNER_ID,
+            },
+        )
+        assert response.status_code == 202, response.text
+        accepted = response.json()
+        if persist:
+            self.agent.persist_pending_intakes()
+        return accepted
+
+    def read_original(self, artifact_id: str, revision: int = 1, serve: bool = True):
+        """원문 열람 한 바퀴. (요청 상태, 본문 또는 None) 을 돌려준다."""
+        created = self.client.post(
+            f"/api/artifacts/{artifact_id}/{revision}/read-requests", json={}
+        )
+        assert created.status_code == 201, created.text
+        request_id = created.json()["id"]
+        if serve:
+            self.agent.serve_read_requests()
+        response = self.client.get(f"/api/read-requests/{request_id}").json()
+        return response["request"], response["content"]
+
+    def read_intent_original(self, intent: dict[str, Any]) -> str:
+        """의도 원문을 실제로 받아 본다. 이 전달이 열람 기록을 만든다."""
+        _request, content = self.read_original(intent["artifact_id"], intent["artifact_rev"])
+        assert content is not None, "원문이 전달되지 않았다"
+        return content
+
+    def intent_state(self, case_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/api/cases/{case_id}/intent-state")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def latest_intent(self, case_id: str) -> dict[str, Any]:
+        state = self.intent_state(case_id)
+        assert state["latest_intent_version"] is not None
+        return state["latest_intent_version"]
+
+    def agree(
+        self,
+        case_id: str,
+        intent: dict[str, Any],
+        content_hash: str | None = None,
+        agree: bool = True,
+        statement: str = "이 버전의 의도에 동의합니다.",
+    ):
+        return self.client.post(
+            f"/api/cases/{case_id}/intent-versions/{intent['id']}/agreement",
+            json={
+                "agree": agree,
+                "statement": statement,
+                "content_hash": content_hash or intent["content_hash"],
+                "actor": "owner",
+            },
+        )
+
 
 @pytest.fixture
 def harness(tmp_path: Path):

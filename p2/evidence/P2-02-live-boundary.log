@@ -1,0 +1,19 @@
+표식: LIVE-MARKER-P202-원문본문-DO-NOT-PERSIST
+
+== 제어부 (상태·요약·참조만 있어야 한다) ==
+  controller.log                23,116 bytes  표식=없음
+  controller.sqlite3             4,096 bytes  표식=없음
+  controller.sqlite3-shm        32,768 bytes  표식=없음
+  controller.sqlite3-wal     1,116,552 bytes  표식=없음
+
+== Runner (원문이 여기 있어야 한다) ==
+  표식 있음: runner\artifacts\art-0348c5cf6803cb17\1.bin
+  표식 있음: runner\artifacts\art-0957a96137c2bb3b\1.bin
+  표식 있음: runner\artifacts\art-46f121941f43af68\1.bin
+  표식 있음: runner\artifacts\art-a74cb0b2779bfe38\1.bin
+
+제어부에서 읽지 못한 파일: 없음
+제어부에서 표식 발견: 없음
+Runner 에서 표식 발견: 4개 파일
+
+[OK] 원문은 Runner 에만 있고 제어부 DB·WAL·SHM·로그 어디에도 없다
