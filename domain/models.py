@@ -148,12 +148,19 @@ class Availability(str, Enum):
 
 
 class ArtifactKind(str, Enum):
-    """원문 종류. 서버는 이 분류와 참조만 갖고 본문은 갖지 않는다."""
+    """원문 종류. 서버는 이 분류와 참조만 갖고 본문은 갖지 않는다.
+
+    `DESIGN`·`DEV_PLAN` 은 P3-01에서 더했다. 두 종류를 하나로 합치지 않는 이유는
+    "설계와 개발계획을 각각 조회할 수 있어야 한다"(intent-artifacts 2절)가
+    저장 분류에서부터 지켜져야 하기 때문이다.
+    """
 
     INTENT = "intent"
     FEEDBACK = "feedback"
     INSTRUCTION = "instruction"
     RUN_OUTPUT = "run_output"
+    DESIGN = "design"
+    DEV_PLAN = "dev_plan"
 
 
 @dataclass(frozen=True)
@@ -368,6 +375,10 @@ class RunPurpose(str, Enum):
     INTENT_AUTHORING = "intent_authoring"
     INTENT_GATE_REVIEW = "intent_gate_review"
     LIMITED_ANALYSIS = "limited_analysis"
+    #: P3-01. 설계와 계획은 **서로 다른 목적**이다. 하나로 합치면 두 산출물의
+    #: 검토가 한 실행에 묶여 "각각 독립적인 검토 옵션"을 지킬 수 없다.
+    DESIGN_AUTHORING = "design_authoring"
+    PLAN_AUTHORING = "plan_authoring"
     FEATURE_IMPLEMENTATION = "feature_implementation"
 
 
@@ -404,6 +415,9 @@ class AdmissionRefusal(str, Enum):
     PERMISSION_NOT_ALLOWED_IN_STAGE = "permission_not_allowed_in_stage"
     PERMISSION_NOT_MAPPED = "permission_not_mapped"
     ROLE_MISMATCH = "role_mismatch"
+    #: **P3-01부터 발급하지 않는다.** 실제 선행 조건 검사가 아래 사유들로 대체했다.
+    #: 값을 지우지 않는 이유는 P2-03·P2-04가 남긴 진입 검사 기록이 이 코드를 갖고
+    #: 있어서다 — 값을 지우면 과거 기록을 읽을 수 없다.
     PREREQUISITE_NOT_IMPLEMENTED = "prerequisite_not_implemented"
     TOOL_NOT_AVAILABLE = "tool_not_available"
     TOOL_IS_NOT_A_CODING_CLI = "tool_is_not_a_coding_cli"
@@ -411,6 +425,22 @@ class AdmissionRefusal(str, Enum):
     INTENT_VERSION_MISSING = "intent_version_missing"
     INTENT_VERSION_NOT_LATEST = "intent_version_not_latest"
     CASE_ALREADY_CLOSED = "case_already_closed"
+
+    # --- P3-01: 실제 선행 조건 -------------------------------------------
+    #
+    # 위의 `PREREQUISITE_NOT_IMPLEMENTED` 를 대신한다. 아래 사유들은 **없는 조건을
+    # 통과로 처리하지 않는다**는 같은 원칙의 구체적 구현이며, 사람이 무엇을 갖춰야
+    # 하는지 한 번에 알 수 있도록 종류별로 나눠 둔다(FR-29 수용 기준, FR-14).
+    SIZING_NOT_DECIDED = "sizing_not_decided"
+    DESIGN_MISSING = "design_missing"
+    DESIGN_STALE = "design_stale"
+    DESIGN_INCOMPLETE_FOR_LEVEL = "design_incomplete_for_level"
+    DESIGN_REVIEW_MISSING = "design_review_missing"
+    PLAN_MISSING = "plan_missing"
+    PLAN_STALE = "plan_stale"
+    PLAN_INCOMPLETE_FOR_LEVEL = "plan_incomplete_for_level"
+    PLAN_REVIEW_MISSING = "plan_review_missing"
+    DEFERRED_QUESTIONS_UNRESOLVED = "deferred_questions_unresolved"
 
 
 class GateId(str, Enum):
@@ -570,3 +600,133 @@ class CaseRelationKind(str, Enum):
     """Case 사이의 연결. 완료 후 수정은 재개가 아니라 연결된 새 Case 다(D-33)."""
 
     FOLLOW_UP_CHANGE = "follow_up_change"
+
+
+# --------------------------------------------------------------------- P3-01
+
+
+class WorkLevel(str, Enum):
+    """작업 수준(D-13, sizing-and-review-ux.md 2절).
+
+    **크기가 아니라 필요한 준비·검증의 깊이**를 표현한다. 변경 줄 수·파일 수로
+    정하지 않는다. 순서가 있는 값이며 `ORDER` 로 비교한다 — "AI가 진행을 위해
+    수행 수준을 묵시적으로 낮추는 것"을 막으려면 높낮이를 비교할 수 있어야 한다.
+    """
+
+    SIMPLE = "simple"
+    STANDARD = "standard"
+    DEEP = "deep"
+
+
+#: 수준의 높낮이. `max()` 로 비교하기 위한 순서이며 점수가 아니다.
+WORK_LEVEL_ORDER: dict[WorkLevel, int] = {
+    WorkLevel.SIMPLE: 0,
+    WorkLevel.STANDARD: 1,
+    WorkLevel.DEEP: 2,
+}
+
+
+class SizingAxis(str, Enum):
+    """수준 판단의 일곱 축(sizing-and-review-ux.md 1절 표).
+
+    축을 줄이지 않는다. 축마다 `판단 / 아직 확인할 것 / 준비·검증에 주는 영향`을
+    따로 남기며 **숫자 점수로 합산하지 않는다** — 낮은 항목의 평균으로 권한·
+    마이그레이션 같은 중요한 영향을 상쇄하지 않기 위해서다.
+    """
+
+    INTENT_CLARITY = "intent_clarity"
+    CHANGE_SCOPE = "change_scope"
+    COMPATIBILITY_AND_DATA = "compatibility_and_data"
+    PERMISSION_AND_SECURITY = "permission_and_security"
+    REVERSIBILITY = "reversibility"
+    UNCERTAINTY = "uncertainty"
+    VERIFICATION_DIFFICULTY = "verification_difficulty"
+
+
+class AxisWeight(str, Enum):
+    """그 축이 준비·검증 깊이에 주는 영향.
+
+    `INSUFFICIENT_EVIDENCE` 를 따로 두는 것이 핵심이다. 근거가 부족한 축을 `LOW` 로
+    적으면 모르는 것이 "영향 없음"이 된다. 부족은 부족으로 드러내고 조사 작업을
+    제시한다(sizing-and-review-ux 2절 "불확실할 때는 근거가 부족함을 표시").
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class SizingSource(str, Enum):
+    """수준 판단을 만든 주체. **세 경우를 합치지 않는다**(FR-04).
+
+    `AI_RECOMMENDATION` AI가 쓴 의도 초안 안의 판단
+    `HUMAN_ASSESSMENT`  사람이 직접 쓴 의도 초안 안의 판단. 조정이 아니다 —
+                        조정할 이전 판단이 없는데 "조정"으로 적으면 기록이 거짓이 된다
+    `HUMAN_ADJUSTMENT`  사람이 기존 판단을 상향·하향한 것. 이유와 남는 위험이 필수다
+    """
+
+    AI_RECOMMENDATION = "ai_recommendation"
+    HUMAN_ASSESSMENT = "human_assessment"
+    HUMAN_ADJUSTMENT = "human_adjustment"
+
+
+class SizingState(str, Enum):
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
+
+
+class PreparationStage(str, Enum):
+    """준비 산출물의 단계. **두 단계는 각각 조회·검토된다**(intent-artifacts 2절)."""
+
+    DESIGN = "design"
+    PLAN = "plan"
+
+
+class ReviewMode(str, Enum):
+    """단계별 검토 방식. **프로젝트 기본값은 두 단계 모두 사람 검토다**(D-14).
+
+    설정 행이 없는 상태는 `HUMAN_REVIEW` 다. 없음을 자동 진행으로 읽으면 기본값이
+    조용히 뒤집힌다.
+    """
+
+    HUMAN_REVIEW = "human_review"
+    AUTO_PROCEED = "auto_proceed"
+
+
+class StageReviewState(str, Enum):
+    """단계 검토의 현재 상태.
+
+    **`AUTO_CONDITIONS_MET` 을 `HUMAN_REVIEWED` 로 적지 않는다.** 자동 진행의 결과는
+    "자동 조건 충족"이며 사람 승인 기록이 아니다(sizing-and-review-ux 2·5절).
+    """
+
+    NOT_READY = "not_ready"
+    AWAITING_HUMAN_REVIEW = "awaiting_human_review"
+    #: 자동 진행 설정인데 조건 충족이 아직 기록되지 않은 상태. `NOT_READY` 와 합치지
+    #: 않는 이유는 산출물이 **있는데도** "산출물 준비 전"으로 보이면 사람이 무엇을
+    #: 해야 하는지 알 수 없기 때문이다.
+    AWAITING_AUTO_CONDITIONS = "awaiting_auto_conditions"
+    HUMAN_REVIEWED = "human_reviewed"
+    AUTO_CONDITIONS_MET = "auto_conditions_met"
+    NEEDS_RECHECK = "needs_recheck"
+
+
+class PreparationState(str, Enum):
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
+
+
+class ContextRefRole(str, Enum):
+    """작성 실행에 고정한 참조의 역할(review-context-contract 2절).
+
+    **이것이 P2-04가 남긴 위험 1의 해소다.** 재작성 실행에 이전 버전을 고정해 주지
+    않으면 AI가 산출물을 처음부터 다시 써서 퇴화한다. 실제로 그렇게 됐다.
+    """
+
+    PREVIOUS_INTENT = "previous_intent"
+    AGREED_INTENT = "agreed_intent"
+    PREVIOUS_DESIGN = "previous_design"
+    CURRENT_DESIGN = "current_design"
+    PREVIOUS_PLAN = "previous_plan"
+    FEEDBACK = "feedback"

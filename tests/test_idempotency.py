@@ -9,7 +9,6 @@ from __future__ import annotations
 import sqlite3
 
 import httpx
-import pytest
 
 
 def _run_rows(harness, run_id: str) -> int:
@@ -66,8 +65,12 @@ def test_lost_result_response_does_not_cause_re_execution(harness, monkeypatch):
 
     monkeypatch.setattr(harness.agent.client, "send_result", failing_send_result)
 
-    with pytest.raises(httpx.TransportError):
-        harness.agent.poll_once()
+    # 보고가 실패해도 **루프는 죽지 않는다**(P3-01). 한 배정의 실패가 다른 배정의
+    # 결과 보고까지 멈추면 유실이 번진다. 실패한 사실은 행동 기록에 남는다.
+    actions = harness.agent.poll_once()["assignments"]
+    assert [a["action"] for a in actions] == ["failed_in_runner"]
+    assert "TransportError" in actions[0]["error"]
+    assert calls["n"] == 1
 
     # 실행은 실제로 일어났다.
     assert harness.effect_count(case["id"]) == 1

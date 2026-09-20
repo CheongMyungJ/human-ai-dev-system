@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 def utc_now() -> str:
@@ -73,6 +73,20 @@ def migrate(conn: sqlite3.Connection) -> None:
     #     기존 Case 에는 완료 정책 행이 없고, 그것은 "정책이 기록되지 않음"이 아니라
     #     기본값(사람 최종 확인)을 뜻한다 — D-31의 기본값이기 때문이다.
     #     행이 없는 상태를 자동 완료로 해석하지 않는 것이 중요하다.
+
+    # v5: 수준·설계·계획도 **새 표만** 더한다. 기존 표의 컬럼을 바꾸지 않으므로
+    #     위 executescript 의 `CREATE TABLE IF NOT EXISTS` 로 이행이 끝난다.
+    #     기존 Case 에는 `stage_review_setting` 행이 없고, 그것은 "설정이 기록되지
+    #     않음"이 아니라 기본값(설계·계획 모두 사람 검토)을 뜻한다 — D-14의
+    #     기본값이기 때문이다. 행이 없는 상태를 자동 진행으로 해석하지 않는 것이
+    #     중요하다. 마찬가지로 수준 판단 행이 없는 Case 는 `sizing_not_decided` 이며
+    #     "간소"로 읽지 않는다.
+
+    # v5: 미정 질문이 **어느 단계에서 제기됐는가.** 설계·계획 산출물도 질문을
+    #     낳으므로 그 출처를 남긴다. 기존 행은 NULL 이며 그것은 의도 단계에서
+    #     제기됐다는 사실과 일치한다 — P3-01 전에는 다른 단계가 없었다.
+    _add_column_if_missing(conn, "intent_question", "raised_in_stage", "TEXT")
+    _add_column_if_missing(conn, "intent_question", "preparation_id", "TEXT")
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

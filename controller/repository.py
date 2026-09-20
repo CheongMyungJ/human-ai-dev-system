@@ -15,10 +15,11 @@ import sqlite3
 from typing import Any, Iterable
 
 from controller import gate as gatemod
+from controller import sizing as sizingmod
 from controller.admission import AdmissionRequest, AdmissionResult
 from controller.admission import evaluate as evaluate_admission
 from controller.db import transaction, utc_now
-from domain import ids
+from domain import ids, prep_doc
 from domain.models import (
     AcceptanceMode,
     AcceptanceRefusal,
@@ -26,6 +27,7 @@ from domain.models import (
     ArtifactKind,
     AuthoringMode,
     Availability,
+    AxisWeight,
     CapabilityState,
     CandidateState,
     CaseKind,
@@ -35,6 +37,7 @@ from domain.models import (
     CompletionMode,
     ConfirmationState,
     ContentOrigin,
+    ContextRefRole,
     CriterionState,
     CriterionVerdict,
     DecideAt,
@@ -51,12 +54,20 @@ from domain.models import (
     IntentField,
     IntentStatus,
     Permission,
+    PreparationStage,
+    PreparationState,
     QuestionState,
     ReadRequestState,
+    ReviewMode,
     RunOutcome,
     RunPurpose,
     RunRole,
     RunStatus,
+    SizingAxis,
+    SizingSource,
+    SizingState,
+    StageReviewState,
+    WorkLevel,
 )
 
 MAX_SUMMARY = 200
@@ -521,6 +532,22 @@ class Repository:
                         CriterionVerdict.NEEDS_RECHECK.value,
                     ),
                 )
+                # 작업 수준 판단도 같은 규칙이다(P3-01). 축별 근거는 **이 의도 버전을
+                # 보고 쓴 것**이므로 의도가 바뀌면 그 판단도 대체된다. 승계하면
+                # 바뀐 의도에 옛 근거가 그대로 붙고, 사람이 조정한 수준이 새 범위에
+                # 조용히 확대된다. 행은 지우지 않고 대체됨으로 남긴다.
+                self.conn.execute(
+                    "UPDATE sizing_assessment SET state = ?, superseded_at = ?"
+                    " WHERE case_id = ? AND state = ?"
+                    "   AND (intent_version_id IS NULL OR intent_version_id != ?)",
+                    (
+                        SizingState.SUPERSEDED.value,
+                        now,
+                        case_id,
+                        SizingState.CURRENT.value,
+                        intent_id,
+                    ),
+                )
         return self.get_intent_version(intent_id)
 
     def get_intent_version(self, intent_id: str) -> dict[str, Any]:
@@ -714,6 +741,15 @@ class Repository:
             run["instruction_artifact_id"], run["instruction_artifact_rev"]
         )
         run["target_intent_version_id"] = target["id"] if target else None
+        # 고정 컨텍스트 참조. **본문은 없다** — Runner가 이 참조로 자기 저장소에서
+        # 읽는다. 읽지 못한 참조는 지시문에 "읽지 못함"으로 적힌다(P3-01).
+        run["context_refs"] = self.list_context_refs(run_id)
+        # 준비 산출물을 만드는 실행은 어느 수준으로 쓸지 알아야 한다. 수준이 없으면
+        # `None` 이고 그 경우 진입 검사가 이미 막았다 — 여기서 기본값을 지어내지 않는다.
+        level = self.current_level(run["case_id"])
+        run["work_level"] = level.value if level else None
+        latest_intent = self.latest_intent_version(run["case_id"])
+        run["current_intent_version_id"] = latest_intent["id"] if latest_intent else None
         return run
 
     def bump_generation(self, run_id: str) -> dict[str, Any]:
@@ -867,6 +903,7 @@ class Repository:
         fields: Iterable[dict[str, Any]],
         questions: Iterable[dict[str, Any]],
         criteria: Iterable[dict[str, Any]] | None = None,
+        sizing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Runner가 계산한 의도 구조를 반영한다.
 
@@ -926,6 +963,10 @@ class Repository:
         # 기준이 0건이면 0건으로 남긴다 — 없는 기준을 시스템이 채우지 않는다.
         if criteria is not None:
             self.apply_success_criteria(intent_version_id, criteria)
+        # 작업 수준 판단도 같은 보고로 들어온다(P3-01). 같은 이유다 — 축별 근거를
+        # 따로 입력받는 본문 API 를 만들면 제어부가 그 서술을 갖게 된다.
+        # `None` 이면 아무 것도 만들지 않는다. **수준 미결정은 미결정으로 남는다.**
+        self.apply_sizing_report(intent_version_id, sizing)
         # 구조가 보고된 순간이 규칙 검사가 가능해진 순간이다. 여기서 한 번 돌려
         # 게이트 상태를 항상 최신 구조에 맞춰 둔다. **AI 검토는 건드리지 않는다** —
         # 규칙만 통과한 상태는 여전히 `not_run` 이다.
@@ -1794,6 +1835,9 @@ class Repository:
                 self.tool_capability(tool_id, "coding_cli") == CapabilityState.VERIFIED.value
             ),
             author_session_refs=author_sessions,
+            # 수준·설계·계획·검토 상태. **DB에서 지금 다시 읽는다** — 메모리에 통과
+            # 상태를 두지 않는다는 규칙이 선행 조건에도 그대로 적용된다(FR-29).
+            preparation_state=self.preparation_state(case_id),
         )
         return evaluate_admission(request)
 
@@ -1922,6 +1966,11 @@ class Repository:
             instruction_artifact_rev=instruction_artifact_rev,
             purpose=purpose,
         )
+        if created:
+            # **고정 컨텍스트를 여기서 정한다.** 배정 시점이 아니라 생성 시점에
+            # 고정하는 이유는 "실행이 무엇을 보고 썼는가"가 재배정으로 달라지면
+            # 안 되기 때문이다(review-context-contract 2절 "버전이 고정된 참조 목록").
+            self.record_context_refs(run["run_id"], self.compose_context_refs(case_id, purpose))
         check = self.record_admission(
             case_id, run_id, task_id, purpose, role, permission, tool_id, result, run["run_id"]
         )
@@ -2659,6 +2708,825 @@ class Repository:
         return [dict(r) for r in rows]
 
     # ----------------------------------------------------------- 결과 화면
+
+    # ------------------------------------------------------------ P3-01 수준
+
+    def _supersede_sizing(self, case_id: str, now: str) -> None:
+        self.conn.execute(
+            "UPDATE sizing_assessment SET state = ?, superseded_at = ?"
+            " WHERE case_id = ? AND state = ?",
+            (SizingState.SUPERSEDED.value, now, case_id, SizingState.CURRENT.value),
+        )
+
+    def _insert_sizing(
+        self,
+        case_id: str,
+        intent_version_id: str | None,
+        source: SizingSource,
+        recommended_level: WorkLevel,
+        axes: list[dict[str, Any]],
+        actor: str,
+        reason_summary: str,
+        residual_risk_summary: str,
+        adjusted_from: str | None = None,
+    ) -> str:
+        """수준 판단 행 하나를 만든다. 이전 판단은 대체됨으로 남긴다(지우지 않는다).
+
+        효과 수준은 `controller.sizing` 이 정한다 — **문서가 제안한 수준이 도출값보다
+        낮으면 낮은 쪽을 쓰지 않는다.** 두 값이 모두 이 행에 남아 조용한 하향이 드러난다.
+        사람의 명시적 조정만 도출값 아래로 갈 수 있고 그때 이유와 남는 위험이 남는다.
+        """
+        outcome = sizingmod.assess(axes, recommended_level)
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM sizing_assessment WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        assessment_id = ids.new_id("sizing")
+        now = utc_now()
+        level = outcome.effective_level
+        if source is SizingSource.HUMAN_ADJUSTMENT:
+            # 사람의 조정은 도출값 아래로도 갈 수 있다. 그것이 조정권이다(FR-05).
+            # 대신 이유와 남는 위험이 필수이고(호출부가 검사한다) 기록에 남는다.
+            level = recommended_level
+        self._supersede_sizing(case_id, now)
+        self.conn.execute(
+            "INSERT INTO sizing_assessment (id, case_id, revision, intent_version_id, source,"
+            " recommended_level, derived_level, level, adjusted_from, evidence_gap,"
+            " reason_summary, residual_risk_summary, actor, state, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                assessment_id,
+                case_id,
+                revision,
+                intent_version_id,
+                source.value,
+                recommended_level.value,
+                outcome.derived_level.value,
+                level.value,
+                adjusted_from,
+                1 if outcome.evidence_gap else 0,
+                _summary(reason_summary),
+                _summary(residual_risk_summary),
+                actor,
+                SizingState.CURRENT.value,
+                now,
+            ),
+        )
+        for axis in axes:
+            self.conn.execute(
+                "INSERT INTO sizing_axis (assessment_id, axis, weight, judgement_summary,"
+                " unconfirmed_summary) VALUES (?, ?, ?, ?, ?)",
+                (
+                    assessment_id,
+                    SizingAxis(axis["axis"]).value,
+                    AxisWeight(axis["weight"]).value,
+                    _summary(axis.get("judgement_summary") or ""),
+                    _summary(axis.get("unconfirmed_summary") or ""),
+                ),
+            )
+        return assessment_id
+
+    def apply_sizing_report(
+        self, intent_version_id: str, sizing: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """의도 구조 보고에 실려 온 수준 판단을 반영한다.
+
+        `None` 이면 아무 것도 만들지 않는다. **없는 판단을 간소로 채우지 않는다** —
+        v1·v2 문서와 수준을 적지 않은 초안은 `sizing_not_decided` 로 남아야 한다.
+
+        작성 주체는 의도 버전의 `authoring_mode` 에서 가져온다. AI가 쓴 초안의 판단을
+        사람 판단으로 적지 않기 위해서다(FR-04).
+        """
+        if not sizing:
+            return None
+        intent = self.get_intent_version(intent_version_id)
+        ai_drafted = intent.get("authoring_mode") == AuthoringMode.AI_DRAFTED.value
+        source = (
+            SizingSource.AI_RECOMMENDATION if ai_drafted else SizingSource.HUMAN_ASSESSMENT
+        )
+        actor = (intent.get("author_run_id") or "ai-intent-draft") if ai_drafted else "human-draft"
+        axes = list(sizing.get("axes") or [])
+        with transaction(self.conn):
+            assessment_id = self._insert_sizing(
+                case_id=intent["case_id"],
+                intent_version_id=intent_version_id,
+                source=source,
+                recommended_level=WorkLevel(sizing["recommended_level"]),
+                axes=axes,
+                actor=actor,
+                reason_summary="의도 초안에 적힌 수준 판단",
+                residual_risk_summary="",
+            )
+        return self.get_sizing_assessment(assessment_id)
+
+    def get_sizing_assessment(self, assessment_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM sizing_assessment WHERE id = ?", (assessment_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"sizing assessment not found: {assessment_id}")
+        out = dict(row)
+        out["axes"] = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM sizing_axis WHERE assessment_id = ? ORDER BY axis",
+                (assessment_id,),
+            ).fetchall()
+        ]
+        out["evidence_gap"] = bool(out["evidence_gap"])
+        return out
+
+    def current_sizing(self, case_id: str) -> dict[str, Any] | None:
+        """지금 적용되는 수준 판단. 없으면 `None` 이며 그것은 **미결정**이다."""
+        row = self.conn.execute(
+            "SELECT id FROM sizing_assessment WHERE case_id = ? AND state = ?",
+            (case_id, SizingState.CURRENT.value),
+        ).fetchone()
+        return self.get_sizing_assessment(row["id"]) if row else None
+
+    def list_sizing_assessments(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id FROM sizing_assessment WHERE case_id = ? ORDER BY revision DESC",
+            (case_id,),
+        ).fetchall()
+        return [self.get_sizing_assessment(r["id"]) for r in rows]
+
+    def current_level(self, case_id: str) -> WorkLevel | None:
+        current = self.current_sizing(case_id)
+        return WorkLevel(current["level"]) if current else None
+
+    def adjust_sizing(
+        self,
+        case_id: str,
+        level: WorkLevel,
+        actor: str,
+        reason_summary: str,
+        residual_risk_summary: str,
+    ) -> dict[str, Any]:
+        """사람이 수준을 상향·하향한다.
+
+        **이유와 남는 위험이 필수다.** sizing-and-review-ux 1절: "조정 이유와 남는
+        위험을 기록하며, 상세도 조정이 의도 동의·합의한 검증·권한을 해제하지 않게
+        한다." 그래서 이 메서드는 검토 모드·성공 기준·의도 동의를 **건드리지 않는다.**
+        수준은 준비 깊이의 결정이고 의도의 내용이 아니므로 새 의도 버전도 만들지 않는다.
+
+        기존 판단이 없으면 거부한다. 축별 근거 없이 수준만 정하는 경로를 만들면
+        `근거 / 판단 / 미확인 / 영향`이 사라진다.
+        """
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        if not str(reason_summary or "").strip():
+            raise ConflictError("a sizing adjustment needs a reason")
+        if not str(residual_risk_summary or "").strip():
+            raise ConflictError("a sizing adjustment needs the remaining risk it leaves")
+        current = self.current_sizing(case_id)
+        if current is None:
+            raise ConflictError(
+                "there is no sizing assessment to adjust;"
+                " the intent draft must carry the per-axis judgement first"
+            )
+        axes = [
+            {
+                "axis": a["axis"],
+                "weight": a["weight"],
+                "judgement_summary": a["judgement_summary"],
+                "unconfirmed_summary": a["unconfirmed_summary"],
+            }
+            for a in current["axes"]
+        ]
+        with transaction(self.conn):
+            assessment_id = self._insert_sizing(
+                case_id=case_id,
+                intent_version_id=current["intent_version_id"],
+                source=SizingSource.HUMAN_ADJUSTMENT,
+                recommended_level=WorkLevel(level),
+                axes=axes,
+                actor=actor,
+                reason_summary=reason_summary,
+                residual_risk_summary=residual_risk_summary,
+                adjusted_from=current["level"],
+            )
+        return self.get_sizing_assessment(assessment_id)
+
+    # -------------------------------------------------- P3-01 설계·개발계획
+
+    #: 단계별 원문 종류. 설계 문서를 계획으로 등록하는 실수를 막는다.
+    STAGE_ARTIFACT_KIND = {
+        PreparationStage.DESIGN: ArtifactKind.DESIGN,
+        PreparationStage.PLAN: ArtifactKind.DEV_PLAN,
+    }
+
+    def create_preparation_artifact(
+        self,
+        case_id: str,
+        stage: PreparationStage,
+        artifact_id: str,
+        artifact_rev: int,
+        level: WorkLevel,
+        authoring_mode: AuthoringMode = AuthoringMode.AI_DRAFTED,
+        author_run_id: str | None = None,
+        summary: str = "",
+    ) -> dict[str, Any]:
+        """준비 산출물을 등록한다.
+
+        **어느 의도 버전 위에 세웠는지**를 지금의 최신 의도 버전으로 고정한다.
+        나중에 새 의도 버전이 생기면 이 산출물은 오래된 것이 되고 그 검토도
+        재사용되지 않는다 — 오래된 승인을 막는 지점이 여기다(FR-23).
+
+        계획은 **현재 설계 위에** 세운다. 설계가 없으면 거부한다. 의존 관계가
+        `의도 → 설계 → 개발계획` 이므로 설계 없는 계획은 무엇을 구현할 계획인지
+        말할 수 없다(intent-artifacts 2절).
+        """
+        stage = PreparationStage(stage)
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        ref = self.get_artifact_ref(artifact_id, artifact_rev)
+        expected = self.STAGE_ARTIFACT_KIND[stage]
+        if ref["kind"] != expected.value:
+            raise ConflictError(f"artifact kind {ref['kind']} is not a {expected.value} artifact")
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            raise ConflictError("a preparation artifact needs an intent version to build on")
+
+        based_on_design_id: str | None = None
+        if stage is PreparationStage.PLAN:
+            design = self.current_preparation(case_id, PreparationStage.DESIGN)
+            if design is None:
+                raise ConflictError("a development plan needs a current design to build on")
+            based_on_design_id = design["id"]
+
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM preparation_artifact WHERE case_id = ? AND stage = ?",
+            (case_id, stage.value),
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        prep_id = ids.new_id("prep")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE preparation_artifact SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND stage = ? AND state = ?",
+                (
+                    PreparationState.SUPERSEDED.value,
+                    now,
+                    case_id,
+                    stage.value,
+                    PreparationState.CURRENT.value,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO preparation_artifact (id, case_id, stage, revision, artifact_id,"
+                " artifact_rev, intent_version_id, based_on_design_id, level, authoring_mode,"
+                " author_run_id, summary, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    prep_id,
+                    case_id,
+                    stage.value,
+                    revision,
+                    artifact_id,
+                    artifact_rev,
+                    latest["id"],
+                    based_on_design_id,
+                    WorkLevel(level).value,
+                    AuthoringMode(authoring_mode).value,
+                    author_run_id,
+                    _summary(summary or f"{stage.value} v{revision}"),
+                    PreparationState.CURRENT.value,
+                    now,
+                ),
+            )
+            if stage is PreparationStage.DESIGN:
+                # 설계가 바뀌면 그 위에 세운 계획은 더 이상 현재 설계의 계획이 아니다.
+                # 계획 행을 지우지 않고 대체됨으로 남긴다 — 무엇이 있었는지는 기록이다.
+                self.conn.execute(
+                    "UPDATE preparation_artifact SET state = ?, superseded_at = ?"
+                    " WHERE case_id = ? AND stage = ? AND state = ?",
+                    (
+                        PreparationState.SUPERSEDED.value,
+                        now,
+                        case_id,
+                        PreparationStage.PLAN.value,
+                        PreparationState.CURRENT.value,
+                    ),
+                )
+        return self.get_preparation_artifact(prep_id)
+
+    def get_preparation_artifact(self, prep_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM preparation_artifact WHERE id = ?", (prep_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"preparation artifact not found: {prep_id}")
+        out = dict(row)
+        sections = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM preparation_section WHERE preparation_id = ?", (prep_id,)
+            ).fetchall()
+        ]
+        order = {s: i for i, s in enumerate(prep_doc.SECTION_ORDER[PreparationStage(out["stage"])])}
+        sections.sort(key=lambda r: order.get(r["section"], 99))
+        required_now = self.effective_required_sections(prep_id)
+        for section in sections:
+            # 보고 시점의 필수 여부는 기록으로 남기고, 화면과 진입 검사가 보는 것은
+            # **지금** 요구되는지다. 사람이 수준을 올리면 여기가 함께 바뀐다.
+            section["required_at_report"] = bool(section["required"])
+            section["required"] = section["section"] in required_now
+            section["label"] = prep_doc.SECTION_LABEL.get(section["section"], section["section"])
+        out["sections"] = sections
+        ref = self.get_artifact_ref(out["artifact_id"], out["artifact_rev"])
+        out["availability"] = ref["availability"]
+        out["content_hash"] = ref["content_hash"]
+        out["owner_runner_id"] = ref["owner_runner_id"]
+        out["review"] = self.get_stage_review(prep_id)
+        out["missing_required_sections"] = self.missing_required_sections(prep_id)
+        return out
+
+    def list_preparation_artifacts(
+        self, case_id: str, stage: PreparationStage | None = None
+    ) -> list[dict[str, Any]]:
+        """단계별 목록. **설계와 계획은 각각 조회된다**(intent-artifacts 2절)."""
+        sql = "SELECT id FROM preparation_artifact WHERE case_id = ?"
+        args: list[Any] = [case_id]
+        if stage is not None:
+            sql += " AND stage = ?"
+            args.append(PreparationStage(stage).value)
+        rows = self.conn.execute(sql + " ORDER BY stage, revision DESC", args).fetchall()
+        return [self.get_preparation_artifact(r["id"]) for r in rows]
+
+    def current_preparation(self, case_id: str, stage: PreparationStage) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT id FROM preparation_artifact WHERE case_id = ? AND stage = ? AND state = ?",
+            (case_id, PreparationStage(stage).value, PreparationState.CURRENT.value),
+        ).fetchone()
+        return self.get_preparation_artifact(row["id"]) if row else None
+
+    def apply_preparation_structure(
+        self,
+        prep_id: str,
+        sections: Iterable[dict[str, Any]],
+        questions: Iterable[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Runner가 계산한 산출물 구조를 반영한다.
+
+        단계의 항목이 모두 와야 한다. 하나라도 빠지면 거부한다 — 빠진 항목을
+        여기서 만들어 채우면 필수 항목 검사가 통과해 버린다.
+
+        이 산출물이 낳은 미정 질문도 함께 들어온다. 질문 표에 `raised_in_stage` 를
+        남겨 의도 단계에서 나온 질문과 구별한다.
+        """
+        prep = self.get_preparation_artifact(prep_id)
+        stage = PreparationStage(prep["stage"])
+        level = WorkLevel(prep["level"])
+        required = prep_doc.required_sections(stage, level)
+        rows = list(sections)
+        given = {r["section"] for r in rows}
+        expected = set(prep_doc.SECTION_ORDER[stage])
+        if given != expected:
+            missing = sorted(expected - given)
+            extra = sorted(given - expected)
+            raise ConflictError(
+                f"{stage.value} structure must carry all sections;"
+                f" missing={missing} extra={extra}"
+            )
+        now = utc_now()
+        with transaction(self.conn):
+            for row in rows:
+                self.conn.execute(
+                    "INSERT INTO preparation_section"
+                    " (preparation_id, section, state, origin, required)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT(preparation_id, section) DO UPDATE SET"
+                    "   state = excluded.state, origin = excluded.origin,"
+                    "   required = excluded.required",
+                    (
+                        prep_id,
+                        str(row["section"]),
+                        ConfirmationState(row["state"]).value,
+                        ContentOrigin(row["origin"]).value,
+                        # 필수 여부는 **제어부가 수준에서 정한다.** 문서가 스스로
+                        # "이건 필수가 아니다"라고 주장해 검사를 벗어나지 못하게 한다.
+                        1 if row["section"] in required else 0,
+                    ),
+                )
+            for question in questions:
+                self.conn.execute(
+                    "INSERT INTO intent_question"
+                    " (id, case_id, intent_version_id, question_key, summary, decide_at,"
+                    "  state, created_at, raised_in_stage, preparation_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(intent_version_id, question_key) DO UPDATE SET"
+                    "   summary = excluded.summary, decide_at = excluded.decide_at,"
+                    "   raised_in_stage = excluded.raised_in_stage,"
+                    "   preparation_id = excluded.preparation_id",
+                    (
+                        ids.new_question_id(),
+                        prep["case_id"],
+                        prep["intent_version_id"],
+                        f"{stage.value}:{question['key']}",
+                        _summary(question["summary"]),
+                        DecideAt(question["decide_at"]).value,
+                        QuestionState.OPEN.value,
+                        now,
+                        stage.value,
+                        prep_id,
+                    ),
+                )
+        return self.get_preparation_artifact(prep_id)
+
+    def effective_required_sections(self, prep_id: str) -> frozenset[str]:
+        """이 산출물에 **지금** 요구되는 항목.
+
+        **산출물이 작성된 시점의 수준이 아니라 Case 의 현재 수준으로 정한다.**
+        사람이 수준을 올리면 이미 있는 산출물도 부족해져야 한다 — 그렇지 않으면
+        조정이 겉치레가 되고, 얕게 쓴 산출물로 "준비 완료"가 된다
+        (sizing-and-review-ux 1·3절: 조정의 영향을 받는 산출물을 보여 준다).
+        라이브 검증에서 실제로 이 구멍이 드러났다.
+
+        수준 판단이 없으면(새 의도 버전이 판단을 대체한 직후 등) 산출물이 작성된
+        시점의 수준을 쓴다. 그 상태로는 기능 구현이 `sizing_not_decided` 로 막히므로
+        여기서 판단을 지어낼 필요가 없다.
+        """
+        row = self.conn.execute(
+            "SELECT case_id, stage, level FROM preparation_artifact WHERE id = ?", (prep_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"preparation artifact not found: {prep_id}")
+        level = self.current_level(row["case_id"]) or WorkLevel(row["level"])
+        return prep_doc.required_sections(PreparationStage(row["stage"]), level)
+
+    def missing_required_sections(self, prep_id: str) -> list[str]:
+        """지금 요구되는데 미정으로 비어 있는 항목.
+
+        **구조 보고가 아직 없으면 모든 필수 항목이 빠진 것으로 본다.** 보고되지
+        않은 것을 채워진 것으로 읽으면 빈 산출물이 선행 조건을 통과한다.
+        """
+        required = self.effective_required_sections(prep_id)
+        reported = {
+            r["section"]: r["state"]
+            for r in self.conn.execute(
+                "SELECT section, state FROM preparation_section WHERE preparation_id = ?",
+                (prep_id,),
+            ).fetchall()
+        }
+        return sorted(
+            s
+            for s in required
+            if reported.get(s, ConfirmationState.UNDECIDED.value)
+            == ConfirmationState.UNDECIDED.value
+        )
+
+    # ------------------------------------------------ P3-01 단계별 사람 검토
+
+    def stage_review_mode(self, case_id: str, stage: PreparationStage) -> ReviewMode:
+        """이 단계의 검토 방식. **행이 없으면 사람 검토다**(D-14 프로젝트 기본값).
+
+        없음을 자동 진행으로 읽으면 기본값이 조용히 뒤집힌다. 그래서 기본값을
+        이 한 곳에서만 해석한다.
+        """
+        row = self.conn.execute(
+            "SELECT mode FROM stage_review_setting WHERE case_id = ? AND stage = ?",
+            (case_id, PreparationStage(stage).value),
+        ).fetchone()
+        return ReviewMode(row["mode"]) if row else ReviewMode.HUMAN_REVIEW
+
+    def set_stage_review_mode(
+        self,
+        case_id: str,
+        stage: PreparationStage,
+        mode: ReviewMode,
+        set_by: str,
+        reason_summary: str,
+    ) -> dict[str, Any]:
+        """검토 방식을 바꾼다. **두 단계는 서로 독립이다.**
+
+        설계를 자동 진행으로 바꿔도 계획의 설정은 그대로다(FR-05 검토:
+        "Case에서 독립적으로 자동 진행을 선택한다").
+        """
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        stage = PreparationStage(stage)
+        mode = ReviewMode(mode)
+        if mode is ReviewMode.AUTO_PROCEED and not str(reason_summary or "").strip():
+            # 자동 진행은 사람이 고른 것이므로 왜 골랐는지가 남아야 한다.
+            raise ConflictError("switching a stage to auto-proceed needs a reason")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO stage_review_setting (case_id, stage, mode, set_by,"
+                " reason_summary, set_at) VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id, stage) DO UPDATE SET mode = excluded.mode,"
+                "   set_by = excluded.set_by, reason_summary = excluded.reason_summary,"
+                "   set_at = excluded.set_at",
+                (
+                    case_id,
+                    stage.value,
+                    mode.value,
+                    set_by,
+                    _summary(reason_summary or "사람 검토로 되돌림"),
+                    utc_now(),
+                ),
+            )
+        return self.stage_state(case_id, stage)
+
+    def get_stage_review(self, prep_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM stage_review WHERE preparation_id = ?", (prep_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def record_stage_review(
+        self,
+        case_id: str,
+        stage: PreparationStage,
+        prep_id: str,
+        actor: str,
+        note_summary: str,
+        explicit: bool = True,
+    ) -> dict[str, Any]:
+        """사람이 이 단계의 산출물을 검토했다고 기록한다.
+
+        **`decision` 표에 행을 만드는 것은 이 경로뿐이다.** 자동 진행은 만들지 않는다
+        (sizing-and-review-ux 2절 "자동 진행이 사람 승인 기록 생성으로 이어지면 안 된다").
+
+        원문을 읽을 수 없는 상태에서는 기록하지 않는다. 요약만 보고 상세 산출물을
+        검토한 것으로 적지 않는다(sizing-and-review-ux 7절).
+        """
+        stage = PreparationStage(stage)
+        prep = self.get_preparation_artifact(prep_id)
+        self.guard_open_case(case_id)
+        if prep["case_id"] != case_id or prep["stage"] != stage.value:
+            raise ConflictError("the preparation artifact does not belong to this case and stage")
+        if prep["state"] != PreparationState.CURRENT.value:
+            raise ConflictError("this preparation artifact has been superseded")
+        if not explicit:
+            raise ConflictError("a stage review must be an explicit action on this artifact")
+        if prep["availability"] != Availability.AVAILABLE.value:
+            raise ConflictError(
+                f"the original is {prep['availability']}; a summary is not the artifact"
+            )
+        existing = self.get_stage_review(prep_id)
+        if existing is not None:
+            return existing
+        kind = (
+            DecisionKind.DESIGN_REVIEW
+            if stage is PreparationStage.DESIGN
+            else DecisionKind.PLAN_REVIEW
+        )
+        decision = self.record_decision(
+            case_id=case_id,
+            kind=kind,
+            subject_type="preparation_artifact",
+            subject_id=prep_id,
+            subject_revision=prep["revision"],
+            actor=actor,
+        )
+        review_id = ids.new_id("stagerev")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE decision SET subject_content_hash = ? WHERE id = ?",
+                (prep["content_hash"], decision["id"]),
+            )
+            self.conn.execute(
+                "INSERT INTO stage_review (id, case_id, stage, preparation_id, mode, state,"
+                " decision_id, actor, subject_content_hash, note_summary, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    review_id,
+                    case_id,
+                    stage.value,
+                    prep_id,
+                    ReviewMode.HUMAN_REVIEW.value,
+                    StageReviewState.HUMAN_REVIEWED.value,
+                    decision["id"],
+                    actor,
+                    prep["content_hash"],
+                    _summary(note_summary or "사람이 원문을 검토했다"),
+                    utc_now(),
+                ),
+            )
+        return self.get_stage_review(prep_id)
+
+    #: 자동 진행 기록의 주체. **사람 이름을 넣지 않는다.**
+    AUTO_POLICY_ACTOR = "stage-auto-proceed-policy"
+
+    def record_auto_proceed(
+        self, case_id: str, stage: PreparationStage, prep_id: str
+    ) -> dict[str, Any]:
+        """자동 진행 조건이 충족됐다고 기록한다.
+
+        **사람 승인이 아니다.** `decision` 행을 만들지 않고 `actor` 도 정책 식별자다.
+        상태는 `auto_conditions_met` 이며 화면도 그렇게 표시한다.
+
+        자동 진행이 **산출물의 생략을 뜻하지는 않는다**(intent-artifacts 2절). 그래서
+        산출물이 없거나 수준이 요구하는 항목이 미정이면 거부한다 — 그것이 "자동 조건"의
+        내용이다.
+        """
+        stage = PreparationStage(stage)
+        prep = self.get_preparation_artifact(prep_id)
+        self.guard_open_case(case_id)
+        if prep["case_id"] != case_id or prep["stage"] != stage.value:
+            raise ConflictError("the preparation artifact does not belong to this case and stage")
+        if prep["state"] != PreparationState.CURRENT.value:
+            raise ConflictError("this preparation artifact has been superseded")
+        if self.stage_review_mode(case_id, stage) is not ReviewMode.AUTO_PROCEED:
+            raise ConflictError(
+                f"{stage.value} is set to human review;"
+                " auto-proceed cannot stand in for a person"
+            )
+        missing = prep["missing_required_sections"]
+        if missing:
+            raise ConflictError(
+                f"{stage.value} is missing sections required at level {prep['level']}: {missing}"
+            )
+        if prep["availability"] != Availability.AVAILABLE.value:
+            raise ConflictError(f"the original is {prep['availability']}")
+        existing = self.get_stage_review(prep_id)
+        if existing is not None:
+            return existing
+        review_id = ids.new_id("stagerev")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO stage_review (id, case_id, stage, preparation_id, mode, state,"
+                " decision_id, actor, subject_content_hash, note_summary, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    review_id,
+                    case_id,
+                    stage.value,
+                    prep_id,
+                    ReviewMode.AUTO_PROCEED.value,
+                    StageReviewState.AUTO_CONDITIONS_MET.value,
+                    None,
+                    self.AUTO_POLICY_ACTOR,
+                    prep["content_hash"],
+                    "자동 진행 조건 충족 (사람 승인 아님)",
+                    utc_now(),
+                ),
+            )
+        return self.get_stage_review(prep_id)
+
+    def stage_state(self, case_id: str, stage: PreparationStage) -> dict[str, Any]:
+        """단계 하나의 현재 상태. 화면과 진입 검사가 같은 값을 본다."""
+        stage = PreparationStage(stage)
+        mode = self.stage_review_mode(case_id, stage)
+        setting = self.conn.execute(
+            "SELECT * FROM stage_review_setting WHERE case_id = ? AND stage = ?",
+            (case_id, stage.value),
+        ).fetchone()
+        current = self.current_preparation(case_id, stage)
+        latest_intent = self.latest_intent_version(case_id)
+        stale = False
+        state = StageReviewState.NOT_READY
+        review = None
+        if current is not None:
+            review = current["review"]
+            stale = (
+                latest_intent is not None
+                and current["intent_version_id"] != latest_intent["id"]
+            )
+            if stale:
+                # 새 의도 버전이 생겼다. 이전 검토를 재사용하지 않는다(FR-23).
+                state = StageReviewState.NEEDS_RECHECK
+            elif review is not None:
+                state = StageReviewState(review["state"])
+            elif mode is ReviewMode.AUTO_PROCEED:
+                # 산출물은 있고 조건 충족 기록만 없다. `not_ready` 로 적으면 화면에
+                # "산출물 준비 전"으로 보여 사람이 무엇을 해야 하는지 알 수 없다.
+                state = StageReviewState.AWAITING_AUTO_CONDITIONS
+            else:
+                state = StageReviewState.AWAITING_HUMAN_REVIEW
+        return {
+            "stage": stage.value,
+            "mode": mode.value,
+            # 기본값으로 읽은 것인지 사람이 정한 것인지 구별한다.
+            "mode_source": "project_default" if setting is None else "case_setting",
+            "mode_reason": (setting["reason_summary"] if setting else "프로젝트 기본값"),
+            "artifact": current,
+            "review": review,
+            "state": state.value,
+            "stale": stale,
+            "missing_required_sections": (current["missing_required_sections"] if current else []),
+        }
+
+    def deferred_open_questions(self, case_id: str) -> list[dict[str, Any]]:
+        """설계·계획으로 이월했는데 아직 열려 있는 질문.
+
+        최신 의도 버전에 붙은 것만 본다. 대체된 버전의 질문은 기록으로 남지만
+        지금의 진행 조건은 아니다.
+        """
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return []
+        rows = self.conn.execute(
+            "SELECT * FROM intent_question WHERE intent_version_id = ? AND state = ?"
+            " AND decide_at IN (?, ?) ORDER BY created_at",
+            (
+                latest["id"],
+                QuestionState.OPEN.value,
+                DecideAt.DESIGN.value,
+                DecideAt.PLAN.value,
+            ),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def preparation_state(self, case_id: str) -> dict[str, Any]:
+        """수준·설계·계획·검토를 한 번에 본 상태. 진입 검사와 화면이 같은 값을 쓴다."""
+        self.get_case(case_id)
+        sizing = self.current_sizing(case_id)
+        return {
+            "case_id": case_id,
+            "sizing": sizing,
+            "level": sizing["level"] if sizing else None,
+            "sizing_history": self.list_sizing_assessments(case_id),
+            "design": self.stage_state(case_id, PreparationStage.DESIGN),
+            "plan": self.stage_state(case_id, PreparationStage.PLAN),
+            "deferred_open_questions": self.deferred_open_questions(case_id),
+        }
+
+    # ------------------------------------------------- P3-01 고정 컨텍스트
+
+    def compose_context_refs(self, case_id: str, purpose: RunPurpose) -> list[dict[str, Any]]:
+        """이 목적의 작성 실행에 고정할 참조 목록.
+
+        **본문은 담지 않는다.** `(role, artifact_id, revision)` 만 담고 Runner가
+        자기 저장소에서 읽는다(review-context-contract 2절).
+
+        이것이 P2-04가 남긴 위험 1의 해소다. 재작성 실행에 이전 버전을 주지 않으면
+        AI가 산출물을 처음부터 다시 써서 퇴화한다 — 라이브에서 실제로 그렇게 됐다.
+        """
+        purpose = RunPurpose(purpose)
+        refs: list[dict[str, Any]] = []
+
+        def add(role: ContextRefRole, artifact_id: str | None, revision: int | None) -> None:
+            if not artifact_id or revision is None:
+                return
+            refs.append({"role": role.value, "artifact_id": artifact_id, "revision": int(revision)})
+
+        def add_unresolved_feedback() -> None:
+            for item in self.list_feedback(case_id):
+                if item["state"] == FeedbackState.RECEIVED.value:
+                    add(ContextRefRole.FEEDBACK, item["artifact_id"], item["artifact_rev"])
+
+        latest = self.latest_intent_version(case_id)
+        if purpose is RunPurpose.INTENT_AUTHORING:
+            if latest is not None:
+                add(ContextRefRole.PREVIOUS_INTENT, latest["artifact_id"], latest["artifact_rev"])
+            add_unresolved_feedback()
+        elif purpose in (RunPurpose.DESIGN_AUTHORING, RunPurpose.PLAN_AUTHORING):
+            if latest is not None:
+                add(ContextRefRole.AGREED_INTENT, latest["artifact_id"], latest["artifact_rev"])
+            design = self.current_preparation(case_id, PreparationStage.DESIGN)
+            if purpose is RunPurpose.DESIGN_AUTHORING:
+                if design is not None:
+                    add(
+                        ContextRefRole.PREVIOUS_DESIGN,
+                        design["artifact_id"],
+                        design["artifact_rev"],
+                    )
+                add_unresolved_feedback()
+            else:
+                if design is not None:
+                    add(
+                        ContextRefRole.CURRENT_DESIGN,
+                        design["artifact_id"],
+                        design["artifact_rev"],
+                    )
+                plan = self.current_preparation(case_id, PreparationStage.PLAN)
+                if plan is not None:
+                    add(ContextRefRole.PREVIOUS_PLAN, plan["artifact_id"], plan["artifact_rev"])
+        return refs
+
+    def record_context_refs(self, run_id: str, refs: list[dict[str, Any]]) -> None:
+        with transaction(self.conn):
+            for seq, ref in enumerate(refs, start=1):
+                self.conn.execute(
+                    "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
+                    " VALUES (?, ?, ?, ?, ?)"
+                    " ON CONFLICT(run_id, seq) DO NOTHING",
+                    (
+                        run_id,
+                        seq,
+                        ContextRefRole(ref["role"]).value,
+                        ref["artifact_id"],
+                        int(ref["revision"]),
+                    ),
+                )
+
+    def list_context_refs(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM run_context_ref WHERE run_id = ? ORDER BY seq", (run_id,)
+        ).fetchall()
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            ref = self.get_artifact_ref(item["artifact_id"], item["revision"])
+            # 참조가 지금 읽을 수 있는 상태인지 함께 알려 준다. Runner가 읽지 못하면
+            # 지시문에 "읽지 못함"으로 적히고 산출물이 그 사실을 갖는다.
+            item["availability"] = ref["availability"]
+            item["content_hash"] = ref["content_hash"]
+            out.append(item)
+        return out
 
     def result_view(self, case_id: str) -> dict[str, Any]:
         """FR-17이 요구하는 "기준별 증거·미충족·미검증"의 한 묶음.

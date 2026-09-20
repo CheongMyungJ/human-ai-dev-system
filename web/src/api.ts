@@ -102,6 +102,9 @@ export interface CaseDetail extends Case {
   // P2-04: 기준별 결과·미정리 실행·종료 후보를 같은 응답에 담는다.
   // "지금 무엇을 기다리는가"를 다른 화면에서 찾게 하지 않는다(FR-14).
   result: ResultView
+  // P3-01: 수준·설계·계획·검토 상태. 화면과 서버가 **같은 값**을 본다 —
+  // 화면이 따로 계산하면 버튼은 눌리는데 서버가 거부하는 상태가 생긴다.
+  preparation: PreparationState
 }
 
 export interface RunnerCapability {
@@ -312,6 +315,10 @@ export interface IntentQuestion {
   state: 'open' | 'answered' | 'withdrawn'
   answered_by: string | null
   answered_at: string | null
+  // P3-01: 이 질문이 **어느 단계에서 제기됐는가.** 옛 행은 `null` 이며 그것은
+  // 의도 단계에서 제기됐다는 사실과 일치한다 — P3-01 전에는 다른 단계가 없었다.
+  raised_in_stage?: string | null
+  preparation_id?: string | null
 }
 
 export interface IntentVersionDetail extends IntentVersion {
@@ -508,6 +515,9 @@ export type RunPurpose =
   | 'intent_authoring'
   | 'intent_gate_review'
   | 'limited_analysis'
+  // P3-01. 설계와 계획은 서로 다른 목적이며 각각 독립된 검토를 받는다.
+  | 'design_authoring'
+  | 'plan_authoring'
   | 'feature_implementation'
 
 export type GateVerdict =
@@ -591,7 +601,18 @@ export const REFUSAL_LABEL: Record<string, string> = {
   permission_not_allowed_in_stage: '이 단계에서 배정하지 않는 권한이다',
   permission_not_mapped: '이 도구에 해당 권한 매핑이 확인되지 않았다',
   role_mismatch: '목적에 맞지 않는 역할이다',
+  // P2 시절의 사유. 지금은 발급되지 않지만 과거 기록을 읽기 위해 문구를 남긴다.
   prerequisite_not_implemented: '선행 조건(설계·계획 검토)이 아직 구현되지 않았다',
+  sizing_not_decided: '작업 수준이 결정되지 않았다 — 축별 판단이 있는 의도 초안이 필요하다',
+  design_missing: '설계안이 없다',
+  design_stale: '설계안이 대체된 의도 버전 위에 있거나 원문을 읽을 수 없다',
+  design_incomplete_for_level: '현재 수준이 요구하는 설계 항목이 미정이다',
+  design_review_missing: '설계 검토(사람 검토 또는 자동 조건 충족)가 없다',
+  plan_missing: '개발계획이 없다',
+  plan_stale: '개발계획이 대체된 의도 버전 위에 있거나 원문을 읽을 수 없다',
+  plan_incomplete_for_level: '현재 수준이 요구하는 계획 항목이 미정이다',
+  plan_review_missing: '개발계획 검토가 없다',
+  deferred_questions_unresolved: '설계·계획으로 이월한 질문이 남아 있다',
   tool_not_available: '사용 가능하다고 보고된 도구가 아니다',
   tool_is_not_a_coding_cli: '이 도구는 코딩 CLI가 아니다 — AI가 글을 쓰지 않는다',
   review_session_not_separate: '검토가 작성과 별도 세션이 아니다',
@@ -872,4 +893,256 @@ export const resultApi = {
       method: 'POST',
       body: JSON.stringify({ title, kind, reason_summary: reason }),
     }),
+}
+
+
+// ===================================================================== P3-01
+//
+// 작업 수준 · 설계안 · 개발계획 · 단계별 사람 검토.
+//
+// **자동 진행을 `사람 승인됨` 으로 표시하지 않는다.** 두 상태의 문구를 여기서
+// 나눠 두고 화면은 그 문구만 쓴다(sizing-and-review-ux 2·5절).
+
+export type WorkLevel = 'simple' | 'standard' | 'deep'
+
+export type AxisWeight = 'low' | 'medium' | 'high' | 'insufficient_evidence'
+
+export type PreparationStage = 'design' | 'plan'
+
+export type ReviewMode = 'human_review' | 'auto_proceed'
+
+export type StageReviewState =
+  | 'not_ready'
+  | 'awaiting_human_review'
+  | 'awaiting_auto_conditions'
+  | 'human_reviewed'
+  | 'auto_conditions_met'
+  | 'needs_recheck'
+
+export const WORK_LEVEL_LABEL: Record<WorkLevel, string> = {
+  simple: '간소',
+  standard: '표준',
+  deep: '심층',
+}
+
+export const AXIS_WEIGHT_LABEL: Record<AxisWeight, string> = {
+  low: '낮음',
+  medium: '중간',
+  high: '높음',
+  // 모르는 것을 "영향 없음"으로 보이게 하지 않는다.
+  insufficient_evidence: '근거 부족 — 조사 필요',
+}
+
+export const SIZING_AXIS_LABEL: Record<string, string> = {
+  intent_clarity: '의도와 성공 기준의 명확성',
+  change_scope: '변경 범위·구성 요소 의존성',
+  compatibility_and_data: '호환성과 데이터 생명주기',
+  permission_and_security: '권한·보안·민감 데이터 영향',
+  reversibility: '가역성과 실패 비용',
+  uncertainty: '해법·환경의 불확실성',
+  verification_difficulty: '검증 난도',
+}
+
+export const SIZING_SOURCE_LABEL: Record<string, string> = {
+  ai_recommendation: 'AI 제안',
+  human_assessment: '사람이 쓴 판단',
+  human_adjustment: '사람의 조정',
+}
+
+//: **여기가 자동 진행과 사람 승인을 가르는 문구다.** 합치지 않는다.
+export const STAGE_STATE_LABEL: Record<StageReviewState, string> = {
+  not_ready: '산출물 준비 전',
+  awaiting_human_review: '사람 검토 대기',
+  awaiting_auto_conditions: '자동 진행 — 조건 충족 미기록',
+  human_reviewed: '사람이 검토함',
+  auto_conditions_met: '자동 조건 충족 (사람 승인 아님)',
+  needs_recheck: '의도가 바뀌어 재검토 필요',
+}
+
+export const REVIEW_MODE_LABEL: Record<ReviewMode, string> = {
+  human_review: '사람 검토',
+  auto_proceed: '자동 진행',
+}
+
+export const STAGE_LABEL: Record<PreparationStage, string> = {
+  design: '설계안',
+  plan: '개발계획',
+}
+
+export interface SizingAxisRow {
+  axis: string
+  weight: AxisWeight
+  judgement_summary: string
+  unconfirmed_summary: string
+}
+
+export interface SizingAssessment {
+  id: string
+  case_id: string
+  revision: number
+  intent_version_id: string | null
+  source: string
+  // 세 값을 따로 보여 준다 — AI가 수준을 조용히 낮추지 못한다는 것이 보여야 한다.
+  recommended_level: WorkLevel
+  derived_level: WorkLevel
+  level: WorkLevel
+  adjusted_from: WorkLevel | null
+  evidence_gap: boolean
+  reason_summary: string
+  residual_risk_summary: string
+  actor: string
+  state: string
+  created_at: string
+  axes: SizingAxisRow[]
+}
+
+export interface PreparationSection {
+  section: string
+  label: string
+  state: ConfirmationState
+  origin: ContentOrigin
+  // **지금** 요구되는지. 사람이 수준을 올리면 이 값이 함께 바뀐다.
+  required: boolean
+  // 보고 시점에 요구됐는지(기록). 판단에는 쓰지 않는다.
+  required_at_report: boolean
+}
+
+export interface PreparationArtifact {
+  id: string
+  case_id: string
+  stage: PreparationStage
+  revision: number
+  artifact_id: string
+  artifact_rev: number
+  intent_version_id: string
+  based_on_design_id: string | null
+  level: WorkLevel
+  authoring_mode: string
+  author_run_id: string | null
+  summary: string
+  state: string
+  created_at: string
+  availability: Availability
+  content_hash: string
+  owner_runner_id: string
+  sections: PreparationSection[]
+  review: StageReview | null
+  missing_required_sections: string[]
+}
+
+export interface StageReview {
+  id: string
+  case_id: string
+  stage: PreparationStage
+  preparation_id: string
+  mode: ReviewMode
+  state: StageReviewState
+  // 사람 검토만 채운다. 자동 진행은 `null` 이며 그것이 구별의 근거다.
+  decision_id: string | null
+  actor: string
+  subject_content_hash: string
+  note_summary: string
+  recorded_at: string
+}
+
+export interface StageState {
+  stage: PreparationStage
+  mode: ReviewMode
+  mode_source: 'project_default' | 'case_setting'
+  mode_reason: string
+  artifact: PreparationArtifact | null
+  review: StageReview | null
+  state: StageReviewState
+  stale: boolean
+  missing_required_sections: string[]
+}
+
+export interface PreparationState {
+  case_id: string
+  sizing: SizingAssessment | null
+  // `null` 은 **미결정**이다. 간소로 읽지 않는다.
+  level: WorkLevel | null
+  sizing_history: SizingAssessment[]
+  design: StageState
+  plan: StageState
+  deferred_open_questions: IntentQuestion[]
+}
+
+export interface RunContextRef {
+  run_id: string
+  seq: number
+  role: string
+  artifact_id: string
+  revision: number
+  availability: Availability
+  content_hash: string
+}
+
+export const CONTEXT_ROLE_LABEL: Record<string, string> = {
+  previous_intent: '직전 의도 초안',
+  agreed_intent: '동의된 의도 원문',
+  previous_design: '직전 설계안',
+  current_design: '현재 설계안',
+  previous_plan: '직전 개발계획',
+  feedback: '미해결 피드백',
+}
+
+//: 항목의 확인 상태와 내용의 성격 문구. 의도 화면과 준비 화면이 **같은 말**을
+//: 쓰도록 한 곳에 둔다. 두 곳에 따로 두면 문구가 갈라진다.
+export const CONFIRMATION_LABEL: Record<string, string> = {
+  undecided: '미정',
+  proposed: '제안됨',
+  user_confirmed: '사용자 확인됨',
+  needs_recheck: '재검토 필요',
+  superseded: '대체됨',
+}
+
+export const ORIGIN_LABEL: Record<string, string> = {
+  none: '없음 (미정)',
+  user_requirement: '사용자 요구',
+  project_rule: '프로젝트 규칙',
+  observation: '관찰 사실',
+  ai_proposal: 'AI 제안',
+  ai_assumption: 'AI 가정',
+}
+
+export const preparationApi = {
+  state: (caseId: string) => request<PreparationState>(`/api/cases/${caseId}/preparation`),
+
+  artifacts: (caseId: string, stage?: PreparationStage) =>
+    request<PreparationArtifact[]>(
+      `/api/cases/${caseId}/preparation-artifacts${stage ? `?stage=${stage}` : ''}`,
+    ),
+
+  // 수준 조정. **이유와 남는 위험이 필수다**(sizing-and-review-ux 1절).
+  adjustLevel: (caseId: string, level: WorkLevel, reason: string, residualRisk: string) =>
+    request<SizingAssessment>(`/api/cases/${caseId}/sizing-adjustment`, {
+      method: 'POST',
+      body: JSON.stringify({
+        level,
+        reason,
+        residual_risk: residualRisk,
+        actor: 'owner',
+      }),
+    }),
+
+  setMode: (caseId: string, stage: PreparationStage, mode: ReviewMode, reason: string) =>
+    request<StageState>(`/api/cases/${caseId}/stage-review-settings/${stage}`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode, reason, set_by: 'owner' }),
+    }),
+
+  // 사람 검토. `reviewed` 를 명시로 보낸다 — 화면을 열어 본 것이 검토가 아니다.
+  review: (caseId: string, stage: PreparationStage, note: string) =>
+    request<StageReview>(`/api/cases/${caseId}/stage-reviews/${stage}`, {
+      method: 'POST',
+      body: JSON.stringify({ reviewed: true, note, actor: 'owner' }),
+    }),
+
+  autoProceed: (caseId: string, stage: PreparationStage) =>
+    request<StageReview>(`/api/cases/${caseId}/stage-auto-proceed/${stage}`, {
+      method: 'POST',
+    }),
+
+  contextRefs: (runId: string) => request<RunContextRef[]>(`/api/runs/${runId}/context-refs`),
 }

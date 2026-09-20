@@ -176,7 +176,8 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     assert conn.execute("SELECT COUNT(*) c FROM run").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM intent_version").fetchone()["c"] == 1
 
-    # 새 표가 생겼다. v3 의 게이트·진입 표와 v4 의 결과·완료 표가 모두 있어야 한다.
+    # 새 표가 생겼다. v3 의 게이트·진입 표, v4 의 결과·완료 표, v5 의 수준·준비 표가
+    # 모두 있어야 한다.
     expected = {
         "gate_result",
         "gate_finding",
@@ -190,6 +191,13 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
         "exception_decision",
         "closure_record",
         "case_relation",
+        "sizing_assessment",
+        "sizing_axis",
+        "preparation_artifact",
+        "preparation_section",
+        "stage_review_setting",
+        "stage_review",
+        "run_context_ref",
     }
     placeholders = ",".join("?" for _ in expected)
     new_tables = {
@@ -204,6 +212,18 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     # **완료 정책 행은 생기지 않는다.** 행이 없는 것이 기본값(사람 최종 확인)이며,
     # 옛 Case 를 자동 완료로 바꾸지 않는다(D-31).
     assert conn.execute("SELECT COUNT(*) c FROM completion_policy").fetchone()["c"] == 0
+
+    # **단계 검토 설정 행도 생기지 않는다**(P3-01 AC-1·AC-14). 행이 없는 것이
+    # 기본값(설계·계획 모두 사람 검토)이며, 옛 Case 를 자동 진행으로 바꾸지 않는다.
+    # 같은 이유로 수준 판단 행도 만들지 않는다 — 옛 Case 는 수준 미결정이고
+    # "간소"가 아니다.
+    assert conn.execute("SELECT COUNT(*) c FROM stage_review_setting").fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) c FROM sizing_assessment").fetchone()["c"] == 0
+
+    # 옛 질문 행의 새 컬럼도 NULL 이다. P3-01 전에는 의도 단계 말고 다른 단계가
+    # 없었으므로 NULL 은 "의도 단계에서 제기됨"과 일치한다.
+    columns = {r["name"] for r in conn.execute('PRAGMA table_info("intent_question")')}
+    assert {"raised_in_stage", "preparation_id"} <= columns
 
     # 옛 행의 새 컬럼은 NULL 이다. 기록되지 않은 것과 확인된 것을 구별한다.
     assert conn.execute("SELECT purpose FROM run").fetchone()[0] is None

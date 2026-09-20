@@ -522,3 +522,160 @@ CREATE INDEX IF NOT EXISTS idx_criterion_result_case ON criterion_result(case_id
 CREATE INDEX IF NOT EXISTS idx_candidate_case ON completion_candidate(case_id, state);
 CREATE INDEX IF NOT EXISTS idx_exception_case ON exception_decision(case_id);
 CREATE INDEX IF NOT EXISTS idx_case_relation_from ON case_relation(from_case_id);
+
+-- ===================================================================
+-- 스키마 v5 (P3-01 수준·설계·계획)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 축별 근거의 서술, 설계안·개발계획의 본문, 수준 조정 이유의 원문은 모두 소유
+-- Runner에 있고 여기에는 판단값·상태·참조와 짧은 요약만 남는다.
+--
+-- **세 종류의 기록을 합치지 않는다.**
+--   sizing_assessment    이 업무에 어느 정도 준비가 필요한가(AI 제안 / 사람 조정)
+--   preparation_artifact 설계안·개발계획 산출물이 실제로 존재하는가
+--   stage_review         그 산출물을 사람이 검토했는가, 또는 자동 조건이 충족됐는가
+-- 산출물의 존재·품질 판정·사람 검토는 서로 다른 것이다(FR-05 검토).
+-- ===================================================================
+
+-- 작업 수준 판단. **AI 제안과 사람 조정이 같은 표의 다른 행이다.**
+--
+-- `recommended_level` 은 AI가 제안한 수준, `derived_level` 은 제어부가 축에서
+-- 도출한 수준, `level` 은 실제로 적용되는 수준이다. 셋을 따로 두는 이유는
+-- "AI가 진행을 위해 수행 수준을 묵시적으로 낮추는 것"을 기록으로 드러내기
+-- 위해서다(sizing-and-review-ux 1·3절). AI 제안이 도출값보다 낮으면 `level` 은
+-- 도출값이 되고 두 값이 모두 남는다. 낮추는 것은 사람만 할 수 있다.
+CREATE TABLE IF NOT EXISTS sizing_assessment (
+    id                    TEXT PRIMARY KEY,
+    case_id               TEXT NOT NULL REFERENCES "case"(id),
+    revision              INTEGER NOT NULL,
+    intent_version_id     TEXT REFERENCES intent_version(id),
+    source                TEXT NOT NULL,   -- ai_recommendation | human_adjustment
+    recommended_level     TEXT NOT NULL,   -- AI가 제안한 수준
+    derived_level         TEXT NOT NULL,   -- 축에서 도출한 수준
+    level                 TEXT NOT NULL,   -- 실제 적용 수준
+    adjusted_from         TEXT,            -- 사람이 바꿨다면 이전 수준
+    evidence_gap          INTEGER NOT NULL DEFAULT 0,  -- 근거 부족 축이 있는가
+    reason_summary        TEXT NOT NULL,   -- 조정 이유의 짧은 요약. 원문 대체 아님
+    residual_risk_summary TEXT NOT NULL,   -- 남는 위험의 짧은 요약. 원문 대체 아님
+    actor                 TEXT NOT NULL,
+    state                 TEXT NOT NULL,   -- current | superseded
+    created_at            TEXT NOT NULL,
+    superseded_at         TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (length(reason_summary) <= 200),
+    CHECK (length(residual_risk_summary) <= 200)
+);
+
+-- 축별 판단. **숫자 점수가 없다.** 축마다 영향·판단·미확인 사항을 따로 남기며
+-- 평균을 내지 않는다 — 낮은 항목들의 평균으로 권한·마이그레이션 같은 중요한
+-- 영향을 상쇄하지 않기 위해서다(sizing-and-review-ux 1절).
+CREATE TABLE IF NOT EXISTS sizing_axis (
+    assessment_id       TEXT NOT NULL REFERENCES sizing_assessment(id),
+    axis                TEXT NOT NULL,   -- 일곱 축
+    weight              TEXT NOT NULL,   -- low|medium|high|insufficient_evidence
+    judgement_summary   TEXT NOT NULL,   -- 현재 판단의 짧은 요약
+    unconfirmed_summary TEXT NOT NULL,   -- 아직 확인할 것의 짧은 요약
+    PRIMARY KEY (assessment_id, axis),
+    CHECK (length(judgement_summary) <= 200),
+    CHECK (length(unconfirmed_summary) <= 200)
+);
+
+-- 설계안·개발계획 산출물. **본문 컬럼 없음.**
+--
+-- 한 표에 `stage` 로 두 단계를 담는다. 표를 둘로 나누면 버전·대체·검토 규칙을
+-- 두 벌 쓰게 되고 한쪽만 고치는 실수가 생긴다. **조회 경로는 단계별로 따로** 두어
+-- "각각 조회할 수 있다"를 지킨다(intent-artifacts 2절).
+--
+-- `intent_version_id` 가 오래된 승인을 막는 지점이다. 새 의도 버전이 생기면 그
+-- 위에 세운 산출물은 `superseded` 가 되고 그 검토도 재사용되지 않는다.
+CREATE TABLE IF NOT EXISTS preparation_artifact (
+    id                 TEXT PRIMARY KEY,
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    stage              TEXT NOT NULL,   -- design | plan
+    revision           INTEGER NOT NULL,
+    artifact_id        TEXT NOT NULL,
+    artifact_rev       INTEGER NOT NULL,
+    intent_version_id  TEXT NOT NULL REFERENCES intent_version(id),
+    based_on_design_id TEXT REFERENCES preparation_artifact(id),  -- 계획이 세운 설계
+    level              TEXT NOT NULL,   -- 작성 시점의 작업 수준
+    authoring_mode     TEXT NOT NULL,   -- human_typed | ai_drafted
+    author_run_id      TEXT,
+    summary            TEXT NOT NULL,   -- 짧은 요약. 원문 대체 아님
+    state              TEXT NOT NULL,   -- current | superseded
+    created_at         TEXT NOT NULL,
+    superseded_at      TEXT,
+    UNIQUE (case_id, stage, revision),
+    FOREIGN KEY (artifact_id, artifact_rev) REFERENCES artifact_ref(artifact_id, revision),
+    CHECK (length(summary) <= 200)
+);
+
+-- 산출물의 항목 구조 보고. **본문 없음.** 소유 Runner가 원문에서 뽑아 올린다.
+-- 수준이 요구하는 항목이 미정인지를 이 표로 판단한다(진입 조건).
+CREATE TABLE IF NOT EXISTS preparation_section (
+    preparation_id TEXT NOT NULL REFERENCES preparation_artifact(id),
+    section        TEXT NOT NULL,
+    state          TEXT NOT NULL,   -- undecided|proposed|user_confirmed|needs_recheck|superseded
+    origin         TEXT NOT NULL,   -- none|user_requirement|project_rule|observation|ai_*
+    -- 보고 시점의 수준에서 필수였는가(기록). **지금 필수인지는 이 값으로 판단하지
+    -- 않는다** — Case 의 현재 수준에서 도출한다(repository.effective_required_sections).
+    -- 사람이 수준을 올리면 이미 있는 산출물도 부족해져야 하기 때문이다.
+    required       INTEGER NOT NULL,
+    PRIMARY KEY (preparation_id, section)
+);
+
+-- 단계별 검토 설정. **행이 없으면 사람 검토다**(D-14 프로젝트 기본값).
+-- 없음을 자동 진행으로 읽으면 기본값이 조용히 뒤집힌다.
+CREATE TABLE IF NOT EXISTS stage_review_setting (
+    case_id        TEXT NOT NULL REFERENCES "case"(id),
+    stage          TEXT NOT NULL,
+    mode           TEXT NOT NULL,   -- human_review | auto_proceed
+    set_by         TEXT NOT NULL,
+    reason_summary TEXT NOT NULL,
+    set_at         TEXT NOT NULL,
+    PRIMARY KEY (case_id, stage),
+    CHECK (length(reason_summary) <= 200)
+);
+
+-- 단계 검토 기록. **자동 진행을 사람 승인으로 적지 않는다.**
+--
+-- `decision_id` 는 **사람 검토에만** 채운다. 자동 진행이 `decision` 행을 만들면
+-- 그것이 곧 "사람 승인 기록 생성"이 된다(sizing-and-review-ux 2절).
+-- `subject_content_hash` 는 검토한 원문을 고정한다 — 내용이 바뀌면 새 산출물
+-- 행이 생기고 이 검토는 그 새 산출물에 적용되지 않는다.
+CREATE TABLE IF NOT EXISTS stage_review (
+    id                   TEXT PRIMARY KEY,
+    case_id              TEXT NOT NULL REFERENCES "case"(id),
+    stage                TEXT NOT NULL,
+    preparation_id       TEXT NOT NULL REFERENCES preparation_artifact(id),
+    mode                 TEXT NOT NULL,   -- human_review | auto_proceed
+    state                TEXT NOT NULL,   -- human_reviewed | auto_conditions_met
+    decision_id          TEXT REFERENCES decision(id),  -- 사람 검토만 채운다
+    actor                TEXT NOT NULL,
+    subject_content_hash TEXT NOT NULL,
+    note_summary         TEXT NOT NULL,
+    recorded_at          TEXT NOT NULL,
+    UNIQUE (preparation_id),
+    CHECK (length(note_summary) <= 200)
+);
+
+-- 실행에 고정한 참조 목록. **본문 없음.**
+--
+-- review-context-contract 2절: "전체 대화 복사본 대신 필수 핵심 정보 +
+-- 버전이 고정된 참조 목록". 이 표가 P2-04의 위험 1(재작성이 이전 버전을 보지
+-- 못해 산출물이 퇴화하는 문제)을 해소하는 지점이다. 무엇을 보여 줬는지가
+-- 기록으로 남아야 나중에 "그 실행이 무엇을 읽었는가"를 답할 수 있다.
+CREATE TABLE IF NOT EXISTS run_context_ref (
+    run_id      TEXT NOT NULL REFERENCES run(run_id),
+    seq         INTEGER NOT NULL,
+    role        TEXT NOT NULL,   -- previous_intent | agreed_intent | current_design | ...
+    artifact_id TEXT NOT NULL,
+    revision    INTEGER NOT NULL,
+    PRIMARY KEY (run_id, seq),
+    FOREIGN KEY (artifact_id, revision) REFERENCES artifact_ref(artifact_id, revision)
+);
+
+CREATE INDEX IF NOT EXISTS idx_sizing_case ON sizing_assessment(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_preparation_case
+    ON preparation_artifact(case_id, stage, state);
+CREATE INDEX IF NOT EXISTS idx_stage_review_case ON stage_review(case_id, stage);
+CREATE INDEX IF NOT EXISTS idx_run_context_run ON run_context_ref(run_id);

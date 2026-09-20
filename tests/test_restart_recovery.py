@@ -21,9 +21,10 @@ from pathlib import Path
 import httpx
 import pytest
 
-from domain import intent_doc
-from domain.models import IntentField
+from domain import intent_doc, prep_doc
+from domain.models import IntentField, PreparationStage, WorkLevel
 from runner.agent import local_executor_capabilities
+from runner.store import content_hash
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PYTHON = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
@@ -634,3 +635,280 @@ def test_criteria_results_acceptance_and_closure_survive_a_forced_kill(controlle
     )
     assert still_refused.status_code == 409
     assert "not 'completed'" in still_refused.json()["detail"]
+
+
+def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
+    """AC-14 — 수준·조정 이력·설계·계획·검토 모드·검토 기록이 강제 종료 후 복원된다.
+
+    P3-01이 여는 문은 "준비가 갖춰졌으면 기능 구현을 배정한다"이다. 재시작이 그
+    판단의 근거를 잃으면 갖춰졌던 준비가 사라지거나(진행 불가) 갖춰지지 않은 준비가
+    갖춰진 것처럼 보인다(우회). 둘 다 막혀야 한다.
+
+    여기서는 제어부 API 만 쓴다. 준비 산출물은 Runner가 등록하는 경로를 그대로
+    쓰되 실제 CLI는 부르지 않는다 — 이 시험이 보는 것은 **복원**이다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "prep-restart", "repo_path": "C:/tmp/demo", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "준비 재시작 Case", "kind": "feature"},
+        timeout=10.0,
+    ).json()
+
+    axes = [
+        {
+            "axis": axis,
+            "weight": weight,
+            "evidence": f"{axis} 근거",
+            "judgement": f"{axis} 판단",
+            "unconfirmed": "",
+        }
+        for axis, weight in (
+            ("intent_clarity", "low"),
+            ("change_scope", "low"),
+            ("compatibility_and_data", "low"),
+            ("permission_and_security", "high"),
+            ("reversibility", "low"),
+            ("uncertainty", "low"),
+            ("verification_difficulty", "low"),
+        )
+    ]
+    draft = httpx.post(
+        f"{base}/api/cases/{case['id']}/intent-drafts",
+        json={
+            "summary": "의도 초안 v1",
+            "target_runner_id": RUNNER_ID,
+            "fields": {
+                "goal": {
+                    "text": "권한 조건을 한 줄 바꾼다",
+                    "state": "proposed",
+                    "origin": "user_requirement",
+                }
+            },
+            "criteria": [
+                {
+                    "key": "C-01",
+                    "relates_to": "expected_outcome",
+                    "text": "허용·거부 조합이 기대대로 동작한다",
+                    "method": "허용/거부/경계 세 조합을 확인한다",
+                    "summary": "권한 조합이 기대대로",
+                    "method_summary": "세 조합 확인",
+                }
+            ],
+            # **낮은 축들의 평균으로 상쇄되지 않는지**를 재시작 뒤에도 확인한다.
+            "sizing": {"recommended_level": "simple", "axes": axes},
+        },
+        timeout=10.0,
+    ).json()
+
+    intakes = httpx.get(f"{base}/api/runner/{RUNNER_ID}/intakes", timeout=10.0).json()
+    pending = next(i for i in intakes if i["intake_id"] == draft["intake_id"])
+    body = base64.b64decode(pending["content_b64"])
+    httpx.post(
+        f"{base}/api/runner/intakes/{draft['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": draft["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    structure = intent_doc.structure(body, None)
+    httpx.post(
+        f"{base}/api/runner/intent-structure",
+        json={
+            "runner_id": RUNNER_ID,
+            "intent_version_id": pending["intent"]["intent_version_id"],
+            "fields": structure["fields"],
+            "questions": structure["questions"],
+            "criteria": structure["criteria"],
+            "sizing": structure["sizing"],
+        },
+        timeout=10.0,
+    ).raise_for_status()
+
+    # 제안은 간소였지만 권한 축이 높아 심층이 적용된다.
+    prep = httpx.get(f"{base}/api/cases/{case['id']}/preparation", timeout=10.0).json()
+    assert prep["sizing"]["recommended_level"] == "simple"
+    assert prep["sizing"]["level"] == "deep"
+
+    # 사람이 표준으로 내린다. 이유와 남는 위험이 함께 남는다.
+    adjusted = httpx.post(
+        f"{base}/api/cases/{case['id']}/sizing-adjustment",
+        json={
+            "level": "standard",
+            "reason": "권한 모델은 조사로 확인했다",
+            "residual_risk": "기존 사용자 영향은 아직 미확인",
+            "actor": "owner",
+        },
+        timeout=10.0,
+    )
+    assert adjusted.status_code == 201, adjusted.text
+
+    # 계획 단계만 자동 진행으로 바꾼다. 두 단계가 독립임을 재시작 뒤에도 본다.
+    httpx.put(
+        f"{base}/api/cases/{case['id']}/stage-review-settings/plan",
+        json={"mode": "auto_proceed", "reason": "계획이 짧다", "set_by": "owner"},
+        timeout=10.0,
+    ).raise_for_status()
+
+    def register_prep(stage: str, sections: dict, artifact_id: str) -> dict:
+        kind = "design" if stage == "design" else "dev_plan"
+        prep_body = prep_doc.compose(
+            stage=PreparationStage(stage),
+            level=WorkLevel.STANDARD,
+            sections={k: {"text": v, "origin": "ai_proposal"} for k, v in sections.items()},
+            questions=[],
+            case_id=case["id"],
+            intent_version_id=pending["intent"]["intent_version_id"],
+            authored_by="codex/exec",
+        )
+        httpx.post(
+            f"{base}/api/runner/artifacts",
+            json={
+                "runner_id": RUNNER_ID,
+                "case_id": case["id"],
+                "kind": kind,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "content_hash": content_hash(prep_body),
+                "byte_size": len(prep_body),
+                "summary": f"{stage} 원문",
+            },
+            timeout=10.0,
+        ).raise_for_status()
+        created = httpx.post(
+            f"{base}/api/runner/preparation-artifacts",
+            json={
+                "runner_id": RUNNER_ID,
+                "case_id": case["id"],
+                "stage": stage,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "level": "standard",
+                "authoring_mode": "ai_drafted",
+                "summary": f"{stage} v1",
+            },
+            timeout=10.0,
+        )
+        assert created.status_code == 201, created.text
+        prep_row = created.json()["preparation_artifact"]
+        reported = prep_doc.structure(prep_body)
+        httpx.post(
+            f"{base}/api/runner/preparation-structure",
+            json={
+                "runner_id": RUNNER_ID,
+                "preparation_id": prep_row["id"],
+                "sections": reported["sections"],
+                "questions": reported["questions"],
+            },
+            timeout=10.0,
+        ).raise_for_status()
+        return prep_row
+
+    register_prep(
+        "design",
+        {
+            "change_summary": "권한 조건 한 줄을 바꾼다",
+            "requirement_mapping": "C-01 은 조건 분기로 대응한다",
+            "interfaces_and_data": "공개 계약은 바뀌지 않는다",
+            "failure_handling": "권한 없음은 거부로 응답한다",
+            "verifiability": "허용/거부/경계 세 조합을 확인한다",
+        },
+        "art-design-1",
+    )
+    reviewed = httpx.post(
+        f"{base}/api/cases/{case['id']}/stage-reviews/design",
+        json={"reviewed": True, "note": "권한 경계를 확인했다", "actor": "owner"},
+        timeout=10.0,
+    )
+    assert reviewed.status_code == 201, reviewed.text
+
+    register_prep(
+        "plan",
+        {
+            "tasks": "T1 조건 변경(완료 조건: 세 조합 시험 통과)",
+            "verification": "허용/거부/경계 세 조합 시험",
+            "dependencies": "없음",
+            "integration_order": "T1 → 회귀 확인",
+            "human_decision_points": "기존 사용자 영향 확인",
+            "environment_prerequisites": "저장소 checkout",
+        },
+        "art-plan-1",
+    )
+    auto = httpx.post(
+        f"{base}/api/cases/{case['id']}/stage-auto-proceed/plan", json={}, timeout=10.0
+    )
+    assert auto.status_code == 201, auto.text
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    after = httpx.get(f"{base}/api/cases/{case['id']}/preparation", timeout=10.0).json()
+
+    # 수준과 조정 이력이 그대로다. 도출값도 남아 있어 조정이 무엇을 낮췄는지 보인다.
+    assert after["level"] == "standard"
+    assert after["sizing"]["source"] == "human_adjustment"
+    assert after["sizing"]["adjusted_from"] == "deep"
+    assert after["sizing"]["derived_level"] == "deep"
+    assert after["sizing"]["residual_risk_summary"] == "기존 사용자 영향은 아직 미확인"
+    assert len(after["sizing"]["axes"]) == 7
+    assert len(after["sizing_history"]) == 2
+
+    # 검토 모드와 그 출처가 그대로다. 재시작이 기본값으로 되돌리지 않는다.
+    assert after["design"]["mode"] == "human_review"
+    assert after["design"]["mode_source"] == "project_default"
+    assert after["plan"]["mode"] == "auto_proceed"
+    assert after["plan"]["mode_source"] == "case_setting"
+
+    # 검토 기록이 그대로이고 **사람 검토와 자동 조건 충족이 여전히 구별된다.**
+    assert after["design"]["state"] == "human_reviewed"
+    assert after["design"]["review"]["decision_id"] is not None
+    assert after["plan"]["state"] == "auto_conditions_met"
+    assert after["plan"]["review"]["decision_id"] is None
+    assert after["plan"]["review"]["actor"] == "stage-auto-proceed-policy"
+
+    # 준비가 갖춰졌으므로 기능 구현이 열린다. 재시작이 그 판단을 잃지 않는다.
+    instruction = httpx.post(
+        f"{base}/api/cases/{case['id']}/artifacts",
+        json={
+            "kind": "instruction",
+            "content": "계획대로 구현한다",
+            "summary": "구현 지시",
+            "target_runner_id": RUNNER_ID,
+        },
+        timeout=10.0,
+    ).json()
+    httpx.post(
+        f"{base}/api/runner/intakes/{instruction['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": instruction["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    # 의도 동의가 없으므로 그 사유로 막히고, 준비 관련 사유는 나오지 않는다.
+    refused = httpx.post(
+        f"{base}/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-impl-restart",
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": "feature_implementation",
+            "role": "author",
+            "tool_id": "codex",
+            "mode": "exec",
+            "permission": "read_only",
+        },
+        timeout=10.0,
+    )
+    assert refused.status_code == 409, refused.text
+    refusals = refused.json()["detail"]["admission"]["refusals"]
+    assert "intent_not_agreed" in refusals
+    for code in (
+        "sizing_not_decided",
+        "design_missing",
+        "design_review_missing",
+        "plan_missing",
+        "plan_review_missing",
+    ):
+        assert code not in refusals, f"{code} 가 재시작 뒤에 다시 나타났다"

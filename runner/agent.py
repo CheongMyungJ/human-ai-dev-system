@@ -17,6 +17,13 @@
                         P2-02와 방향이 반대다 — 초안이 Runner에서 태어난다
     intent_gate_review  작성과 **다른 세션**에서 초안을 검토하고 발견 사항을 올린다
     limited_analysis    동의된 의도에 따른 읽기 전용 작업
+    design_authoring    동의된 의도 위에 **설계안**을 쓴다(P3-01)
+    plan_authoring      검토를 마친 설계 위에 **개발계획**을 쓴다(P3-01)
+
+**P3-01: 작성 실행은 고정 컨텍스트를 받는다.** 배정에 실린 `context_refs` 의 원문을
+이 Runner의 저장소에서 읽어 지시문에 붙인다. 읽지 못한 참조는 "읽지 못함"으로 적고
+산출물에도 그 사실을 남긴다 — 이전 버전을 보지 못한 채 쓴 산출물이 그 사실을 숨기면
+사람은 왜 내용이 퇴화했는지 알 수 없다(P2-04 위험 1).
 
 목적이 요구하는 산출물을 만들지 못했으면 **CLI가 정상 종료했어도 완료가 아니다.**
 `_produce_for_purpose()` 가 그 판정을 한다(FR-28: 종료 코드만으로 완료를 선언하지
@@ -31,14 +38,16 @@ from typing import Any
 
 from pathlib import Path
 
-from domain import ids, intent_doc
+from domain import ids, intent_doc, prep_doc
 from domain.models import (
     ArtifactKind,
     AuthoringMode,
     CapabilityState,
     Permission,
+    PreparationStage,
     RunOutcome,
     RunPurpose,
+    WorkLevel,
 )
 from runner import cli_adapter, prompts
 from runner.client import ControllerClient
@@ -169,6 +178,10 @@ class RunnerAgent:
             # 성공 기준의 요약도 같은 보고로 올라간다(P2-04). 기대값과 확인 방법의
             # 본문은 이 Runner의 원문 안에 남는다.
             "criteria": structure["criteria"],
+            # 작업 수준 판단도 같이 올라간다(P3-01). 축별 근거의 서술은 이 Runner의
+            # 원문 안에 남고 영향·짧은 판단 한 줄만 올라간다.
+            # `None` 이면 "판단하지 않음"이며 제어부가 수준을 만들지 않는다.
+            "sizing": structure["sizing"],
         }
         return self.client.send_intent_structure(payload)
 
@@ -202,6 +215,32 @@ class RunnerAgent:
         run_id = assignment["run_id"]
         generation = assignment["assignment_generation"]
         case_id = assignment["case_id"]
+        purpose = assignment.get("purpose") or RunPurpose.LIMITED_ANALYSIS.value
+
+        # **이 Runner 가 실행할 수 없는 목적인가.** 진입 조건과 실행 경로는 서로 다른
+        # 것이어서 한쪽만 먼저 열릴 수 있다 — P3-01에서 `feature_implementation` 의
+        # 배정 조건은 열렸지만 실행기는 P3-03이다. 그 배정을 받으면 **실행하지 않고
+        # 실패로 보고한다.** 예외로 죽으면 실행이 `assigned` 로 멈춘 채 남고 사람은
+        # 왜 아무 일도 일어나지 않는지 알 수 없다(라이브에서 실제로 났던 일).
+        #
+        # 원장을 잡기 전에 본다. 아무 것도 실행하지 않았으므로 중복 실행을 막을
+        # 대상이 없다.
+        if assignment["tool_id"] != TOOL_ID and not prompts.has_prompt(purpose):
+            self.client.send_result(
+                run_id,
+                {
+                    "runner_id": self.config.runner_id,
+                    "generation": generation,
+                    "outcome": RunOutcome.FAILED.value,
+                    "residual_activity": "none",
+                    "observed_tool_version": None,
+                },
+            )
+            return {
+                "run_id": run_id,
+                "action": "refused_no_execution_path",
+                "purpose": purpose,
+            }
 
         should_execute, existing = self.ledger.claim(run_id, generation)
 
@@ -229,7 +268,6 @@ class RunnerAgent:
         instruction = self.store.get(
             assignment["instruction_artifact_id"], assignment["instruction_artifact_rev"]
         )
-        purpose = assignment.get("purpose") or RunPurpose.LIMITED_ANALYSIS.value
 
         if assignment["tool_id"] == TOOL_ID:
             # P2-01 골격 실행기. 코딩 CLI가 아니며 목적별 산출물을 만들지 않는다.
@@ -301,7 +339,13 @@ class RunnerAgent:
         지시문 조립이 여기 있는 이유는 지시문이 **본문**이기 때문이다. 제어부는
         목적과 원문 참조만 내려보내고, 원문을 가진 쪽이 둘을 합친다.
         """
-        prompt = prompts.build(purpose, instruction)
+        context = self.load_context(assignment)
+        prompt = prompts.build(
+            purpose,
+            instruction,
+            context=context,
+            level=assignment.get("work_level"),
+        )
         output = self.cli_executor.execute(
             run_id=assignment["run_id"],
             case_id=assignment["case_id"],
@@ -312,11 +356,38 @@ class RunnerAgent:
             workspace=Path(assignment["repo_path"]),
             raw_dir=self.config.raw_dir,
         )
-        produced = self._produce_for_purpose(assignment, purpose, output)
+        produced = self._produce_for_purpose(assignment, purpose, output, context)
         return output, produced
 
+    def load_context(self, assignment: dict[str, Any]) -> list[dict[str, Any]]:
+        """배정에 실린 고정 참조의 원문을 이 Runner의 저장소에서 읽는다.
+
+        **없는 원문을 빈 내용으로 바꾸지 않는다.** `body` 가 `None` 이면 읽지 못한
+        것이고 지시문에도 그렇게 적힌다. 참조를 조용히 빼면 AI는 그런 자료가 없었다고
+        생각하고 처음부터 다시 쓴다 — P2-04에서 초안이 퇴화한 경로가 그것이다.
+        """
+        context: list[dict[str, Any]] = []
+        for ref in assignment.get("context_refs") or []:
+            try:
+                body: bytes | None = self.store.get(ref["artifact_id"], ref["revision"])
+            except FileNotFoundError:
+                body = None
+            context.append(
+                {
+                    "role": ref["role"],
+                    "artifact_id": ref["artifact_id"],
+                    "revision": ref["revision"],
+                    "body": body,
+                }
+            )
+        return context
+
     def _produce_for_purpose(
-        self, assignment: dict[str, Any], purpose: str, output: Any
+        self,
+        assignment: dict[str, Any],
+        purpose: str,
+        output: Any,
+        context: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """실행 결과에서 목적이 요구하는 산출물을 만든다.
 
@@ -331,7 +402,19 @@ class RunnerAgent:
 
         try:
             if purpose == RunPurpose.INTENT_AUTHORING.value:
-                produced.update(self._produce_intent_draft(assignment, output))
+                produced.update(self._produce_intent_draft(assignment, output, context or []))
+            elif purpose in (
+                RunPurpose.DESIGN_AUTHORING.value,
+                RunPurpose.PLAN_AUTHORING.value,
+            ):
+                stage = (
+                    PreparationStage.DESIGN
+                    if purpose == RunPurpose.DESIGN_AUTHORING.value
+                    else PreparationStage.PLAN
+                )
+                produced.update(
+                    self._produce_preparation(assignment, output, stage, context or [])
+                )
             elif purpose == RunPurpose.INTENT_GATE_REVIEW.value:
                 target = assignment.get("target_intent_version_id")
                 if not target:
@@ -346,14 +429,16 @@ class RunnerAgent:
             produced.pop("gate_findings", None)
         return produced
 
-    def _produce_intent_draft(self, assignment: dict[str, Any], output: Any) -> dict[str, Any]:
+    def _produce_intent_draft(
+        self, assignment: dict[str, Any], output: Any, context: list[dict[str, Any]]
+    ) -> dict[str, Any]:
         """AI가 쓴 초안을 정규 문서로 저장하고 **의도 버전을 만든다.**
 
         P2-02의 경로와 방향이 반대다. 거기서는 사람이 화면에 입력한 항목이 제어부
         메모리를 지나 이 Runner로 왔다. 여기서는 초안이 이 Runner에서 태어나므로
         제어부에는 참조와 구조만 올라간다 — **본문은 올라가지 않는다.**
         """
-        fields, questions, criteria = prompts.parse_intent_draft(output.final_message)
+        fields, questions, criteria, sizing = prompts.parse_intent_draft(output.final_message)
         case_id = assignment["case_id"]
         run_id = assignment["run_id"]
         body = intent_doc.compose(
@@ -364,6 +449,7 @@ class RunnerAgent:
             authoring_mode=AuthoringMode.AI_DRAFTED,
             author_run_id=run_id,
             criteria=criteria,
+            sizing=sizing,
         )
         artifact_id = ids.new_artifact_id()
         stored = self.store.put(artifact_id, 1, body)
@@ -395,7 +481,112 @@ class RunnerAgent:
             "produced": "intent_version",
             "intent_version_id": created["intent_version"]["id"],
             "artifact_id": artifact_id,
+            # 무엇을 읽고 썼는지. 읽지 못한 참조가 있으면 여기에 남는다.
+            "context_read": [c["role"] for c in context if c["body"] is not None],
+            "context_unread": [c["role"] for c in context if c["body"] is None],
         }
+
+    def _produce_preparation(
+        self,
+        assignment: dict[str, Any],
+        output: Any,
+        stage: PreparationStage,
+        context: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """AI가 쓴 설계·계획을 정규 문서로 저장하고 **준비 산출물로 등록한다.**
+
+        의도 초안 작성과 같은 방향이다 — 산출물이 이 Runner에서 태어나므로 제어부에는
+        참조와 구조만 올라간다. **본문은 올라가지 않는다.**
+
+        수준은 배정이 알려 준 값을 쓴다. 여기서 기본값을 지어내면 어떤 항목이 필수인지가
+        제어부의 판단과 어긋난다.
+        """
+        level = assignment.get("work_level")
+        if not level:
+            raise ValueError(f"{stage.value} 작성에는 작업 수준이 필요하다")
+        intent_version_id = assignment.get("current_intent_version_id")
+        if not intent_version_id:
+            raise ValueError("어느 의도 버전 위에 세울지 배정에서 찾지 못했다")
+        sections, questions = prompts.parse_preparation(output.final_message, stage)
+        case_id = assignment["case_id"]
+        run_id = assignment["run_id"]
+        body = prep_doc.compose(
+            stage=stage,
+            level=WorkLevel(level),
+            sections=sections,
+            questions=questions,
+            case_id=case_id,
+            intent_version_id=intent_version_id,
+            authored_by=f"{assignment['tool_id']}/{assignment['mode']}",
+            authoring_mode=AuthoringMode.AI_DRAFTED,
+            author_run_id=run_id,
+            # 이 실행이 실제로 읽은 참조. 읽지 못한 것도 그대로 적는다.
+            context_notes=[
+                {
+                    "role": c["role"],
+                    "artifact_id": c["artifact_id"],
+                    "revision": c["revision"],
+                    "read": c["body"] is not None,
+                }
+                for c in context
+            ],
+        )
+        artifact_id = ids.new_artifact_id()
+        stored = self.store.put(artifact_id, 1, body)
+        kind = (
+            ArtifactKind.DESIGN if stage is PreparationStage.DESIGN else ArtifactKind.DEV_PLAN
+        )
+        self.client.register_artifact(
+            {
+                "runner_id": self.config.runner_id,
+                "case_id": case_id,
+                "kind": kind.value,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "content_hash": stored.content_hash,
+                "byte_size": stored.byte_size,
+                # 요약은 본문 발췌가 아니라 이 경로가 만든 짧은 설명이다.
+                "summary": f"AI 작성 {stage.value} ({assignment['tool_id']}, run {run_id})",
+            }
+        )
+        created = self.client.create_preparation_artifact(
+            {
+                "runner_id": self.config.runner_id,
+                "case_id": case_id,
+                "stage": stage.value,
+                "artifact_id": artifact_id,
+                "revision": 1,
+                "level": WorkLevel(level).value,
+                "authoring_mode": AuthoringMode.AI_DRAFTED.value,
+                "author_run_id": run_id,
+                "summary": f"{stage.value} (run {run_id})",
+            }
+        )
+        prep = created["preparation_artifact"]
+        self.report_preparation_structure(prep["id"], body)
+        return {
+            "produced": f"{stage.value}_artifact",
+            "preparation_id": prep["id"],
+            "artifact_id": artifact_id,
+            "context_read": [c["role"] for c in context if c["body"] is not None],
+            "context_unread": [c["role"] for c in context if c["body"] is None],
+        }
+
+    def report_preparation_structure(self, prep_id: str, body: bytes) -> dict[str, Any]:
+        """방금 저장한 설계·계획 원문에서 구조를 뽑아 제어부에 보고한다.
+
+        의도 구조 보고와 같다 — **본문을 읽는 쪽은 원문을 가진 이쪽이고**, 올라가는
+        것은 항목별 상태·출처와 질문의 짧은 요약뿐이다.
+        """
+        structure = prep_doc.structure(body)
+        return self.client.send_preparation_structure(
+            {
+                "runner_id": self.config.runner_id,
+                "preparation_id": prep_id,
+                "sections": structure["sections"],
+                "questions": structure["questions"],
+            }
+        )
 
     # -------------------------------------------------------------- 루프 한 회
 
@@ -405,7 +596,22 @@ class RunnerAgent:
         served = self.serve_read_requests()
         actions = []
         for assignment in self.client.claim_assignments(self.config.runner_id):
-            actions.append(self.handle_assignment(assignment))
+            # **한 배정의 실패가 다른 배정을 건너뛰게 만들지 않는다.** 이 루프가
+            # 통째로 죽으면 이미 맡은 다른 실행의 결과 보고까지 멈춘다.
+            try:
+                actions.append(self.handle_assignment(assignment))
+            except Exception as exc:  # noqa: BLE001
+                actions.append(
+                    {
+                        "run_id": assignment.get("run_id"),
+                        "action": "failed_in_runner",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                print(
+                    f"[runner] assignment {assignment.get('run_id')} failed: {exc!r}",
+                    flush=True,
+                )
         return {"stored_intakes": stored, "served_reads": served, "assignments": actions}
 
     def run_forever(self, interval: float = 1.0) -> None:

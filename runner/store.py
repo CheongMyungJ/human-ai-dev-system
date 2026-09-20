@@ -73,5 +73,13 @@ class ArtifactStore:
             raise FileNotFoundError(f"artifact not stored here: {artifact_id}@{revision}")
         return path.read_bytes()
 
+    def path_for(self, artifact_id: str, revision: int) -> Path:
+        """이 원문이 저장된 경로. 소유 Runner 안에서만 뜻이 있다.
+
+        제어부는 이 경로를 모른다 — 참조로만 원문을 가리킨다
+        (data-boundary-review 1절).
+        """
+        return self._path(artifact_id, revision)
+
     def exists(self, artifact_id: str, revision: int) -> bool:
         return self._path(artifact_id, revision).exists()

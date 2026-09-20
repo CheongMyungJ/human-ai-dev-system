@@ -14,9 +14,17 @@ P2-02의 동의 거절(`AgreementRefusal`)과 **다른 검사다.** 저쪽은 "�
     재시작     판단 근거를 전부 DB에서 다시 읽는다. 메모리에 통과 상태를 두지 않는다
     유형 변경  조건표는 Case 의 `kind` 가 아니라 **의도 버전의 존재**로 고른다
 
-그리고 **없는 선행 조건을 통과로 처리하지 않는다.** 설계·계획 검토는 아직 구현이
-없으므로 그것을 요구하는 목적(`feature_implementation`)은 임시 통과가 아니라
-`prerequisite_not_implemented` 로 거부된다.
+그리고 **없는 선행 조건을 통과로 처리하지 않는다.**
+
+P2-03·P2-04에서는 설계·계획 검토의 구현이 없었으므로 `feature_implementation` 을
+`prerequisite_not_implemented` 로 한 줄 거부했다. **P3-01에서 그 선행 조건을 실제로
+만들었으므로 이제 실제 검사를 한다** — 수준 판단, 설계·계획 산출물의 존재와 최신
+의도 기준 여부, 수준이 요구하는 항목, 단계별 사람 검토, 이월 질문의 해결.
+조건을 모두 갖추면 **허용한다.**
+
+다만 `workspace_write` 는 여전히 열지 않는다(P3-03). 배정 조건을 갖춘 것과 코드를
+바꿀 권한은 다른 문제이고, 작업공간·브랜치 준비 없이 쓰기를 열면 사용자의 미커밋
+변경을 보호할 수단이 없다. **검토를 마쳤다는 사실이 쓰기 권한을 만들지 않는다.**
 """
 
 from __future__ import annotations
@@ -28,19 +36,24 @@ from domain.models import (
     AdmissionOutcome,
     AdmissionProfile,
     AdmissionRefusal,
+    Availability,
     CaseKind,
     GateVerdict,
     IntentAgreementState,
     Permission,
+    PreparationStage,
+    ReviewMode,
     RunPurpose,
     RunRole,
+    StageReviewState,
 )
 
 #: 이번 단계에서 배정할 수 있는 권한.
 #:
 #: 쓰기 권한은 **제품이 지원하지 않는 것이 아니라 이 단계에서 열지 않은 것이다.**
-#: 선행 조건(설계·계획 검토)이 없는 상태로 코드를 바꾸는 실행을 배정하지 않는다
-#: (DEVELOPMENT.md P2 제외 범위).
+#: P3-01이 설계·계획 선행 조건을 만들었지만 쓰기는 아직 열지 않는다 —
+#: Case별 branch/worktree 와 기준 커밋 없이 쓰기를 열면 사용자의 미커밋 변경을
+#: 보호할 수단이 없다(FR-08·FR-26). P3-03에서 작업공간과 함께 연다.
 STAGE_ALLOWED_PERMISSIONS: frozenset[Permission] = frozenset({Permission.READ_ONLY})
 
 #: 목적별로 기대하는 역할. 의미 검토는 작성과 분리해야 한다(FR-29 검토 방식).
@@ -48,8 +61,31 @@ EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
     RunPurpose.INTENT_AUTHORING: RunRole.AUTHOR,
     RunPurpose.INTENT_GATE_REVIEW: RunRole.REVIEWER,
     RunPurpose.LIMITED_ANALYSIS: RunRole.AUTHOR,
+    RunPurpose.DESIGN_AUTHORING: RunRole.AUTHOR,
+    RunPurpose.PLAN_AUTHORING: RunRole.AUTHOR,
     RunPurpose.FEATURE_IMPLEMENTATION: RunRole.AUTHOR,
 }
+
+#: 동의된 의도를 선행 조건으로 받는 목적들. 기능 개발 조건표를 적용한다.
+NEEDS_AGREED_INTENT: frozenset[RunPurpose] = frozenset(
+    {
+        RunPurpose.LIMITED_ANALYSIS,
+        RunPurpose.DESIGN_AUTHORING,
+        RunPurpose.PLAN_AUTHORING,
+        RunPurpose.FEATURE_IMPLEMENTATION,
+    }
+)
+
+#: AI가 실제로 글을 써야 성립하는 목적. 골격 실행기로 배정하면 실행은 정상 종료하는데
+#: 산출물이 없어 아무 일도 일어나지 않은 것처럼 보인다.
+NEEDS_CODING_CLI: frozenset[RunPurpose] = frozenset(
+    {
+        RunPurpose.INTENT_AUTHORING,
+        RunPurpose.INTENT_GATE_REVIEW,
+        RunPurpose.DESIGN_AUTHORING,
+        RunPurpose.PLAN_AUTHORING,
+    }
+)
 
 
 @dataclass
@@ -73,6 +109,10 @@ class AdmissionRequest:
     target_intent_version_id: str | None
     tool_installed: bool
     permission_mapped: bool
+    #: `Repository.preparation_state()` 의 결과. 수준·설계·계획·검토 상태가 들어 있다.
+    #: 기본값이 빈 dict 인 것은 P2 시절 호출(시험)이 이 인자를 모르기 때문이며,
+    #: 빈 상태는 **아무 것도 준비되지 않음**으로 읽힌다 — 통과로 읽지 않는다.
+    preparation_state: dict[str, Any] = field(default_factory=dict)
     #: 이 도구가 실제 코딩 CLI인가. P2-01의 골격 실행기는 실행은 되지만 글을 쓰지 않는다.
     tool_is_coding_cli: bool = False
     author_session_refs: list[str] = field(default_factory=list)
@@ -120,6 +160,85 @@ def choose_profile(request: AdmissionRequest) -> AdmissionProfile:
     return AdmissionProfile.NON_FEATURE_MINIMAL
 
 
+#: 단계별 거부 사유. 사람이 무엇을 갖춰야 하는지 한 번에 알도록 종류를 나눠 둔다.
+_STAGE_REFUSALS: dict[PreparationStage, dict[str, AdmissionRefusal]] = {
+    PreparationStage.DESIGN: {
+        "missing": AdmissionRefusal.DESIGN_MISSING,
+        "stale": AdmissionRefusal.DESIGN_STALE,
+        "incomplete": AdmissionRefusal.DESIGN_INCOMPLETE_FOR_LEVEL,
+        "review": AdmissionRefusal.DESIGN_REVIEW_MISSING,
+    },
+    PreparationStage.PLAN: {
+        "missing": AdmissionRefusal.PLAN_MISSING,
+        "stale": AdmissionRefusal.PLAN_STALE,
+        "incomplete": AdmissionRefusal.PLAN_INCOMPLETE_FOR_LEVEL,
+        "review": AdmissionRefusal.PLAN_REVIEW_MISSING,
+    },
+}
+
+_STAGE_LABEL = {PreparationStage.DESIGN: "설계", PreparationStage.PLAN: "개발계획"}
+
+
+def _check_stage_ready(request: AdmissionRequest, stage: PreparationStage, refuse: Any) -> None:
+    """한 단계의 준비 상태를 검사한다.
+
+    네 가지를 **따로** 본다(FR-05 "산출물 존재, 품질 판정, 사람 검토는 구분한다").
+
+        있는가          산출물이 등록됐는가
+        최신인가        대체된 의도 버전 위에 세운 것이 아닌가, 원문을 읽을 수 있는가
+        충분한가        현재 수준이 요구하는 항목이 미정으로 비어 있지 않은가
+        검토됐는가      사람 검토 또는 자동 진행 기록이 있는가
+
+    자동 진행 모드에서도 **기록은 필요하다.** 모드를 자동으로 바꾼 것만으로 검토가
+    끝나지는 않는다 — 산출물과 필수 항목을 갖춘 시점에 조건 충족이 기록된다.
+    """
+    codes = _STAGE_REFUSALS[stage]
+    label = _STAGE_LABEL[stage]
+    state = (request.preparation_state or {}).get(stage.value) or {}
+    artifact = state.get("artifact")
+
+    if artifact is None:
+        refuse(codes["missing"], f"{label} 산출물이 없다")
+        return
+
+    if state.get("stale"):
+        refuse(
+            codes["stale"],
+            f"{label}이 대체된 의도 버전 위에 세워져 있다. 최신 의도 기준으로 다시 만든다",
+        )
+    elif artifact.get("availability") != Availability.AVAILABLE.value:
+        # 원문을 읽을 수 없으면 사람이 검토할 수도, 실행자가 따를 수도 없다.
+        refuse(
+            codes["stale"],
+            f"{label} 원문이 {artifact.get('availability')} 상태라 지금 읽을 수 없다",
+        )
+
+    missing_sections = state.get("missing_required_sections") or []
+    if missing_sections:
+        refuse(
+            codes["incomplete"],
+            f"현재 수준이 요구하는 {label} 항목이 미정이다: " + ", ".join(missing_sections),
+        )
+
+    review = state.get("review")
+    if review is None:
+        mode = ReviewMode(state.get("mode") or ReviewMode.HUMAN_REVIEW.value)
+        if mode is ReviewMode.HUMAN_REVIEW:
+            refuse(codes["review"], f"{label}에 대한 사람 검토가 없다")
+        else:
+            # 자동 진행을 골랐어도 **조건 충족 기록**이 필요하다. 설정만으로
+            # 검토가 끝났다고 적으면 그것이 곧 사람 승인 기록의 대체가 된다.
+            refuse(
+                codes["review"],
+                f"{label}은 자동 진행 설정이지만 조건 충족이 아직 기록되지 않았다",
+            )
+    elif review.get("state") not in (
+        StageReviewState.HUMAN_REVIEWED.value,
+        StageReviewState.AUTO_CONDITIONS_MET.value,
+    ):
+        refuse(codes["review"], f"{label} 검토 상태가 {review.get('state')} 다")
+
+
 def evaluate(request: AdmissionRequest) -> AdmissionResult:
     """진입 조건을 검사한다. 거부 사유는 **모두** 모은다.
 
@@ -157,7 +276,8 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
         refuse(
             AdmissionRefusal.PERMISSION_NOT_ALLOWED_IN_STAGE,
             f"{request.permission.value} 는 이 단계에서 배정하지 않는다."
-            " 코드를 바꾸는 실행은 설계·계획 선행 조건이 준비된 뒤에 연결한다",
+            " 설계·계획 검토를 마쳐도 쓰기 권한은 생기지 않는다 —"
+            " 작업공간·브랜치 준비(P3-03)와 함께 연다",
         )
 
     if not request.tool_installed:
@@ -187,7 +307,7 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     # 초안 작성과 의미 검토는 **AI가 글을 써야** 성립한다. 골격 실행기로 배정하면
     # 실행은 정상 종료하는데 산출물이 없어 아무 일도 일어나지 않은 것처럼 보인다.
     # 그 조합을 화면이 아니라 여기서 막는다.
-    if request.purpose in (RunPurpose.INTENT_AUTHORING, RunPurpose.INTENT_GATE_REVIEW):
+    if request.purpose in NEEDS_CODING_CLI:
         if request.tool_installed and not request.tool_is_coding_cli:
             refuse(
                 AdmissionRefusal.TOOL_IS_NOT_A_CODING_CLI,
@@ -231,7 +351,7 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
                 "요청한 세션이 이 초안을 작성한 세션과 같다",
             )
 
-    if request.purpose in (RunPurpose.LIMITED_ANALYSIS, RunPurpose.FEATURE_IMPLEMENTATION):
+    if request.purpose in NEEDS_AGREED_INTENT:
         if profile is AdmissionProfile.FEATURE_INTENT:
             if agreement_state != IntentAgreementState.AGREED_CURRENT.value:
                 refuse(
@@ -256,14 +376,45 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
                     f"QG-01 이 {gate_verdict} 상태다. 필수 게이트는 끌 수 없다",
                 )
 
+    # 계획 작성은 **검토된 설계 위에서만** 한다. 의존 관계가
+    # `의도 → 설계 → 개발계획` 이므로(intent-artifacts 2절) 설계가 없거나 아직
+    # 검토되지 않았으면 무엇을 구현할 계획인지 말할 수 없다.
+    if request.purpose is RunPurpose.PLAN_AUTHORING:
+        _check_stage_ready(request, PreparationStage.DESIGN, refuse)
+
     if request.purpose is RunPurpose.FEATURE_IMPLEMENTATION:
-        # 설계·계획 검토와 그 사람 검토는 아직 구현이 없다. 없는 조건을 통과로
-        # 처리하는 대신 그 사실을 거부 사유로 드러낸다(P2 제외 범위).
-        refuse(
-            AdmissionRefusal.PREREQUISITE_NOT_IMPLEMENTED,
-            "설계·계획 검토와 쓰기 권한 경로가 아직 없다."
-            " 기능 코드 변경 실행은 P3에서 선행 조건과 함께 연결한다",
-        )
+        # **여기가 P3-01이 여는 문이다.** P2까지는 선행 조건의 구현이 없어 한 줄로
+        # 거부했다. 이제 실제로 검사하고, 갖춰졌으면 허용한다.
+        #
+        # 아래 검사는 조건표(`profile`)와 무관하게 **항상** 돈다. 의도 버전이 없는
+        # Case 는 `non_feature_minimal` 조건표를 받아 의도 동의를 요구받지 않지만,
+        # 준비 산출물은 의도 버전 위에만 만들 수 있고(repository) 의도 버전이 하나라도
+        # 생기면 조건표가 기능 쪽으로 바뀐다. 그래서 "유형을 비기능으로 두고 설계·계획만
+        # 만들어 통과한다"는 우회는 구조적으로 닫혀 있다(FR-29 유형 변경 우회 금지).
+        prep = request.preparation_state or {}
+        if not prep.get("level"):
+            refuse(
+                AdmissionRefusal.SIZING_NOT_DECIDED,
+                "작업 수준이 결정되지 않았다. 축별 판단이 있는 의도 초안이 필요하다",
+            )
+        _check_stage_ready(request, PreparationStage.DESIGN, refuse)
+        _check_stage_ready(request, PreparationStage.PLAN, refuse)
+
+        # **계획이 옛 설계의 것인지는 여기서 보지 않는다.** 설계를 새로 만들면
+        # 그 위에 세웠던 계획이 곧바로 대체되므로(repository.create_preparation_artifact)
+        # 이 상태는 `plan_missing` 으로 드러난다. 여기에 같은 뜻의 두 번째 검사를 두면
+        # 닿을 수 없는 분기가 되고, 닿을 수 없는 검사는 시험할 수도 없다.
+        # 대체된 계획은 단계별 목록에 `superseded` 로 남아 무엇이 있었는지 조회된다.
+
+        # 이월한 사람 질문. **단계 자동 진행이 이 결정을 대신하지 않는다**
+        # (FR-03 질문 처리, FR-29). 의도 단계 질문은 위에서 이미 본다.
+        deferred = prep.get("deferred_open_questions") or []
+        if deferred:
+            refuse(
+                AdmissionRefusal.DEFERRED_QUESTIONS_UNRESOLVED,
+                "설계·계획으로 이월한 질문이 남아 있다: "
+                + ", ".join(q["question_key"] for q in deferred),
+            )
 
     outcome = AdmissionOutcome.REFUSED if refusals else AdmissionOutcome.ADMITTED
     return AdmissionResult(

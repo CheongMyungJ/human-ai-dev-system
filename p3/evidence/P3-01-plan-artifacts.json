@@ -1,0 +1,119 @@
+[
+  {
+    "id": "prep-373ca5159fe94703",
+    "case_id": "case-7c3944233ec45bf3",
+    "stage": "plan",
+    "revision": 1,
+    "artifact_id": "art-3cfbbc582b96c7e9",
+    "artifact_rev": 1,
+    "intent_version_id": "intent-ef9f8f2efb61533a",
+    "based_on_design_id": "prep-8b2e7b738a365e04",
+    "level": "standard",
+    "authoring_mode": "ai_drafted",
+    "author_run_id": "run-plan-1",
+    "summary": "plan (run run-plan-1)",
+    "state": "superseded",
+    "created_at": "2026-09-20T16:16:15.430378+00:00",
+    "superseded_at": "2026-09-20T16:34:48.871490+00:00",
+    "sections": [
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "tasks",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "작업별 목적·산출물·완료 조건"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "verification",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "검증 작업"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "dependencies",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "의존 관계"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "integration_order",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "통합 순서"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "human_decision_points",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "사람 판단이 필요한 지점"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "environment_prerequisites",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "실행 환경·선행 조건"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "experiments",
+        "state": "undecided",
+        "origin": "none",
+        "required": false,
+        "required_at_report": false,
+        "label": "실험·이행 검증"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "failure_response",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": false,
+        "required_at_report": false,
+        "label": "실패 시 대응"
+      },
+      {
+        "preparation_id": "prep-373ca5159fe94703",
+        "section": "open_questions",
+        "state": "undecided",
+        "origin": "none",
+        "required": false,
+        "required_at_report": false,
+        "label": "미정 질문"
+      }
+    ],
+    "availability": "available",
+    "content_hash": "sha256:af3c0b6952f493945b9c3931f15a9df4346aeb6e47e40f5a9aad3a5536858963",
+    "owner_runner_id": "runner-p3-live",
+    "review": {
+      "id": "stagerev-a9a701decdef4a4e",
+      "case_id": "case-7c3944233ec45bf3",
+      "stage": "plan",
+      "preparation_id": "prep-373ca5159fe94703",
+      "mode": "human_review",
+      "state": "human_reviewed",
+      "decision_id": "dec-9c97e43bc1224b3b",
+      "actor": "owner",
+      "subject_content_hash": "sha256:af3c0b6952f493945b9c3931f15a9df4346aeb6e47e40f5a9aad3a5536858963",
+      "note_summary": "작업 순서와 검증 작업을 확인했다",
+      "recorded_at": "2026-09-20T16:16:19.471199+00:00"
+    },
+    "missing_required_sections": []
+  }
+]

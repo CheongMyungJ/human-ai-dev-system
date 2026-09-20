@@ -58,7 +58,28 @@ FAKE_DRAFT_RESPONSE = """여기 초안입니다.
      "text": "Windows 로컬 경로의 파일을 읽을 수 있다",
      "method": "로컬 경로 한 건으로 읽기를 확인한다",
      "summary": "Windows 로컬 경로를 읽는다", "method_summary": "로컬 경로 한 건 확인"}
-  ]
+  ],
+  "sizing": {
+    "recommended_level": "simple",
+    "axes": [
+      {"axis": "intent_clarity", "weight": "low",
+       "evidence": "요청에 목표가 분명히 적혀 있다", "judgement": "의도가 분명하다",
+       "unconfirmed": "대소문자 구분 여부"},
+      {"axis": "change_scope", "weight": "low",
+       "evidence": "한 파일을 읽는 조회", "judgement": "국소적이다", "unconfirmed": ""},
+      {"axis": "compatibility_and_data", "weight": "low",
+       "evidence": "저장 구조를 바꾸지 않는다", "judgement": "데이터 영향 없음",
+       "unconfirmed": ""},
+      {"axis": "permission_and_security", "weight": "low",
+       "evidence": "읽기 전용", "judgement": "권한 경계를 바꾸지 않는다", "unconfirmed": ""},
+      {"axis": "reversibility", "weight": "low",
+       "evidence": "쓰지 않는다", "judgement": "되돌릴 것이 없다", "unconfirmed": ""},
+      {"axis": "uncertainty", "weight": "low",
+       "evidence": "표준 파일 읽기", "judgement": "해법이 분명하다", "unconfirmed": ""},
+      {"axis": "verification_difficulty", "weight": "low",
+       "evidence": "표본 파일로 확인 가능", "judgement": "확인이 쉽다", "unconfirmed": ""}
+    ]
+  }
 }
 ```
 """
@@ -115,6 +136,77 @@ DEFAULT_CRITERIA = [
 ]
 
 
+#: 사람이 화면에서 쓰는 초안의 기본 수준 판단. 일곱 축을 모두 채운다.
+#: 축을 빼면 `controller/sizing.py` 가 근거 부족으로 표준 이상을 도출한다 —
+#: 그 동작은 그것을 보는 시험에서 따로 확인한다.
+DEFAULT_SIZING: dict[str, Any] = {
+    "recommended_level": "simple",
+    "axes": [
+        {
+            "axis": axis,
+            "weight": "low",
+            "evidence": f"{axis} 근거",
+            "judgement": f"{axis} 판단",
+            "unconfirmed": "",
+        }
+        for axis in (
+            "intent_clarity",
+            "change_scope",
+            "compatibility_and_data",
+            "permission_and_security",
+            "reversibility",
+            "uncertainty",
+            "verification_difficulty",
+        )
+    ],
+}
+
+#: 설계·계획 작성의 가짜 응답을 만드는 도우미.
+#:
+#: **항목을 다 채운 것과 필수 항목을 비운 것**을 둘 다 만들 수 있어야 한다.
+#: 비운 산출물이 진입 조건을 통과하지 않는 것이 P3-01의 성공 기준이기 때문이다.
+def fake_preparation_response(
+    stage: str, sections: dict[str, str], questions: list[dict[str, Any]] | None = None
+) -> str:
+    import json as _json
+
+    body = {
+        "sections": {k: {"text": v, "origin": "ai_proposal"} for k, v in sections.items()},
+        "questions": questions or [],
+    }
+    return f"{stage} 산출물입니다.\n\n```json\n{_json.dumps(body, ensure_ascii=False)}\n```\n"
+
+
+#: 심층 수준까지 필수 항목을 모두 채운 설계 응답.
+FAKE_DESIGN_FULL = fake_preparation_response(
+    "설계",
+    {
+        "change_summary": "reader 모듈에 필터 함수를 더하고 CLI 진입점에서 호출한다",
+        "requirement_mapping": "C-01 은 필터 함수, C-02 는 경로 처리로 대응한다",
+        "interfaces_and_data": "filter_errors(lines) -> list[str]. 저장 구조는 바꾸지 않는다",
+        "failure_handling": "파일이 없으면 오류를 그대로 올리고 빈 결과로 감추지 않는다",
+        "alternatives": "정규식 대신 startswith 를 쓴다. 조건이 하나뿐이라 단순한 쪽을 택했다",
+        "recovery": "읽기 전용이라 되돌릴 상태가 없다. 잘못된 출력은 재실행으로 확인한다",
+        "verifiability": "표본 파일의 기대 줄 수와 실제 출력을 비교한다",
+    },
+)
+
+#: 심층 수준까지 필수 항목을 모두 채운 계획 응답.
+FAKE_PLAN_FULL = fake_preparation_response(
+    "계획",
+    {
+        "tasks": "T1 필터 함수 구현(완료 조건: 단위 시험 통과), T2 진입점 연결",
+        "verification": "표본 파일 시험 1건과 기존 회귀 시험을 돌린다",
+        "dependencies": "T2 는 T1 을 기다린다",
+        "integration_order": "T1 → T2 → 회귀 확인",
+        "human_decision_points": "대소문자 구분 여부가 정해지면 기대값을 확정한다",
+        "environment_prerequisites": "Python 3.12 와 저장소 checkout 만 필요하다",
+        "experiments": "실험은 필요하지 않다. 표본 파일로 직접 확인한다",
+        "failure_response": "시험이 실패하면 T1 로 돌아가고 통과를 주장하지 않는다",
+    },
+)
+
+
 class FakeCliExecutor:
     """시험용 가짜 코딩 CLI 실행기.
 
@@ -132,6 +224,8 @@ class FakeCliExecutor:
         self.draft_response = FAKE_DRAFT_RESPONSE
         self.review_response = FAKE_REVIEW_CLEAN
         self.analysis_response = "저장소를 읽고 확인했습니다. 변경한 것은 없습니다."
+        self.design_response = FAKE_DESIGN_FULL
+        self.plan_response = FAKE_PLAN_FULL
         self.outcome = RunOutcome.COMPLETED
         #: 세션 식별자를 고정하면 "작성과 검토가 같은 세션"을 만들 수 있다.
         self.fixed_session_ref: str | None = None
@@ -147,6 +241,10 @@ class FakeCliExecutor:
             return self.draft_response
         if prompt.startswith(prompt_templates.GATE_REVIEW_PROMPT[:40]):
             return self.review_response
+        if prompt.startswith(prompt_templates.DESIGN_AUTHORING_PROMPT[:40]):
+            return self.design_response
+        if prompt.startswith(prompt_templates.PLAN_AUTHORING_PROMPT[:40]):
+            return self.plan_response
         return self.analysis_response
 
     def count_effects(self, case_id: str) -> int:
@@ -500,6 +598,8 @@ class Harness:
         not_reflected: dict[str, str] | None = None,
         persist: bool = True,
         criteria: list[dict[str, Any]] | None = None,
+        sizing: dict[str, Any] | None = None,
+        with_sizing: bool = True,
     ) -> dict[str, Any]:
         """의도 초안을 제출하고(기본으로) Runner가 저장·구조 보고까지 하게 한다.
 
@@ -515,6 +615,11 @@ class Harness:
                 # 기본으로 기준 두 건을 붙인다. 기준 0건의 동작은 그것을 보는
                 # 시험에서 명시적으로 `criteria=[]` 를 준다.
                 "criteria": DEFAULT_CRITERIA if criteria is None else criteria,
+                # 기본으로 일곱 축을 채운 수준 판단을 붙인다. 판단이 **없는** 상태의
+                # 동작은 `with_sizing=False` 로 그것을 보는 시험에서 확인한다.
+                "sizing": (
+                    (sizing if sizing is not None else DEFAULT_SIZING) if with_sizing else None
+                ),
                 "reflects_feedback": reflects_feedback or [],
                 "not_reflected": not_reflected or {},
             },
@@ -575,6 +680,112 @@ class Harness:
         state = self.intent_state(case_id)
         assert state["latest_intent_version"] is not None
         return state["latest_intent_version"]
+
+    # ------------------------------------------------------ P3-01 도우미
+
+    def preparation(self, case_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/api/cases/{case_id}/preparation")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def ai_prepare(
+        self,
+        case_id: str,
+        stage: str,
+        run_id: str | None = None,
+        request_text: str = "설계를 작성해 주세요.",
+    ) -> Any:
+        """AI에게 설계 또는 개발계획을 작성시킨다.
+
+        `ai_draft` 와 같은 구조다 — 요청 원문 접수 → 목적별 Run → Runner가 실행하고
+        산출물을 만들어 등록한다. 진입 조건이 막으면 그 응답을 그대로 돌려준다.
+        """
+        instruction = self.submit_artifact(
+            case_id, request_text, kind="instruction", summary=f"{stage} 작성 요청"
+        )
+        response = self.client.post(
+            f"/api/cases/{case_id}/runs",
+            json={
+                "run_id": run_id or f"run-{stage}-1",
+                "instruction_artifact_id": instruction["artifact_id"],
+                "purpose": f"{stage}_authoring",
+                "role": "author",
+                "tool_id": FAKE_TOOL_ID,
+                "mode": FAKE_TOOL_MODE,
+                "permission": "read_only",
+            },
+        )
+        if response.status_code in (200, 201):
+            self.agent.poll_once()
+        return response
+
+    def set_stage_mode(self, case_id: str, stage: str, mode: str, reason: str = "시험용 설정"):
+        return self.client.put(
+            f"/api/cases/{case_id}/stage-review-settings/{stage}",
+            json={"mode": mode, "reason": reason, "set_by": "owner"},
+        )
+
+    def review_stage(self, case_id: str, stage: str, reviewed: bool = True, note: str = "검토함"):
+        return self.client.post(
+            f"/api/cases/{case_id}/stage-reviews/{stage}",
+            json={"reviewed": reviewed, "note": note, "actor": "owner"},
+        )
+
+    def auto_proceed(self, case_id: str, stage: str):
+        return self.client.post(f"/api/cases/{case_id}/stage-auto-proceed/{stage}", json={})
+
+    def adjust_level(
+        self,
+        case_id: str,
+        level: str,
+        reason: str = "사람이 판단해 조정",
+        residual_risk: str = "남는 위험 없음이 아니라 확인 필요",
+    ):
+        return self.client.post(
+            f"/api/cases/{case_id}/sizing-adjustment",
+            json={
+                "level": level,
+                "reason": reason,
+                "residual_risk": residual_risk,
+                "actor": "owner",
+            },
+        )
+
+    def request_implementation(
+        self, case_id: str, run_id: str = "run-impl-1", permission: str = "read_only"
+    ):
+        """기능 구현 실행을 요청한다. 허용/거부 응답을 그대로 돌려준다."""
+        instruction = self.submit_artifact(
+            case_id, "계획대로 구현해 주세요.", kind="instruction", summary="구현 요청"
+        )
+        return self.client.post(
+            f"/api/cases/{case_id}/runs",
+            json={
+                "run_id": run_id,
+                "instruction_artifact_id": instruction["artifact_id"],
+                "purpose": "feature_implementation",
+                "role": "author",
+                "tool_id": FAKE_TOOL_ID,
+                "mode": FAKE_TOOL_MODE,
+                "permission": permission,
+            },
+        )
+
+    def open_questions(self, case_id: str) -> list[dict[str, Any]]:
+        """최신 의도 버전에 붙은 질문 목록. 이월 질문도 여기 들어 있다.
+
+        **목록 순서에 기대지 않는다.** `intent_versions` 는 revision 내림차순이므로
+        `[-1]` 은 가장 오래된 버전이다. 최신 버전은 `intent_state` 가 알려 준다.
+        """
+        latest_id = self.latest_intent(case_id)["id"]
+        case = self.client.get(f"/api/cases/{case_id}").json()
+        version = next(v for v in case["intent_versions"] if v["id"] == latest_id)
+        return version["questions"]
+
+    def context_refs(self, run_id: str) -> list[dict[str, Any]]:
+        response = self.client.get(f"/api/runs/{run_id}/context-refs")
+        assert response.status_code == 200, response.text
+        return response.json()
 
     def agree(
         self,

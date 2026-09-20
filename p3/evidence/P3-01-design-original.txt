@@ -1,0 +1,93 @@
+{
+  "doc_type": "hads.preparation",
+  "doc_version": 1,
+  "stage": "design",
+  "level": "standard",
+  "case_id": "case-7c3944233ec45bf3",
+  "intent_version_id": "intent-ef9f8f2efb61533a",
+  "authored_by": "claude/print",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-design-1",
+  "authoring_note": "AI 실행이 작성해 제시한 산출물이다. 사람은 열람·검토를 한다.",
+  "context_notes": [
+    {
+      "role": "agreed_intent",
+      "artifact_id": "art-7a9b2dd1de3bfb40",
+      "revision": 1,
+      "read": true
+    }
+  ],
+  "sections": {
+    "change_summary": {
+      "text": "변경 위치는 저장소 루트의 reader.py 한 파일이다. 현재 reader.py는 모듈 독스트링과 read_lines(path) 하나만 가지며(reader.py:4-6), open(path, encoding=\"utf-8\")로 연 파일을 줄 단위로 순회해 각 줄 끝의 \\n을 제거한 list[str]을 돌려준다. sample.log는 INFO 2줄과 대문자 ERROR 2줄, 총 4줄이다.\n\n제안하는 변경은 read_lines를 그대로 두고, 같은 모듈에 ERROR 선별만 담당하는 함수 하나를 추가하는 것이다(q2의 '기존 동작 유지 + 별도 함수' 안). 새 함수는 경로를 받아 내부에서 read_lines(path)를 호출하고, 각 줄에 대해 부분 문자열 포함 여부를 판정해 조건에 맞는 줄만 같은 순서로 담은 list[str]을 반환한다. 파일 열기·디코딩·개행 처리는 read_lines에 그대로 맡기므로 읽기 방식은 한 곳에만 남는다.\n\n동작 영향: read_lines의 시그니처와 반환값이 바뀌지 않으므로 기존 호출자(존재 여부는 미확인)는 영향을 받지 않는다. 추가되는 것은 새 이름 하나뿐이고, 실행 시 파일은 읽기 모드로만 열린다. 판정에 쓰는 대소문자 정책은 q1이 확정되기 전까지 정해지지 않으며, 정책이 판정 표현식 한 줄에만 국소화되도록 구조를 잡는다. q2가 '기존 read_lines를 필터링하도록 변경' 또는 '선택 옵션 인자 추가'로 결정되면 변경 위치(reader.py)는 같고 read_lines 본문·시그니처를 고치는 형태로 바뀐다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "requirement_mapping": {
+      "text": "- goal(ERROR 포함 줄만 반환): reader.py에 선별 함수를 추가하고, 줄 내 부분 문자열 포함 판정 결과가 참인 줄만 결과 목록에 넣는다. 다른 수준(INFO/WARN 등)이나 정규식·필드 파싱은 도입하지 않는다.\n- expected_outcome(로그를 읽어 조건에 맞는 줄만 반환): 입력은 파일 경로, 출력은 원본 줄 순서를 유지한 list[str]이며 각 줄은 read_lines와 동일하게 끝 개행이 제거된 형태다. 대소문자 구분 여부는 q1 결정 전까지 설계에서 확정하지 않는다.\n- scope(reader.py의 필터링 기능과 시험용 표본 sample.log): 편집 대상은 reader.py 하나로 한정한다. sample.log는 이미 저장소에 있고 ERROR 2줄을 포함하므로 검증 입력으로 그대로 쓰며 내용을 바꾸지 않는다.\n- constraints(Python 3.12, 읽기 전용): 표준 라이브러리 open만 사용하고 쓰기·추가·삭제 모드를 쓰지 않는다. 3.12 전용 문법이나 신규 표준 라이브러리 API에 의존하지 않으므로 3.12에서 그대로 동작한다.\n- open_questions(대소문자 미정): 정책이 판정 한 곳에만 나타나도록 설계해 q1이 어느 쪽으로 결정되든 그 지점만 바꾸면 되게 한다.\n- exclusions는 의도 초안에서 미정(state: undecided)이므로 이 설계도 제외 범위를 새로 정하지 않는다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "interfaces_and_data": {
+      "text": "기존(변경 없음): read_lines(path) -> list[str]. UTF-8 텍스트 모드로 열어 모든 줄의 끝 \\n을 제거한 목록을 반환한다(reader.py:4-6).\n\n추가(제안): 경로 하나를 받는 모듈 수준 함수. 인자는 read_lines와 같은 path 하나이며, 반환은 선별된 줄의 list[str]이다. 내부에서 read_lines(path)를 호출해 줄 목록을 얻고, 줄마다 부분 문자열 포함 판정을 적용해 참인 줄만 원래 순서대로 모은다. 부작용과 전역 상태는 없다.\n\n데이터 형태: 줄은 str이며 끝 개행이 제거된 상태다. 텍스트 모드의 기본 개행 변환 때문에 CRLF 파일도 \\n으로 정규화되어 들어온다. 일치하는 줄이 없으면 빈 리스트를 반환하고 예외를 던지지 않는다. 반환 순서는 파일 내 등장 순서와 같다.\n\n확정되지 않은 것: 새 함수의 이름, 판정에 쓰는 문자열 정책(q1), 그리고 이 기능을 별도 함수로 둘지·read_lines의 옵션 인자로 둘지·read_lines 자체를 바꿀지(q2). 옵션 인자 방식이 선택되면 기본값을 무엇으로 둘지가 기존 호출자 호환성을 가르는 지점이 되므로 q2에 함께 적었다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "failure_handling": {
+      "text": "- 없는 경로·권한 부족: read_lines가 그대로 올리는 FileNotFoundError, PermissionError 등 OSError 계열을 새 함수에서 잡지 않고 호출자에게 전달한다. 읽기 실패를 빈 리스트로 감추면 '일치하는 줄이 없음'과 구분되지 않기 때문이다.\n- 디코딩 실패: 현재 read_lines는 errors 인자를 주지 않으므로 UTF-8로 디코딩할 수 없는 바이트가 있으면 UnicodeDecodeError가 발생한다. 이 동작을 바꾸지 않고 그대로 전파한다(입력 인코딩 정책은 이번 의도 범위 밖이다).\n- 일치 줄 없음: 예외가 아니라 빈 리스트를 반환한다.\n- 빈 파일·빈 줄·공백만 있는 줄: 빈 파일은 빈 리스트가 된다. 빈 줄은 대상 문자열을 포함하지 않으므로 자연히 제외된다.\n- 형식이 다른 줄: 타임스탬프나 필드 구조를 전제하지 않고 줄 전체에 대한 포함 여부만 보므로, 형식이 어긋난 줄이 있어도 파싱 예외가 생기지 않는다. 대신 'ERROR'가 메시지 본문에 들어간 줄도 선별된다는 부작용이 있다(sample.log에는 해당 줄이 없다).\n- 읽기 전용 보장: 새 코드 경로에 쓰기 모드 open, 파일 생성·삭제 호출을 두지 않는다.\n- 큰 파일: 현 구조는 read_lines가 전체 줄을 메모리에 올린 뒤 선별한다. 이번 범위에서는 시험용 표본을 다루므로 스트리밍으로 바꾸지 않는다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "alternatives": {
+      "text": "1) read_lines 자체를 필터링하도록 변경: 호출부가 하나로 유지되어 가장 단순하지만, 이름과 기존 계약(모든 줄 반환)을 깨고 외부 호출자에게 조용한 동작 변화를 만든다. 호출자 존재 여부가 확인되지 않아(의도 초안 compatibility 축) 이 설계에서는 권하지 않는다.\n2) read_lines에 선택 인자를 추가: 진입점이 하나로 유지되지만 한 함수가 읽기와 선별을 겸하고, 기본값 선택에 따라 기존 동작이 바뀔 수 있다.\n3) 별도 함수 추가(제안): 기존 계약을 건드리지 않고 되돌리기도 쉽다. 이름이 하나 늘어나는 비용이 있다. 실제 채택은 q2의 사람 결정을 따른다.\n\n판정 방식에 대해서는, 부분 문자열 포함 검사를 제안한다. 정규식이나 로그 레벨 필드 파싱은 표본의 조건('ERROR가 포함된 줄')을 넘어서는 구조 가정을 들여오기 때문이다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": false
+    },
+    "recovery": {
+      "text": "변경은 reader.py 한 파일에 국한되고 파일·데이터 상태를 남기지 않으므로 되돌리기는 해당 파일의 이전 판본으로 복원하는 것으로 끝난다. q2가 '별도 함수' 안으로 결정되면 read_lines가 그대로 남아 기존 호출 경로가 계속 살아 있고, 문제가 생겨도 새 함수 호출만 멈추면 된다. read_lines를 변경하는 안이 선택되면 되돌릴 때 그 함수의 반환 범위 변화에 의존한 호출자까지 함께 점검해야 한다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": false
+    },
+    "verifiability": {
+      "text": "- C-01: 결정된 호출 방식으로 저장소의 sample.log를 선별해, 반환 목록이 정확히 ['2026-09-21 10:00:01 ERROR disk full', '2026-09-21 10:00:03 ERROR timeout'] 두 줄인지(개수 2, 내용·순서 일치, INFO 줄 없음) 대조한다. 이 기대값은 실제 파일 내용을 읽어 확인했다.\n- C-02: sample.log에는 소문자·혼합 표기 줄이 없으므로 ERROR/error/Error를 각각 포함한 줄과 어느 표기도 없는 줄을 담은 임시 입력을 별도로 마련해 실행한다. 각 표기의 포함·제외 기대값은 q1 확정 후에만 확정되므로, q1 이전에는 이 항목을 통과/실패로 판정하지 않는다. 임시 입력 파일을 만드는 것이 C-03의 읽기 전용 관찰과 충돌하지 않도록, 시험 준비 단계와 기능 실행 구간을 분리해 관찰한다.\n- C-03: 실행 전후로 입력 파일의 해시와 작업 디렉터리 파일 목록을 비교하고, 코드상 open 호출에 읽기 이외 모드가 없는지 확인한다.\n- C-04: 실행 인터프리터의 sys.version이 3.12인지 확인한 뒤 위 시험을 같은 인터프리터로 수행한다.\n- 추가 관찰: 변경 후에도 read_lines(sample.log)가 4줄 전체를 반환하는지 확인해 기존 동작 보존 여부를 함께 본다(q2가 read_lines 변경 안으로 결정되면 이 확인은 기대값이 달라진다).\n- 자동화된 시험 파일을 저장소에 추가할지는 이번 의도의 scope(reader.py와 sample.log)에 포함되어 있지 않으므로 이 설계에서 정하지 않는다.",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "required": true
+    },
+    "open_questions": {
+      "text": "q1(대소문자 정책)은 의도 단계에서 미결이며, 이 설계는 판정 지점을 한 곳에 모아두는 것까지만 하고 값을 정하지 않는다. q2(기존 read_lines와의 연결 방식)는 이 설계 단계에서 사람이 정해야 하며, 아래 questions에 옵션 인자 기본값 문제까지 포함해 다시 적었다. 또한 read_lines의 외부 호출자 존재 여부가 이 저장소만으로는 확인되지 않는다(루트에 reader.py와 sample.log 외의 Python 파일이 없다). 이는 q2의 판단 근거가 되므로 함께 질문으로 남긴다.",
+      "state": "proposed",
+      "origin": "observation",
+      "required": false
+    }
+  },
+  "questions": [
+    {
+      "key": "d1",
+      "text": "ERROR 선별을 어떤 형태로 제공할까요? (A) reader.py에 별도 함수를 추가하고 read_lines는 그대로 둔다, (B) read_lines에 선택 인자를 추가한다, (C) read_lines 자체를 필터링하도록 바꾼다. 설계는 (A)를 제안하지만 결정은 사람이 합니다. (B)를 고르실 경우 그 인자의 기본값을 '필터 안 함'(기존 동작 보존)으로 둘지 '필터함'으로 둘지도 함께 정해 주세요.",
+      "summary": "선별 기능의 제공 형태와 기존 read_lines 처리",
+      "decide_at": "design",
+      "blocks": []
+    },
+    {
+      "key": "d2",
+      "text": "이 저장소 루트에는 reader.py와 sample.log 외에 Python 파일이 없어 read_lines를 쓰는 외부 호출자를 확인하지 못했습니다. 저장소 밖에 read_lines를 호출하며 '모든 줄 반환'에 의존하는 코드가 있습니까? 없다고 확인되면 d1에서 (B)·(C)도 안전한 선택지가 됩니다.",
+      "summary": "read_lines 외부 호출자의 존재 여부",
+      "decide_at": "design",
+      "blocks": []
+    },
+    {
+      "key": "d3",
+      "text": "새로 추가할 함수의 이름을 지정해 주실까요, 아니면 구현 단계에서 정하도록 맡기실까요? (d1에서 (A)를 선택한 경우에만 필요합니다.)",
+      "summary": "추가 함수의 이름 결정 주체",
+      "decide_at": "design",
+      "blocks": []
+    }
+  ]
+}

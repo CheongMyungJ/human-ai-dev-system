@@ -33,6 +33,7 @@ from domain.models import (
     ArtifactKind,
     AuthoringMode,
     Availability,
+    AxisWeight,
     CaseKind,
     CompletionMode,
     ConfirmationState,
@@ -43,10 +44,14 @@ from domain.models import (
     EvidenceKind,
     IntentField,
     Permission,
+    PreparationStage,
     ReadRequestState,
+    ReviewMode,
     RunOutcome,
     RunPurpose,
     RunRole,
+    SizingAxis,
+    WorkLevel,
 )
 
 router = APIRouter()
@@ -302,6 +307,9 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 않았는가"를 다른 화면을 찾아다니지 않고 알 수 있어야 한다(FR-14).
     case["gate"] = repo.gate_state(case_id)
     case["admission_checks"] = repo.list_admission_checks(case_id)
+    # 수준·설계·계획·검토 상태도 같은 응답에 담는다(P3-01). 화면이 "지금 무엇이
+    # 빠져 있어 구현이 열리지 않는가"를 한 화면에서 알 수 있어야 한다(FR-14).
+    case["preparation"] = repo.preparation_state(case_id)
     # 결과·완료 상태도 같은 응답에 담는다. "현재 무엇을 기다리는가"를 알기 위해
     # 다른 화면을 찾아다니게 하지 않는다(FR-14).
     case["result"] = repo.result_view(case_id)
@@ -664,6 +672,32 @@ class IntentCriterionIn(BaseModel):
     method_summary: str = Field(min_length=1, max_length=200)
 
 
+class SizingAxisIn(BaseModel):
+    """수준 판단의 한 축(P3-01).
+
+    `weight` 만 받지 않는 이유는 그것이 곧 숫자 점수이기 때문이다. 축마다
+    `현재 판단`을 요구해 근거 없는 영향 표시를 막는다(sizing-and-review-ux 1절).
+    `evidence` 는 의도 원문 안에 남고 제어부에는 오지 않는다.
+    """
+
+    axis: SizingAxis
+    weight: AxisWeight
+    evidence: str = ""
+    judgement: str = Field(min_length=1, max_length=200)
+    unconfirmed: str = ""
+
+
+class SizingIn(BaseModel):
+    """의도 초안에 실리는 작업 수준 판단.
+
+    비워 두면(None) 수준 미결정이다. **`simple` 로 기본값을 두지 않는다** —
+    판단하지 않은 것을 가장 얕은 준비로 읽으면 준비 없이 구현이 열린다.
+    """
+
+    recommended_level: WorkLevel
+    axes: list[SizingAxisIn] = Field(default_factory=list)
+
+
 class IntentDraftIn(BaseModel):
     """의도 초안 제출.
 
@@ -678,6 +712,8 @@ class IntentDraftIn(BaseModel):
     questions: list[IntentQuestionIn] = Field(default_factory=list)
     #: 합의할 성공 기준. 비워 두면 기준 0건이며 시스템이 채우지 않는다.
     criteria: list[IntentCriterionIn] = Field(default_factory=list)
+    #: 작업 수준 판단. 비워 두면 수준 미결정으로 남는다(P3-01).
+    sizing: SizingIn | None = None
     #: 이 버전이 반영한 피드백. 반영/미반영을 이유와 함께 닫는다.
     reflects_feedback: list[str] = Field(default_factory=list)
     not_reflected: dict[str, str] = Field(default_factory=dict)
@@ -735,6 +771,10 @@ class IntentStructureIn(BaseModel):
     # 여기에는 짧은 요약·확인 방법 요약·연결된 의도 항목만 온다.
     # `None` 은 "기준을 보고하지 않음"이고 `[]` 는 "기준이 0건"이다 — 다르다.
     criteria: list[dict[str, Any]] | None = None
+    # 작업 수준 판단도 같은 보고로 온다(P3-01). 축별 근거의 서술은 의도 원문 안에
+    # 있고 여기에는 영향·짧은 판단 한 줄만 온다.
+    # `None` 은 "판단하지 않음"이며 `{"axes": []}` 와 같은 뜻이 아니다.
+    sizing: dict[str, Any] | None = None
 
 
 def _refuse(reason: AgreementRefusal, detail: str) -> HTTPException:
@@ -768,6 +808,7 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
             case_id=case_id,
             authored_by=payload.authored_by,
             criteria=[c.model_dump(mode="json") for c in payload.criteria],
+            sizing=(payload.sizing.model_dump(mode="json") if payload.sizing else None),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1132,6 +1173,7 @@ def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dic
             payload.fields,
             payload.questions,
             payload.criteria,
+            payload.sizing,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -1492,6 +1534,257 @@ def create_successor(
             title=payload.title,
             kind=payload.kind,
             reason_summary=payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== P3-01
+#
+# 작업 수준 · 설계안 · 개발계획 · 단계별 사람 검토.
+#
+# **본문은 여기도 지나가지 않는다.** 축별 근거의 서술은 의도 원문 안에, 설계·계획의
+# 본문은 Runner에 저장된 준비 산출물 원문 안에 있다. 둘 다 기존 일시중계 경로
+# (`read-requests`)로만 읽는다. 아래 모델에는 본문 필드가 없다.
+#
+# 진입 조건 검사는 여전히 `POST /api/cases/{id}/runs` 한 곳이다. 여기에 조건을
+# 다시 구현하지 않는다 — 두 곳에 두면 한쪽만 고치는 실수가 생긴다.
+
+
+class SizingAdjustmentIn(BaseModel):
+    """사람의 수준 상향·하향.
+
+    `reason` 과 `residual_risk` 를 **둘 다** 필수로 받는다. sizing-and-review-ux
+    1절: "조정 이유와 남는 위험을 기록하며, 상세도 조정이 의도 동의·합의한 검증·
+    권한을 해제하지 않게 한다." 이유 없는 조정은 기록으로서 쓸모가 없다.
+    """
+
+    level: WorkLevel
+    reason: str = Field(min_length=1, max_length=200)
+    residual_risk: str = Field(min_length=1, max_length=200)
+    actor: str = "owner"
+
+
+class StageReviewModeIn(BaseModel):
+    """단계별 검토 방식 설정. **두 단계는 각각 설정한다.**"""
+
+    mode: ReviewMode
+    reason: str = ""
+    set_by: str = "owner"
+
+
+class StageReviewIn(BaseModel):
+    """사람의 단계 검토 기록.
+
+    `reviewed` 를 명시로 받는 이유는 의도 동의와 같다 — 열람·질문·시간 경과가
+    검토가 되지 않는다(FR-23은 검토를 의도 동의·최종 인수와 구별해 기록하라고
+    요구한다).
+    """
+
+    reviewed: bool = False
+    note: str = ""
+    actor: str = "owner"
+
+
+class RunnerPreparationIn(BaseModel):
+    """Runner가 만든 설계·계획 산출물의 등록. **본문 필드가 없다.**"""
+
+    runner_id: str
+    case_id: str
+    stage: PreparationStage
+    artifact_id: str
+    revision: int = 1
+    level: WorkLevel
+    authoring_mode: AuthoringMode = AuthoringMode.AI_DRAFTED
+    author_run_id: str | None = None
+    summary: str = Field(min_length=1, max_length=200)
+
+
+class PreparationStructureIn(BaseModel):
+    """Runner가 보고하는 산출물 구조. **본문 필드가 없다.**"""
+
+    runner_id: str
+    preparation_id: str
+    sections: list[dict[str, Any]]
+    questions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@router.get("/api/cases/{case_id}/preparation")
+def get_preparation_state(request: Request, case_id: str) -> dict[str, Any]:
+    """수준·설계·계획·검토를 한 번에 본 상태.
+
+    화면과 진입 검사가 **같은 값**을 본다. 화면이 따로 계산하면 버튼은 눌리는데
+    서버가 거부하는(또는 그 반대의) 상태가 생긴다.
+    """
+    try:
+        return _repo(request).preparation_state(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/sizing-adjustment", status_code=201)
+def adjust_sizing(request: Request, case_id: str, payload: SizingAdjustmentIn) -> dict[str, Any]:
+    """사람이 작업 수준을 조정한다.
+
+    **이 경로는 검토 모드·성공 기준·의도 동의를 건드리지 않는다.** 수준을 낮추는
+    것이 합의한 검증이나 필수 동의를 없애지 않는다는 규칙을 코드 구조로 지킨다.
+    """
+    repo = _repo(request)
+    try:
+        return repo.adjust_sizing(
+            case_id=case_id,
+            level=payload.level,
+            actor=payload.actor,
+            reason_summary=payload.reason,
+            residual_risk_summary=payload.residual_risk,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/preparation-artifacts")
+def list_preparation_artifacts(
+    request: Request, case_id: str, stage: PreparationStage | None = None
+) -> list[dict[str, Any]]:
+    """설계·개발계획 산출물 목록.
+
+    `stage` 로 **각각 조회한다**(intent-artifacts 2절 "두 산출물은 각각 조회할 수
+    있어야 한다"). 검토 설정과 무관하게 조회할 수 있어야 하므로 자동 진행 단계의
+    산출물도 같은 경로로 나온다.
+    """
+    try:
+        return _repo(request).list_preparation_artifacts(case_id, stage)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/preparation-artifacts/{prep_id}")
+def get_preparation_artifact(request: Request, prep_id: str) -> dict[str, Any]:
+    try:
+        return _repo(request).get_preparation_artifact(prep_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/stage-review-settings/{stage}")
+def set_stage_review_mode(
+    request: Request, case_id: str, stage: PreparationStage, payload: StageReviewModeIn
+) -> dict[str, Any]:
+    """단계별 검토 방식을 정한다. 기본값은 두 단계 모두 사람 검토다."""
+    repo = _repo(request)
+    try:
+        return repo.set_stage_review_mode(
+            case_id=case_id,
+            stage=stage,
+            mode=payload.mode,
+            set_by=payload.set_by,
+            reason_summary=payload.reason,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/stage-reviews/{stage}", status_code=201)
+def record_stage_review(
+    request: Request, case_id: str, stage: PreparationStage, payload: StageReviewIn
+) -> dict[str, Any]:
+    """사람이 이 단계의 산출물을 검토했다고 기록한다.
+
+    `reviewed` 가 false 면 기록하지 않는다. 화면을 열어 본 것이 검토가 아니다.
+    """
+    repo = _repo(request)
+    try:
+        current = repo.current_preparation(case_id, stage)
+        if current is None:
+            raise ConflictError(f"there is no current {stage.value} artifact to review")
+        return repo.record_stage_review(
+            case_id=case_id,
+            stage=stage,
+            prep_id=current["id"],
+            actor=payload.actor,
+            note_summary=payload.note,
+            explicit=payload.reviewed,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/stage-auto-proceed/{stage}", status_code=201)
+def record_auto_proceed(
+    request: Request, case_id: str, stage: PreparationStage
+) -> dict[str, Any]:
+    """자동 진행 조건이 충족됐다고 기록한다. **사람 승인이 아니다.**
+
+    `decision` 표에 행을 만들지 않고 주체도 정책 식별자다. 사람 검토 모드에서
+    이 경로를 부르면 거부된다 — 자동 진행이 사람을 대신하지 않는다.
+    """
+    repo = _repo(request)
+    try:
+        current = repo.current_preparation(case_id, stage)
+        if current is None:
+            raise ConflictError(f"there is no current {stage.value} artifact")
+        return repo.record_auto_proceed(case_id, stage, current["id"])
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/runs/{run_id}/context-refs")
+def list_run_context_refs(request: Request, run_id: str) -> list[dict[str, Any]]:
+    """이 실행에 고정한 참조 목록.
+
+    "그 실행이 무엇을 보고 썼는가"의 답이다. P2-04에서 재작성이 이전 버전을 보지
+    못해 초안이 퇴화했고, 그것이 기록으로 드러나지 않았다.
+    """
+    repo = _repo(request)
+    try:
+        repo.get_run(run_id)
+        return repo.list_context_refs(run_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/preparation-artifacts", status_code=201)
+def runner_create_preparation_artifact(
+    request: Request, payload: RunnerPreparationIn
+) -> dict[str, Any]:
+    """Runner가 작성한 설계·계획을 산출물로 등록한다.
+
+    AI 의도 초안 등록과 같은 방향이다 — 원문은 이미 Runner에 있고 제어부는
+    가리키기만 한다. **어느 의도 버전 위에 세웠는지는 제어부가 정한다**(지금의 최신
+    버전). Runner가 정하게 두면 옛 의도 위의 산출물을 최신이라고 주장할 수 있다.
+    """
+    repo = _repo(request)
+    try:
+        ref = repo.get_artifact_ref(payload.artifact_id, payload.revision)
+        if ref["owner_runner_id"] != payload.runner_id:
+            raise ConflictError("only the owning runner can register its artifact")
+        prep = repo.create_preparation_artifact(
+            case_id=payload.case_id,
+            stage=payload.stage,
+            artifact_id=payload.artifact_id,
+            artifact_rev=payload.revision,
+            level=payload.level,
+            authoring_mode=payload.authoring_mode,
+            author_run_id=payload.author_run_id,
+            summary=payload.summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"preparation_artifact": prep}
+
+
+@router.post("/api/runner/preparation-structure")
+def runner_preparation_structure(
+    request: Request, payload: PreparationStructureIn
+) -> dict[str, Any]:
+    """Runner가 계산한 산출물 구조를 받는다. 본문은 오지 않는다."""
+    repo = _repo(request)
+    try:
+        prep = repo.get_preparation_artifact(payload.preparation_id)
+        if prep["owner_runner_id"] != payload.runner_id:
+            raise ConflictError("only the owning runner can report this structure")
+        return repo.apply_preparation_structure(
+            payload.preparation_id, payload.sections, payload.questions
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

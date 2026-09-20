@@ -1,0 +1,998 @@
+{
+  "case_id": "case-7c3944233ec45bf3",
+  "sizing": {
+    "id": "sizing-d0f8b8105f581153",
+    "case_id": "case-7c3944233ec45bf3",
+    "revision": 10,
+    "intent_version_id": "intent-79dc9dd8f0c0532b",
+    "source": "human_adjustment",
+    "recommended_level": "standard",
+    "derived_level": "standard",
+    "level": "standard",
+    "adjusted_from": "deep",
+    "evidence_gap": true,
+    "reason_summary": "심층 항목은 이번 범위가 아니다",
+    "residual_risk_summary": "대안·복구 경로는 문서로 남지 않는다",
+    "actor": "owner",
+    "state": "current",
+    "created_at": "2026-09-20T16:31:09.085078+00:00",
+    "superseded_at": null,
+    "axes": [
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "change_scope",
+        "weight": "low",
+        "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+        "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+        "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "intent_clarity",
+        "weight": "medium",
+        "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+        "unconfirmed_summary": "q1의 대소문자 정책."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+        "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "reversibility",
+        "weight": "low",
+        "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+        "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "uncertainty",
+        "weight": "low",
+        "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+        "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+      },
+      {
+        "assessment_id": "sizing-d0f8b8105f581153",
+        "axis": "verification_difficulty",
+        "weight": "low",
+        "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+        "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+      }
+    ]
+  },
+  "level": "standard",
+  "sizing_history": [
+    {
+      "id": "sizing-d0f8b8105f581153",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 10,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": "deep",
+      "evidence_gap": true,
+      "reason_summary": "심층 항목은 이번 범위가 아니다",
+      "residual_risk_summary": "대안·복구 경로는 문서로 남지 않는다",
+      "actor": "owner",
+      "state": "current",
+      "created_at": "2026-09-20T16:31:09.085078+00:00",
+      "superseded_at": null,
+      "axes": [
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-d0f8b8105f581153",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-159043819096e2c4",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 9,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "deep",
+      "derived_level": "standard",
+      "level": "deep",
+      "adjusted_from": "standard",
+      "evidence_gap": true,
+      "reason_summary": "화면에서 사람이 조정한다",
+      "residual_risk_summary": "심층 항목은 이번에 쓰지 않는다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:31:06.125834+00:00",
+      "superseded_at": "2026-09-20T16:31:09.085078+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-159043819096e2c4",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-07f384cca2a6a210",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 8,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": "deep",
+      "evidence_gap": true,
+      "reason_summary": "심층 항목은 이번 범위가 아니다",
+      "residual_risk_summary": "대안·복구 경로는 문서로 남지 않는다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:29:08.370295+00:00",
+      "superseded_at": "2026-09-20T16:31:06.125834+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-07f384cca2a6a210",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-44970105ad703825",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 7,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "deep",
+      "derived_level": "standard",
+      "level": "deep",
+      "adjusted_from": "standard",
+      "evidence_gap": true,
+      "reason_summary": "화면에서 사람이 조정한다",
+      "residual_risk_summary": "심층 항목은 이번에 쓰지 않는다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:29:05.415347+00:00",
+      "superseded_at": "2026-09-20T16:29:08.370295+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-44970105ad703825",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-7788da67e338ce12",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 6,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": "deep",
+      "evidence_gap": true,
+      "reason_summary": "심층 항목은 이번 범위가 아니다",
+      "residual_risk_summary": "실험·복구 경로는 문서로 남지 않는다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:27:13.186838+00:00",
+      "superseded_at": "2026-09-20T16:29:05.415347+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-7788da67e338ce12",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-4e4fe5e84834f004",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 5,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "human_adjustment",
+      "recommended_level": "deep",
+      "derived_level": "standard",
+      "level": "deep",
+      "adjusted_from": "standard",
+      "evidence_gap": true,
+      "reason_summary": "복구 경로와 실험까지 보기로 했다",
+      "residual_risk_summary": "추가 조사 없이는 실험 계획이 비어 있다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:27:12.170618+00:00",
+      "superseded_at": "2026-09-20T16:27:13.186838+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-4e4fe5e84834f004",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-200d15da03d23ef9",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 4,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "source": "ai_recommendation",
+      "recommended_level": "simple",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": null,
+      "evidence_gap": true,
+      "reason_summary": "의도 초안에 적힌 수준 판단",
+      "residual_risk_summary": "",
+      "actor": "run-draft-stale",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:23:39.132192+00:00",
+      "superseded_at": "2026-09-20T16:27:12.170618+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 및 개수 반환 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식과 q3의 반환 형식."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위나 반환 형식을 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 목록 반환에 대한 의존 여부, q2와 q3의 결정."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "줄 선별과 개수 반환이라는 핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 및 집계 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이나 잘못된 개수가 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책, 기능 제공 방식과 반환 형식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1, q2와 q3의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-200d15da03d23ef9",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "줄 목록과 개수의 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과와 q3에 따른 반환값 확인 방식."
+        }
+      ]
+    },
+    {
+      "id": "sizing-3d292988718ca343",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 3,
+      "intent_version_id": "intent-ef9f8f2efb61533a",
+      "source": "human_adjustment",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": "deep",
+      "evidence_gap": true,
+      "reason_summary": "심층 항목은 이번 범위가 아니다",
+      "residual_risk_summary": "대안·복구 경로는 문서로 남지 않는다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:21:54.794501+00:00",
+      "superseded_at": "2026-09-20T16:23:39.127428+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위를 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 반환에 대한 의존 여부, q2의 결정."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책과 기능 제공 방식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1과 q2의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-3d292988718ca343",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "기본 결과 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과."
+        }
+      ]
+    },
+    {
+      "id": "sizing-cc2fe6f9034caf30",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 2,
+      "intent_version_id": "intent-ef9f8f2efb61533a",
+      "source": "human_adjustment",
+      "recommended_level": "deep",
+      "derived_level": "standard",
+      "level": "deep",
+      "adjusted_from": "standard",
+      "evidence_gap": true,
+      "reason_summary": "권한·복구 경로를 더 보기로 했다",
+      "residual_risk_summary": "추가 조사 없이는 복구 경로가 비어 있다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:21:54.784010+00:00",
+      "superseded_at": "2026-09-20T16:21:54.794501+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위를 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 반환에 대한 의존 여부, q2의 결정."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책과 기능 제공 방식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1과 q2의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-cc2fe6f9034caf30",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "기본 결과 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과."
+        }
+      ]
+    },
+    {
+      "id": "sizing-0e895ec747593cc8",
+      "case_id": "case-7c3944233ec45bf3",
+      "revision": 1,
+      "intent_version_id": "intent-ef9f8f2efb61533a",
+      "source": "ai_recommendation",
+      "recommended_level": "simple",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": null,
+      "evidence_gap": true,
+      "reason_summary": "의도 초안에 적힌 수준 판단",
+      "residual_risk_summary": "",
+      "actor": "run-draft-1",
+      "state": "superseded",
+      "created_at": "2026-09-20T16:08:55.538240+00:00",
+      "superseded_at": "2026-09-20T16:21:54.784010+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 기능으로 범위를 한정할 수 있다.",
+          "unconfirmed_summary": "q2의 함수 또는 옵션 제공 방식."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "compatibility_and_data",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "기존 함수의 반환 범위를 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+          "unconfirmed_summary": "기존 호출자의 존재와 전체 줄 반환에 대한 의존 여부, q2의 결정."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "intent_clarity",
+          "weight": "medium",
+          "judgement_summary": "핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+          "unconfirmed_summary": "q1의 대소문자 정책."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "permission_and_security",
+          "weight": "insufficient_evidence",
+          "judgement_summary": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+          "unconfirmed_summary": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "요청 범위의 필터링 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+          "unconfirmed_summary": "반환 결과를 사용하는 외부 작업에서 오선별이 초래할 비용."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "구현 해법의 불확실성은 작으며 대소문자 정책과 기능 제공 방식을 결정하면 구체화할 수 있다.",
+          "unconfirmed_summary": "q1과 q2의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+        },
+        {
+          "assessment_id": "sizing-0e895ec747593cc8",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "기본 결과 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+          "unconfirmed_summary": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과."
+        }
+      ]
+    }
+  ],
+  "design": {
+    "stage": "design",
+    "mode": "auto_proceed",
+    "mode_source": "case_setting",
+    "mode_reason": "변경이 한 파일에 국소적이다",
+    "artifact": {
+      "id": "prep-e29deab6ee4b650e",
+      "case_id": "case-7c3944233ec45bf3",
+      "stage": "design",
+      "revision": 2,
+      "artifact_id": "art-e2cde2edf048992f",
+      "artifact_rev": 1,
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "based_on_design_id": null,
+      "level": "standard",
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "run-design-v2",
+      "summary": "design (run run-design-v2)",
+      "state": "current",
+      "created_at": "2026-09-20T16:34:48.871490+00:00",
+      "superseded_at": null,
+      "sections": [
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "change_summary",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "변경 위치·동작·영향"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "requirement_mapping",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "요구별 설계 대응"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "interfaces_and_data",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "인터페이스·데이터"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "failure_handling",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "실패·예외 처리"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "alternatives",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": false,
+          "required_at_report": false,
+          "label": "대안과 선택 이유"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "recovery",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": false,
+          "required_at_report": false,
+          "label": "실패·복구 경로"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "verifiability",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "검증 가능성"
+        },
+        {
+          "preparation_id": "prep-e29deab6ee4b650e",
+          "section": "open_questions",
+          "state": "proposed",
+          "origin": "observation",
+          "required": false,
+          "required_at_report": false,
+          "label": "미정 질문"
+        }
+      ],
+      "availability": "available",
+      "content_hash": "sha256:69e5906791a53f1e5a464f16cf6f576de2dec999f3dcb1d1a032ef806adbb307",
+      "owner_runner_id": "runner-p3-live",
+      "review": {
+        "id": "stagerev-c845f4cbe538d109",
+        "case_id": "case-7c3944233ec45bf3",
+        "stage": "design",
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "mode": "auto_proceed",
+        "state": "auto_conditions_met",
+        "decision_id": null,
+        "actor": "stage-auto-proceed-policy",
+        "subject_content_hash": "sha256:69e5906791a53f1e5a464f16cf6f576de2dec999f3dcb1d1a032ef806adbb307",
+        "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+        "recorded_at": "2026-09-20T16:34:49.080724+00:00"
+      },
+      "missing_required_sections": []
+    },
+    "review": {
+      "id": "stagerev-c845f4cbe538d109",
+      "case_id": "case-7c3944233ec45bf3",
+      "stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e",
+      "mode": "auto_proceed",
+      "state": "auto_conditions_met",
+      "decision_id": null,
+      "actor": "stage-auto-proceed-policy",
+      "subject_content_hash": "sha256:69e5906791a53f1e5a464f16cf6f576de2dec999f3dcb1d1a032ef806adbb307",
+      "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+      "recorded_at": "2026-09-20T16:34:49.080724+00:00"
+    },
+    "state": "auto_conditions_met",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "plan": {
+    "stage": "plan",
+    "mode": "auto_proceed",
+    "mode_source": "case_setting",
+    "mode_reason": "계획이 짧고 국소적이다",
+    "artifact": null,
+    "review": null,
+    "state": "not_ready",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "deferred_open_questions": [
+    {
+      "id": "q-3228e953203b9949",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "q2",
+      "summary": "기존 읽기 함수와 기능의 연결 방식",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:23:39.130966+00:00",
+      "raised_in_stage": null,
+      "preparation_id": null
+    },
+    {
+      "id": "q-66543a4d64a903a2",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "q3",
+      "summary": "줄 목록과 개수의 반환 구조",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:23:39.130966+00:00",
+      "raised_in_stage": null,
+      "preparation_id": null
+    },
+    {
+      "id": "q-5d075051f61de869",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "design:d1",
+      "summary": "선별 기능의 제공 형태와 기존 read_lines 처리",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:34:48.873734+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e"
+    },
+    {
+      "id": "q-028198e33dba4454",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "design:d2",
+      "summary": "read_lines 외부 호출자의 존재 여부",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:34:48.873734+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e"
+    },
+    {
+      "id": "q-8d92286b31cb34df",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "design:d3",
+      "summary": "추가 함수의 이름 결정 주체",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:34:48.873734+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e"
+    },
+    {
+      "id": "q-34deb0b6df69a43d",
+      "case_id": "case-7c3944233ec45bf3",
+      "intent_version_id": "intent-79dc9dd8f0c0532b",
+      "question_key": "design:d4",
+      "summary": "줄 목록과 개수를 담는 반환 형식",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-20T16:34:48.873734+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e"
+    }
+  ]
+}

@@ -223,11 +223,12 @@ def test_a_wider_permission_is_refused_in_this_stage(harness):
     assert "permission_not_allowed_in_stage" in _refusals(response)
 
 
-def test_feature_implementation_is_refused_as_not_implemented(harness):
-    """AC-8: **없는 선행 조건을 통과로 처리하지 않는다.**
+def test_feature_implementation_is_refused_without_preparation(harness):
+    """AC-8(P2-03) → P3-01 AC-7: **없는 선행 조건을 통과로 처리하지 않는다.**
 
-    의도 조건을 모두 갖춘 Case에서도 거부된다. 설계·계획 검토가 아직 없기
-    때문이며, 그 사실이 임시 통과가 아니라 사유 코드로 드러난다.
+    의도 조건을 모두 갖춘 Case에서도 거부된다. P2에서는 선행 조건의 구현이 없어
+    `prerequisite_not_implemented` 한 줄로 거부했고, P3-01이 그 조건을 실제로
+    만들었으므로 이제 **무엇이 없는지**가 사유 코드로 나온다.
     """
     case, _intent, instruction = _ready_feature_case(harness)
 
@@ -240,7 +241,14 @@ def test_feature_implementation_is_refused_as_not_implemented(harness):
     )
     assert response.status_code == 409
     refusals = _refusals(response)
-    assert "prerequisite_not_implemented" in refusals
+    # 설계도 계획도 없다. 두 가지가 **따로** 나와야 사람이 무엇을 갖춰야 하는지
+    # 한 번에 안다(FR-14). 수준은 AI 초안이 축별 판단과 함께 제안했으므로 그쪽
+    # 사유는 없다 — 판단이 없는 경우는 tests/test_preparation.py 가 본다.
+    assert "design_missing" in refusals
+    assert "plan_missing" in refusals
+    assert "sizing_not_decided" not in refusals
+    # 더 이상 이 코드로 거부하지 않는다. 없는 구현이 아니라 없는 산출물이 문제다.
+    assert "prerequisite_not_implemented" not in refusals
     # 의도 조건은 갖췄으므로 그쪽 사유는 없다. 무엇이 막았는지가 분명해야 한다.
     assert "intent_not_agreed" not in refusals
     assert "intent_gate_not_passed" not in refusals

@@ -34,24 +34,13 @@ import {
   type IntentStateView,
   type IntentVersionDetail,
   type RunnerInfo,
+  CONFIRMATION_LABEL,
+  ORIGIN_LABEL,
 } from './api'
 
-const ORIGIN_LABEL: Record<ContentOrigin, string> = {
-  none: '없음 (미정)',
-  user_requirement: '사용자 요구',
-  project_rule: '프로젝트 규칙',
-  observation: '관찰 사실',
-  ai_proposal: 'AI 제안',
-  ai_assumption: 'AI 가정',
-}
-
-const STATE_LABEL: Record<string, string> = {
-  undecided: '미정',
-  proposed: '제안됨',
-  user_confirmed: '사용자 확인됨',
-  needs_recheck: '재검토 필요',
-  superseded: '대체됨',
-}
+//: 문구는 `api.ts` 에 있다. 준비 산출물 화면(P3-01)도 같은 말을 써야 하므로
+//: 두 곳에 따로 두지 않는다.
+const STATE_LABEL = CONFIRMATION_LABEL
 
 const CHANGE_LABEL: Record<string, string> = {
   initial: '첫 버전',

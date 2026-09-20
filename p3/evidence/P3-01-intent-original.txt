@@ -1,0 +1,145 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 3,
+  "case_id": "case-7c3944233ec45bf3",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-draft-1",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "fields": {
+    "goal": {
+      "text": "reader.py에 로그 줄 중 ERROR가 포함된 줄만 돌려주는 기능을 추가한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "로그를 읽어 ERROR 포함 조건에 맞는 줄만 반환한다. 대소문자 구분 여부는 결정되지 않았다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "reader.py의 로그 필터링 기능과 시험용 표본 sample.log.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "constraints": {
+      "text": "Python 3.12 환경이며 파일을 읽기만 한다. 이번 의도 초안 작성에서는 코드를 변경하거나 파일을 만들지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "대소문자 구분 여부가 미정이다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "대소문자를 구분해 ERROR가 포함된 줄만 반환할까요, 아니면 error와 Error 등도 포함할까요?",
+      "summary": "오류 문자열의 대소문자 정책",
+      "decide_at": "intent",
+      "blocks": []
+    },
+    {
+      "key": "q2",
+      "text": "현재 모든 줄을 반환하는 read_lines(path)의 동작을 필터링하도록 바꿀까요, 아니면 기존 동작을 유지하고 별도 함수나 선택 옵션으로 제공할까요?",
+      "summary": "기존 읽기 함수와 기능의 연결 방식",
+      "decide_at": "design",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "expected_outcome",
+      "text": "sample.log를 대상으로 필터링하면 '2026-09-21 10:00:01 ERROR disk full'과 '2026-09-21 10:00:03 ERROR timeout'에 해당하는 두 줄만 반환하고 INFO 줄은 제외한다.",
+      "method": "결정된 호출 방식으로 sample.log를 필터링하고, 반환된 줄의 내용과 개수를 표본의 ERROR 두 줄과 대조한다.",
+      "summary": "표본의 오류 두 건 선별",
+      "method_summary": "반환 결과와 표본 정답 비교"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "open_questions",
+      "text": "ERROR, error, Error가 포함된 줄의 반환 여부가 q1에서 선택한 정책과 일치해야 한다. 소문자 및 혼합 표기의 기대값은 q1 결정 전까지 미정이다.",
+      "method": "각 표기가 포함된 줄과 해당 문자열이 없는 줄을 시험 입력으로 사용하고, q1의 결정에 따라 정한 포함·제외 결과와 실제 반환 결과를 비교한다.",
+      "summary": "문자 표기별 선택 정책 준수",
+      "method_summary": "대소문자 조합별 결과 대조"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "constraints",
+      "text": "기능 실행은 파일 읽기만 수행하며 파일 생성·수정·삭제를 하지 않는다.",
+      "method": "실행 중 파일 접근 작업을 관찰해 쓰기·생성·삭제 시도가 없는지 확인하고, 입력 파일의 실행 전후 해시와 시험 디렉터리의 파일 목록을 비교한다.",
+      "summary": "입력과 파일 상태 보존",
+      "method_summary": "파일 접근 기록과 전후 상태 점검"
+    },
+    {
+      "key": "C-04",
+      "relates_to": "constraints",
+      "text": "Python 3.12에서 필터링 기능을 실행할 수 있고 C-01 및 q1 확정 후의 C-02를 충족한다.",
+      "method": "실행 인터프리터의 버전이 Python 3.12인지 확인한 뒤 표본 및 대소문자 시험을 실행한다.",
+      "summary": "지정 Python 환경에서 정상 동작",
+      "method_summary": "3.12 인터프리터로 기능 검증"
+    }
+  ],
+  "sizing": {
+    "recommended_level": "simple",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "medium",
+        "evidence": "ERROR가 포함된 줄만 반환한다는 목적과 시험 표본은 지정되었으나 대소문자 구분 여부는 명시적으로 미정이다.",
+        "judgement": "핵심 동작은 명확하지만 일부 입력의 기대 결과는 사람의 결정이 필요하다.",
+        "unconfirmed": "q1의 대소문자 정책."
+      },
+      {
+        "axis": "change_scope",
+        "weight": "low",
+        "evidence": "추적 파일은 reader.py와 sample.log이며, reader.py에는 표준 파일 읽기를 사용하는 read_lines(path) 함수가 있다.",
+        "judgement": "현재 관찰한 구조에서는 단일 모듈의 작은 필터링 기능으로 범위를 한정할 수 있다.",
+        "unconfirmed": "q2의 함수 또는 옵션 제공 방식."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "현재 read_lines(path)는 UTF-8 파일의 모든 줄에서 끝의 개행을 제거한 목록을 반환한다. 외부 호출자의 사용 방식은 확인되지 않았다.",
+        "judgement": "기존 함수의 반환 범위를 바꿀 경우 호출자에게 미치는 영향을 아직 판단할 수 없다.",
+        "unconfirmed": "기존 호출자의 존재와 전체 줄 반환에 대한 의존 여부, q2의 결정."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "요청은 파일 읽기 전용을 명시하지만 실제 로그의 민감도와 접근 권한 정책은 제공하지 않았다.",
+        "judgement": "쓰기 제한은 확인되었으나 실제 데이터와 권한에 대한 보안 영향은 판단 근거가 부족하다.",
+        "unconfirmed": "실제 입력 로그의 민감 정보 포함 여부와 기존 파일 접근 권한."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "low",
+        "evidence": "요청된 동작은 읽은 줄을 선별해 반환하는 것이며 파일을 읽기만 한다는 제약이 있다.",
+        "judgement": "요청 범위의 필터링 로직은 국소적으로 되돌릴 수 있고 원본 데이터 변경을 요구하지 않는다.",
+        "unconfirmed": "반환 결과를 사용하는 외부 작업에서 오선별이 초래할 비용."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "low",
+        "evidence": "기존 파일 읽기 구현과 표본 내용을 확인했으며 요청된 조건은 줄 내 문자열 포함 여부다.",
+        "judgement": "구현 해법의 불확실성은 작으며 대소문자 정책과 기능 제공 방식을 결정하면 구체화할 수 있다.",
+        "unconfirmed": "q1과 q2의 결정, 실제 실행 인터프리터의 Python 3.12 여부."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "low",
+        "evidence": "sample.log에는 INFO 두 줄과 대문자 ERROR 두 줄이 있어 기본 필터링 결과를 직접 대조할 수 있다.",
+        "judgement": "기본 결과 검증은 간단하며 대소문자 정책 검증에는 추가 입력 조합이 필요하다.",
+        "unconfirmed": "q1 결정에 따른 소문자 및 혼합 표기의 기대 결과."
+      }
+    ]
+  }
+}

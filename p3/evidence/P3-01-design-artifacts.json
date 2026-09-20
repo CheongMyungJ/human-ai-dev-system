@@ -1,0 +1,218 @@
+[
+  {
+    "id": "prep-e29deab6ee4b650e",
+    "case_id": "case-7c3944233ec45bf3",
+    "stage": "design",
+    "revision": 2,
+    "artifact_id": "art-e2cde2edf048992f",
+    "artifact_rev": 1,
+    "intent_version_id": "intent-79dc9dd8f0c0532b",
+    "based_on_design_id": null,
+    "level": "standard",
+    "authoring_mode": "ai_drafted",
+    "author_run_id": "run-design-v2",
+    "summary": "design (run run-design-v2)",
+    "state": "current",
+    "created_at": "2026-09-20T16:34:48.871490+00:00",
+    "superseded_at": null,
+    "sections": [
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "change_summary",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "변경 위치·동작·영향"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "requirement_mapping",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "요구별 설계 대응"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "interfaces_and_data",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "인터페이스·데이터"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "failure_handling",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "실패·예외 처리"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "alternatives",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": false,
+        "required_at_report": false,
+        "label": "대안과 선택 이유"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "recovery",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": false,
+        "required_at_report": false,
+        "label": "실패·복구 경로"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "verifiability",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "검증 가능성"
+      },
+      {
+        "preparation_id": "prep-e29deab6ee4b650e",
+        "section": "open_questions",
+        "state": "proposed",
+        "origin": "observation",
+        "required": false,
+        "required_at_report": false,
+        "label": "미정 질문"
+      }
+    ],
+    "availability": "available",
+    "content_hash": "sha256:69e5906791a53f1e5a464f16cf6f576de2dec999f3dcb1d1a032ef806adbb307",
+    "owner_runner_id": "runner-p3-live",
+    "review": {
+      "id": "stagerev-c845f4cbe538d109",
+      "case_id": "case-7c3944233ec45bf3",
+      "stage": "design",
+      "preparation_id": "prep-e29deab6ee4b650e",
+      "mode": "auto_proceed",
+      "state": "auto_conditions_met",
+      "decision_id": null,
+      "actor": "stage-auto-proceed-policy",
+      "subject_content_hash": "sha256:69e5906791a53f1e5a464f16cf6f576de2dec999f3dcb1d1a032ef806adbb307",
+      "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+      "recorded_at": "2026-09-20T16:34:49.080724+00:00"
+    },
+    "missing_required_sections": []
+  },
+  {
+    "id": "prep-8b2e7b738a365e04",
+    "case_id": "case-7c3944233ec45bf3",
+    "stage": "design",
+    "revision": 1,
+    "artifact_id": "art-4275aa2da40bfbd7",
+    "artifact_rev": 1,
+    "intent_version_id": "intent-ef9f8f2efb61533a",
+    "based_on_design_id": null,
+    "level": "standard",
+    "authoring_mode": "ai_drafted",
+    "author_run_id": "run-design-1",
+    "summary": "design (run run-design-1)",
+    "state": "superseded",
+    "created_at": "2026-09-20T16:12:26.492151+00:00",
+    "superseded_at": "2026-09-20T16:34:48.871490+00:00",
+    "sections": [
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "change_summary",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "변경 위치·동작·영향"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "requirement_mapping",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "요구별 설계 대응"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "interfaces_and_data",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "인터페이스·데이터"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "failure_handling",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "실패·예외 처리"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "alternatives",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": false,
+        "required_at_report": false,
+        "label": "대안과 선택 이유"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "recovery",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": false,
+        "required_at_report": false,
+        "label": "실패·복구 경로"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "verifiability",
+        "state": "proposed",
+        "origin": "ai_proposal",
+        "required": true,
+        "required_at_report": true,
+        "label": "검증 가능성"
+      },
+      {
+        "preparation_id": "prep-8b2e7b738a365e04",
+        "section": "open_questions",
+        "state": "proposed",
+        "origin": "observation",
+        "required": false,
+        "required_at_report": false,
+        "label": "미정 질문"
+      }
+    ],
+    "availability": "available",
+    "content_hash": "sha256:0e1382b897d364b1857f3c67d55546e6ff01953c544a9fff7e2fec9439e6c534",
+    "owner_runner_id": "runner-p3-live",
+    "review": {
+      "id": "stagerev-c08e577d516e2cfb",
+      "case_id": "case-7c3944233ec45bf3",
+      "stage": "design",
+      "preparation_id": "prep-8b2e7b738a365e04",
+      "mode": "human_review",
+      "state": "human_reviewed",
+      "decision_id": "dec-fc6f39e8ff005c8b",
+      "actor": "owner",
+      "subject_content_hash": "sha256:0e1382b897d364b1857f3c67d55546e6ff01953c544a9fff7e2fec9439e6c534",
+      "note_summary": "변경 위치와 검증 방법을 확인했다",
+      "recorded_at": "2026-09-20T16:12:30.025753+00:00"
+    },
+    "missing_required_sections": []
+  }
+]

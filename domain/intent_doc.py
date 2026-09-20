@@ -21,11 +21,14 @@ from typing import Any
 
 from domain.models import (
     AuthoringMode,
+    AxisWeight,
     ConfirmationState,
     ContentOrigin,
     DecideAt,
     FieldChange,
     IntentField,
+    SizingAxis,
+    WorkLevel,
 )
 
 DOC_TYPE = "hads.intent-draft"
@@ -33,8 +36,13 @@ DOC_TYPE = "hads.intent-draft"
 #: "성공 기준은 의도에서 분리되지 않도록 연결한다"(intent-artifacts 1절)를 지키기
 #: 어렵다. v1 문서도 계속 읽을 수 있고, 그 문서의 기준은 **0건**이다 —
 #: 없던 기준을 지금 와서 만들어 내지 않는다.
-DOC_VERSION = 2
-SUPPORTED_DOC_VERSIONS = (1, 2)
+#:
+#: v3 에서 작업 수준 판단(`sizing`)이 들어왔다. 같은 이유다 — 축별 근거를 별도
+#: 본문 API 로 받으면 데이터 경계가 뚫리고, 의도 버전이 바뀌었을 때 옛 근거가 새
+#: 의도에 그대로 붙는다. v1·v2 문서의 축은 **0건**이며 그 Case 는 수준 미결정이다.
+#: 0건을 "간소"로 읽지 않는다.
+DOC_VERSION = 3
+SUPPORTED_DOC_VERSIONS = (1, 2, 3)
 
 #: 필수 여섯 항목의 고정 순서. 줄이지 않는다.
 FIELD_ORDER: tuple[IntentField, ...] = (
@@ -80,6 +88,7 @@ def compose(
     authoring_mode: AuthoringMode = AuthoringMode.HUMAN_TYPED,
     author_run_id: str | None = None,
     criteria: list[dict[str, Any]] | None = None,
+    sizing: dict[str, Any] | None = None,
 ) -> bytes:
     """여섯 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
@@ -103,6 +112,10 @@ def compose(
         # 성공 기준은 **이 문서 안에** 있다. 기준마다 관련 의도 항목 → 확인 방법 →
         # 기대값을 이어서 적는다(intent-artifacts 1절). 제어부에는 짧은 요약만 간다.
         "criteria": [],
+        # 작업 수준 판단도 이 문서 안에 있다(v3). 축별 **근거의 서술**은 여기 남고
+        # 제어부에는 영향·짧은 판단 한 줄만 간다. `None` 은 "판단하지 않았다"이며
+        # 빈 축 목록과 같은 뜻이다 — 어느 쪽도 "간소"가 아니다.
+        "sizing": None,
     }
 
     for field in FIELD_ORDER:
@@ -186,7 +199,46 @@ def compose(
             }
         )
 
+    if sizing is not None:
+        body["sizing"] = _compose_sizing(sizing)
+
     return json.dumps(body, ensure_ascii=False, indent=2, sort_keys=False).encode("utf-8")
+
+
+def _compose_sizing(sizing: dict[str, Any]) -> dict[str, Any]:
+    """작업 수준 판단 블록.
+
+    축마다 `근거 / 현재 판단 / 아직 확인할 것 / 영향`을 남긴다
+    (sizing-and-review-ux 1절). **숫자 점수는 없다.** `evidence` 는 본문이라 이
+    문서에 남고, 제어부로 가는 것은 `judgement`·`unconfirmed` 의 짧은 한 줄이다.
+
+    영향만 적고 판단을 비운 축은 **거부한다.** 그것은 근거 없는 점수이며, 바로
+    이 문서가 피하려는 형태다.
+    """
+    recommended = WorkLevel(sizing.get("recommended_level") or WorkLevel.STANDARD.value)
+    axes: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in sizing.get("axes") or []:
+        axis = SizingAxis(raw.get("axis"))
+        if axis.value in seen:
+            raise ValueError(f"duplicate sizing axis: {axis.value}")
+        seen.add(axis.value)
+        weight = AxisWeight(raw.get("weight"))
+        judgement = _short(str(raw.get("judgement") or "").strip())
+        if not judgement:
+            raise ValueError(f"sizing axis {axis.value} needs a judgement, not just a weight")
+        axes.append(
+            {
+                "axis": axis.value,
+                "weight": weight.value,
+                # 근거의 서술. **이 문서에만 남는다.**
+                "evidence": str(raw.get("evidence") or "").strip(),
+                "judgement": judgement,
+                # 비어 있을 수 있다. 빈 값은 "적히지 않음"이며 "없음"이 아니다.
+                "unconfirmed": _short(str(raw.get("unconfirmed") or "").strip()),
+            }
+        )
+    return {"recommended_level": recommended.value, "axes": axes}
 
 
 def parse(body: bytes) -> dict[str, Any]:
@@ -199,6 +251,9 @@ def parse(body: bytes) -> dict[str, Any]:
     # v1 문서에는 기준 항목이 없다. 빈 목록으로 읽되 "기준 0건"과 "기준을 못 읽음"을
     # 섞지 않기 위해 원본은 그대로 두고 읽는 쪽에서만 기본값을 쓴다.
     doc.setdefault("criteria", [])
+    # v1·v2 문서에는 수준 판단이 없다. `None` 으로 읽되 "판단 0건"과 "읽지 못함"을
+    # 섞지 않기 위해 원본은 그대로 두고 읽는 쪽에서만 기본값을 쓴다.
+    doc.setdefault("sizing", None)
     return doc
 
 
@@ -257,12 +312,31 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
         for c in doc["criteria"]
     ]
 
+    # 수준 판단도 **요약만** 올린다. 축별 근거의 서술은 이 원문 안에 남는다.
+    # `sizing` 이 없으면 `None` 이다 — 빈 축 목록으로 바꾸지 않는다. "판단하지
+    # 않았다"와 "판단했는데 축이 0건이다"는 다르고, 둘 다 수준 결정이 아니다.
+    sizing_report: dict[str, Any] | None = None
+    if doc.get("sizing"):
+        sizing_report = {
+            "recommended_level": doc["sizing"]["recommended_level"],
+            "axes": [
+                {
+                    "axis": a["axis"],
+                    "weight": a["weight"],
+                    "judgement_summary": a["judgement"],
+                    "unconfirmed_summary": a.get("unconfirmed") or "",
+                }
+                for a in doc["sizing"]["axes"]
+            ],
+        }
+
     prev_keys = {q["key"] for q in prev_doc["questions"]} if prev_doc else set()
     current_keys = {q["key"] for q in questions}
     return {
         "fields": fields,
         "questions": questions,
         "criteria": criteria,
+        "sizing": sizing_report,
         "question_diff": {
             "added": sorted(current_keys - prev_keys),
             "removed": sorted(prev_keys - current_keys),

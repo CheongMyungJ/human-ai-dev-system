@@ -25,15 +25,21 @@ import {
   type RunPurpose,
 } from './api'
 import { IntentPanel } from './IntentPanel'
+import { PreparationPanel } from './PreparationPanel'
 import { ResultPanel } from './ResultPanel'
 
 //: 화면에서 고를 수 있는 목적. `feature_implementation` 도 **일부러 남겨 둔다** —
-//: 고르면 서버가 "선행 조건이 아직 구현되지 않았다"고 거부하는 것을 볼 수 있어야
-//: 한다. 목록에서 지우면 그 사실이 화면에서 사라진다.
+//: 조건을 갖추지 못했으면 서버가 무엇이 빠졌는지 사유 코드로 거부하는 것을 볼 수
+//: 있어야 한다. 목록에서 지우면 그 사실이 화면에서 사라진다.
+//:
+//: P3-01에서 설계·계획 작성이 더해졌다. 두 목적을 **따로** 둔다 — 하나로 합치면
+//: 두 산출물의 검토가 한 실행에 묶여 "각각 독립된 검토 옵션"을 지킬 수 없다.
 const PURPOSE_OPTIONS: { value: RunPurpose; label: string }[] = [
   { value: 'limited_analysis', label: '제한 작업 (읽기·결과 작성)' },
   { value: 'intent_gate_review', label: 'QG-01 의미 검토 (별도 세션)' },
-  { value: 'feature_implementation', label: '기능 구현 (아직 열리지 않음)' },
+  { value: 'design_authoring', label: '설계안 작성 (동의된 의도 위에)' },
+  { value: 'plan_authoring', label: '개발계획 작성 (검토된 설계 위에)' },
+  { value: 'feature_implementation', label: '기능 구현 (준비가 갖춰지면 열린다)' },
 ]
 
 function describeAdmission(detail: unknown): AdmissionView | null {
@@ -426,6 +432,11 @@ function CaseDetailPanel(props: {
       </ul>
 
       <GatePanel detail={detail} onChanged={props.onChanged} />
+
+      {/* 수준·설계·계획과 단계별 검토. 게이트 판정과 **다른 기록**이므로 패널을
+          나눈다 — 게이트 통과가 설계 검토가 아니고, 검토가 게이트를 통과시키지도
+          않는다(FR-05 "산출물 존재, 품질 판정, 사람 검토는 구분한다"). */}
+      <PreparationPanel detail={detail} onChanged={props.onChanged} />
 
       {/* 결과·근거와 최종 확인. 게이트 판정과 **다른 기록**이므로 패널을 나눈다 —
           게이트 통과가 결과 인수가 아니고, 인수가 게이트를 통과시키지도 않는다. */}

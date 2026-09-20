@@ -443,3 +443,113 @@ def test_the_result_view_carries_references_not_bodies(harness):
         "recorded_by",
         "recorded_at",
     }, sorted(criterion)
+
+
+# ===================================================================== P3-01
+
+
+def test_sizing_and_preparation_bodies_stay_on_the_runner(harness):
+    """AC-13: 축별 근거의 서술과 설계·계획 본문이 제어부 바이트에 없다.
+
+    표식을 **본문에만** 넣는다. 축의 `evidence` 와 설계 항목의 본문이 대상이다.
+    제어부에는 영향·짧은 판단 한 줄·항목 상태만 남아야 한다.
+    """
+    from tests.conftest import DEFAULT_SIZING, fake_preparation_response
+
+    axis_marker = "AXIS-EVIDENCE-9b21e-원문본문"
+    design_marker = "DESIGN-BODY-4c7f1-원문본문"
+
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+
+    sizing = {
+        "recommended_level": "simple",
+        "axes": [
+            {**axis, "evidence": f"{axis_marker} / {axis['axis']}"}
+            for axis in DEFAULT_SIZING["axes"]
+        ],
+    }
+    harness.submit_intent_draft(
+        case["id"],
+        {
+            "goal": {"text": "목표", "origin": "user_requirement"},
+            "expected_outcome": {"text": "결과", "origin": "ai_proposal"},
+            "scope": {"text": "범위", "origin": "ai_proposal"},
+            "exclusions": {"text": "제외", "origin": "ai_proposal"},
+            "constraints": {"text": "제약", "origin": "observation"},
+            "open_questions": {"text": "미정", "origin": "ai_assumption"},
+        },
+        sizing=sizing,
+    )
+    intent = harness.latest_intent(case["id"])
+    assert harness.ai_gate_review(case["id"], intent).status_code == 201
+    harness.read_intent_original(intent)
+    assert harness.agree(case["id"], intent).status_code == 201
+
+    harness.agent.cli_executor.design_response = fake_preparation_response(
+        "설계",
+        {
+            "change_summary": f"{design_marker} 필터 함수를 더한다",
+            "verifiability": f"{design_marker} 표본 파일로 확인한다",
+        },
+    )
+    assert harness.ai_prepare(case["id"], "design").status_code == 201
+
+    controller = _controller_bytes(harness)
+    log = Path(harness.controller_config.log_path).read_bytes()
+    for marker in (axis_marker, design_marker):
+        encoded = marker.encode("utf-8")
+        assert encoded not in controller, f"{marker} 가 제어부 DB에 남았다"
+        assert encoded not in log, f"{marker} 가 제어부 로그에 남았다"
+        # 셋 다 없으면 애초에 저장되지 않은 것이므로 경계 확인이 무의미하다.
+        assert encoded in _runner_bytes(harness), f"{marker} 가 Runner에도 없다"
+
+
+def test_new_p3_01_tables_have_no_body_columns(harness):
+    """AC-13: P3-01이 더한 표에도 본문 컬럼이 없다. 요약 길이 제한도 함께 본다."""
+    import sqlite3
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    body_like = {"content", "body", "text", "raw", "payload", "content_text", "full_text",
+                 "evidence", "judgement", "sections"}
+    for table in (
+        "sizing_assessment",
+        "sizing_axis",
+        "preparation_artifact",
+        "preparation_section",
+        "stage_review_setting",
+        "stage_review",
+        "run_context_ref",
+    ):
+        columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        assert columns, f"{table} 이 없다"
+        assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"
+
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE name IN"
+        " ('sizing_assessment','sizing_axis','preparation_artifact','stage_review')"
+    ).fetchall()
+    limits = {r["name"]: r["sql"] for r in rows}
+    assert "length(reason_summary) <= 200" in limits["sizing_assessment"]
+    assert "length(judgement_summary) <= 200" in limits["sizing_axis"]
+    assert "length(summary) <= 200" in limits["preparation_artifact"]
+    assert "length(note_summary) <= 200" in limits["stage_review"]
+    conn.close()
+
+
+def test_the_controller_never_parses_the_preparation_document(harness):
+    """AC-13: 제어부는 설계·계획 본문을 **해석하지 않는다.**
+
+    항목 상태는 Runner의 보고로만 들어온다. 보고 전에는 필수 항목이 전부
+    빠진 것으로 보이며, 그것이 올바른 상태다 — 보지 않은 것을 채워진 것으로
+    읽으면 빈 산출물이 선행 조건을 통과한다.
+    """
+    import inspect
+
+    from controller import api, repository
+
+    for module in (api, repository):
+        source = inspect.getsource(module)
+        assert "prep_doc.parse(" not in source, f"{module.__name__} 이 산출물 본문을 해석한다"
+        assert "prep_doc.structure(" not in source

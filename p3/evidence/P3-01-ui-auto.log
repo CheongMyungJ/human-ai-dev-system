@@ -1,0 +1,4 @@
+[ui-auto] 자동 조건 충족 상태 표시=True
+[ui-auto] 사람 승인 기록 없음 표시=True
+[ui-auto] 정책 주체 표시=True
+[ui-auto] 계획 사람 검토 표시=False

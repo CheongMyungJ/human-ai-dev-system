@@ -104,3 +104,16 @@ class ControllerClient:
     def send_gate_review(self, payload: dict) -> Any:
         """AI 의미 검토가 찾은 것을 올린다. **판정은 제어부가 다시 계산한다.**"""
         return self._post("/api/runner/gate-reviews", payload)
+
+    # ----------------------------------------------------------- P3-01
+
+    def create_preparation_artifact(self, payload: dict) -> Any:
+        """AI가 작성한 설계·계획을 준비 산출물로 등록한다.
+
+        의도 초안 등록과 같은 방향이다 — 원문은 이미 이 Runner에 있고 제어부로는
+        참조와 요약만 올라간다. 어느 의도 버전 위에 세운 것인지는 **제어부가 정한다.**
+        """
+        return self._post("/api/runner/preparation-artifacts", payload)
+
+    def send_preparation_structure(self, payload: dict) -> Any:
+        return self._post("/api/runner/preparation-structure", payload)

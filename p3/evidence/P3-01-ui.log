@@ -1,0 +1,26 @@
+[ui] project=prj-6c9ca68f9b2db81e case=case-7c3944233ec45bf3
+[ui] OK  준비 패널 제목
+[ui] OK  축 표
+[ui] OK  수준 조정 폼
+[ui] OK  점수 합산 금지 문구
+[ui] OK  설계 단계
+[ui] OK  계획 단계
+[ui] OK  검토 방식 표시
+[ui] 이유 비었을 때 조정 버튼 disabled=True
+[ui] 남는 위험만 비었을 때 disabled=True
+[ui] 둘 다 채운 뒤 disabled=False
+[ui] 조정 후 심층 표시=True
+[ui] 조정 후 부족 항목 표시=True
+[ui] 되돌린 뒤 표준 표시=True
+[ui] 수준 판단 이력 표시=True
+[ui] 원문 열람 버튼 2개
+[ui] 원문 창 표시=True
+[ui] 사람 검토 문구=True
+[ui] 자동 조건 충족 문구=True
+[ui] '사람 승인 아님' 설명 문구=False
+[ui] 진입 조건 미충족 표시=True
+[ui]   사유 문구 표시(설계안이 대체된 의도 버전 위에 있거...)=True
+[ui]   사유 문구 표시(개발계획이 대체된 의도 버전 위에 있...)=True
+[ui]   사유 문구 표시(설계·계획으로 이월한 질문이 남아 있...)=True
+[ui]   사유 문구 표시(최신 의도에 대한 사람의 동의가 없다...)=True
+[ui] 쓰기 권한 거부 문구=True
