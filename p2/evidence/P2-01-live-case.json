@@ -1,0 +1,65 @@
+{
+  "id": "case-575bc1cb004bcc22",
+  "project_id": "prj-80a900428f0d29cd",
+  "title": "P2-01 실제 연결 확인",
+  "kind": "feature",
+  "status": "received",
+  "created_at": "2026-09-20T11:43:52.202561+00:00",
+  "updated_at": "2026-09-20T11:43:52.202561+00:00",
+  "artifacts": [
+    {
+      "artifact_id": "art-a40782fb21d589f3",
+      "revision": 1,
+      "case_id": "case-575bc1cb004bcc22",
+      "kind": "instruction",
+      "content_hash": "sha256:7646ec77f9bf21cceecb2d122d5d48b9db66a109fe8829f16f1f2882574e0218",
+      "byte_size": 88,
+      "owner_runner_id": "runner-local-1",
+      "availability": "available",
+      "summary": "지시 원문 v1",
+      "created_at": "2026-09-20T11:43:52.374728+00:00"
+    },
+    {
+      "artifact_id": "art-41f5e3effc9b7ce5",
+      "revision": 1,
+      "case_id": "case-575bc1cb004bcc22",
+      "kind": "run_output",
+      "content_hash": "sha256:80bc29318b456afbedf42319610dc0b35dcb1407333c4a2d32dbb13e1e262a9f",
+      "byte_size": 188,
+      "owner_runner_id": "runner-local-1",
+      "availability": "available",
+      "summary": "run output for run-live-1789904633",
+      "created_at": "2026-09-20T11:43:53.712581+00:00"
+    }
+  ],
+  "intent_versions": [],
+  "decisions": [],
+  "runs": [
+    {
+      "run_id": "run-live-1789904633",
+      "case_id": "case-575bc1cb004bcc22",
+      "task_id": "task-1",
+      "role": "author",
+      "tool_id": "local-echo",
+      "mode": "p2-01-local",
+      "permission": "read_only",
+      "instruction_artifact_id": "art-a40782fb21d589f3",
+      "instruction_artifact_rev": 1,
+      "status": "finished",
+      "assignment_generation": 1,
+      "assigned_runner_id": "runner-local-1",
+      "outcome": "completed",
+      "exit_code": 0,
+      "output_artifact_id": "art-41f5e3effc9b7ce5",
+      "output_artifact_rev": 1,
+      "session_ref": null,
+      "residual_activity": "none",
+      "observed_tool_version": "local-echo/p2-01",
+      "created_at": "2026-09-20T11:43:53.293126+00:00",
+      "assigned_at": "2026-09-20T11:43:53.705543+00:00",
+      "finished_at": "2026-09-20T11:43:53.723375+00:00",
+      "usage": "not_reported",
+      "workspace_effect": null
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+[project]
+name = "human-ai-dev-system"
+version = "0.1.0.dev0"
+description = "사람-AI SW 개발 협업 시스템 (P2-01 최소 골격)"
+requires-python = "==3.12.*"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-q"
+
+[tool.setuptools]
+packages = ["controller", "runner", "domain"]

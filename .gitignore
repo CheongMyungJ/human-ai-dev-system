@@ -12,6 +12,10 @@ htmlcov/
 # Web build dependencies and output
 node_modules/
 dist/
+*.tsbuildinfo
+
+# Local runtime data (controller DB, runner artifacts, ledgers, logs)
+var/
 
 # Local configuration and secrets
 .env

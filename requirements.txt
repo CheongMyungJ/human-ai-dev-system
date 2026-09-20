@@ -1,0 +1,7 @@
+# P2-01 제어부·Runner 런타임 의존성.
+# 런타임은 Python 3.12(이 PC 기준 3.12.10)로 고정한다. 근거: DEVELOPMENT.md P2-PLAN-01.
+# 정확한 설치 버전은 requirements.lock.txt 에 있다. 여기에는 상한만 둔다.
+fastapi>=0.115,<1.0
+uvicorn>=0.34,<1.0
+httpx>=0.28,<1.0
+pytest>=8.3,<9.0

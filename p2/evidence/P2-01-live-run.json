@@ -1,0 +1,73 @@
+{
+  "run_id": "run-live-1789904633",
+  "case_id": "case-575bc1cb004bcc22",
+  "task_id": "task-1",
+  "role": "author",
+  "tool_id": "local-echo",
+  "mode": "p2-01-local",
+  "permission": "read_only",
+  "instruction_artifact_id": "art-a40782fb21d589f3",
+  "instruction_artifact_rev": 1,
+  "status": "finished",
+  "assignment_generation": 1,
+  "assigned_runner_id": "runner-local-1",
+  "outcome": "completed",
+  "exit_code": 0,
+  "output_artifact_id": "art-41f5e3effc9b7ce5",
+  "output_artifact_rev": 1,
+  "session_ref": null,
+  "residual_activity": "none",
+  "observed_tool_version": "local-echo/p2-01",
+  "created_at": "2026-09-20T11:43:53.293126+00:00",
+  "assigned_at": "2026-09-20T11:43:53.705543+00:00",
+  "finished_at": "2026-09-20T11:43:53.723375+00:00",
+  "usage": "not_reported",
+  "workspace_effect": null,
+  "events": [
+    {
+      "run_id": "run-live-1789904633",
+      "seq": 1,
+      "ts": "2026-09-20T11:43:53.708862+00:00",
+      "type": "run_started",
+      "native_type": "p2-01-local-echo.start",
+      "raw_ref": null,
+      "received_at": "2026-09-20T11:43:53.715170+00:00"
+    },
+    {
+      "run_id": "run-live-1789904633",
+      "seq": 2,
+      "ts": "2026-09-20T11:43:53.708862+00:00",
+      "type": "tool_call_started",
+      "native_type": "p2-01-local-echo.read_instruction",
+      "raw_ref": null,
+      "received_at": "2026-09-20T11:43:53.715170+00:00"
+    },
+    {
+      "run_id": "run-live-1789904633",
+      "seq": 3,
+      "ts": "2026-09-20T11:43:53.710210+00:00",
+      "type": "tool_call_finished",
+      "native_type": "p2-01-local-echo.read_instruction",
+      "raw_ref": null,
+      "received_at": "2026-09-20T11:43:53.715170+00:00"
+    },
+    {
+      "run_id": "run-live-1789904633",
+      "seq": 4,
+      "ts": "2026-09-20T11:43:53.710210+00:00",
+      "type": "assistant_message",
+      "native_type": "p2-01-local-echo.summary",
+      "raw_ref": null,
+      "received_at": "2026-09-20T11:43:53.715170+00:00"
+    },
+    {
+      "run_id": "run-live-1789904633",
+      "seq": 5,
+      "ts": "2026-09-20T11:43:53.710210+00:00",
+      "type": "run_finished",
+      "native_type": "p2-01-local-echo.finish",
+      "raw_ref": null,
+      "received_at": "2026-09-20T11:43:53.715170+00:00"
+    }
+  ]
+}

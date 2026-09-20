@@ -1,0 +1,20 @@
+health: {'status': 'ok', 'schema_version': 1, 'relay_buffered': 0}
+GET / -> 200, contains root div: True
+registered runners: ['runner-local-1']
+project: prj-80a900428f0d29cd live-demo-1789904631
+case: case-575bc1cb004bcc22 status=received
+submit artifact -> HTTP 202 (202 = 접수, 저장 완료 아님)
+accepted: {"intake_id": "intake-4fa17b9c2383b68b", "artifact_id": "art-a40782fb21d589f3", "revision": 1, "state": "pending", "availability": "pending", "content_hash": "sha256:7646ec77f9bf21cceecb2d122d5d48b9db66a109fe8829f16f1f2882574e0218", "note": "relayed to the owning runner; not stored on the controller"}
+intake stored_at=2026-09-20T11:43:52.690699+00:00 state=stored
+create run run-live-1789904633: HTTP 201 created=True
+same run_id resent: HTTP 200 created=False  (만들지 않은 것을 201 Created 로 보고하지 않는다)
+run finished: outcome=completed exit_code=0 generation=1 usage=not_reported residual=none events=5
+event types: run_started, tool_call_started, tool_call_finished, assistant_message, run_finished
+artifact instruction: availability=available hash=sha256:7646ec77f9bf21cceec… owner=runner-local-1
+artifact run_output: availability=available hash=sha256:80bc29318b456afbedf… owner=runner-local-1
+effect file case-575bc1cb004bcc22.log: 1 줄 (실제 실행 횟수)
+  2026-09-20T11:43:53.709208+00:00	run-live-1789904633
+marker in controller db bytes: False
+marker in controller log: False
+marker in runner artifact store: True
+summary column value (요약만 저장): '지시 원문 v1'

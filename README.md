@@ -4,13 +4,41 @@
 
 GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMyungJ/human-ai-dev-system) — 비공개. 설계 문서와 후속 개발 코드를 같은 저장소에서 관리한다.
 
-정본 위치는 `C:\git\human-ai-dev-system-design`이다. 이 디렉터리의 문서가 이후 설계·구현의 기준이다. 주요 제품 결정 58건을 통합했으며 구현과 실제 CLI·복구·성능 시험은 아직 수행하지 않았다.
+정본 위치는 `C:\git\human-ai-dev-system-design`이다. 이 디렉터리의 문서가 이후 설계·구현의 기준이다. 주요 제품 결정 58건을 통합했다. 구현은 **P2-01 최소 골격까지** 와 있다(아래 실행 방법 참조). 실제 코딩 CLI 연결, 품질 게이트, GitHub 연동, 원격·성능 시험은 아직이다.
 
 ## 개발을 시작하는 새 세션
 
-[개발 진행 안내서 DEVELOPMENT.md](DEVELOPMENT.md)를 읽고 현재 단계를 수행한다. 이 문서에 현재 상태, 6단계별 범위·성공 기준, 코드 변경 전 필수 plan, 검증·인계 절차가 있다. 시작 단계는 P1 CLI 연결 검증이며 아직 제품 구현을 시작하지 않았다.
+[개발 진행 안내서 DEVELOPMENT.md](DEVELOPMENT.md)를 읽고 현재 단계를 수행한다. 이 문서에 현재 상태, 6단계별 범위·성공 기준, 코드 변경 전 필수 plan, 검증·인계 절차가 있다. P1은 제한 수용으로 종료했고 현재 단계는 P2 최소 업무 흐름이다.
 
 새 세션 요청 예시: `DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘.`
+
+## 실행 방법 (P2-01 기준)
+
+**필요한 것:** Windows, Python 3.12(`py -3.12` 로 잡히는 것), Git, Node.js 22 이상.
+런타임은 3.12로 고정돼 있다. `python` 과 `py` 의 기본 버전이 달라도 스크립트가 `.venv` 의
+인터프리터를 직접 가리키므로 세션마다 달라지지 않는다.
+
+```powershell
+# 1) 한 번만: 저장소 로컬 가상환경 + Python 의존성 + 웹 UI 빌드
+scripts\bootstrap.ps1
+
+# 2) 제어부 (기본 http://127.0.0.1:8765, 빌드된 화면을 같은 주소에서 서빙)
+scripts\run-controller.ps1
+
+# 3) 다른 창에서 로컬 Runner
+scripts\run-runner.ps1
+
+# 4) 전체 시험 (P2-01 pytest 19건 + P1 OpenCode 문서 계약 unittest 18건)
+scripts\run-tests.ps1
+```
+
+설치 대상은 저장소 안의 `.venv\` 와 `web\node_modules\` 뿐이다. 사용자 전역 Python·Node·CLI
+설정은 바꾸지 않는다. 상태 DB·원문·로그는 `var\` 에 생기며 커밋하지 않는다. 지워도 다시 만들어진다.
+
+**지금 동작하는 범위:** 프로젝트·Case 생성, 원문 제출과 Runner 영속 저장, 의도 버전·결정 기록,
+Run 생성·배정·실행·결과 표시, 강제 종료 후 복원, 같은 요청 재전송의 중복 실행 방지.
+**아직 아닌 것:** 의도 초안·피드백·동의 흐름(P2-02), 진입 조건 검사와 실제 코딩 CLI 실행(P2-03),
+원문 본문 열람(P2-04). P2-01의 실행기는 코딩 CLI가 아니다.
 
 ## 먼저 읽을 문서
 
@@ -46,6 +74,7 @@ GitHub 저장소: [CheongMyungJ/human-ai-dev-system](https://github.com/CheongMy
 | [P1-02 CLI 실증 결과](p1/evidence/P1-02-results.md) | Codex·Claude 실제 실행 증거, 권한 경계·이벤트 스키마·완료 판정에서 확인한 것 |
 | [P1-03 중지·복구 실증 결과](p1/evidence/P1-03-results.md) | 단절 시 다음 도구 호출 차단, 훅 fail-open, 강제 종료의 프로세스 잔류 |
 | [P1-04 OpenCode 어댑터 계약](p1/opencode/contract.md) | 설치 없이 공식 V2 문서로만 만든 계약·fixture·계약 시험. 실증 아님 |
+| [P2-01 최소 골격 실행 결과](p2/evidence/P2-01-results.md) | 제어부·Runner·화면의 실제 연결, 강제 종료 복원, 중복 실행 방지, 원문 비보관 확인 |
 
 ## 검토 결과의 경계
 

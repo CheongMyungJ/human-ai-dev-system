@@ -7,3 +7,9 @@
 p1/evidence/*.jsonl -text
 p1/evidence/*.stderr.log -text
 p1/evidence/*.result.json -text
+
+# P2 실행 증거도 원문 바이트다.
+p2/evidence/*.log -text
+p2/evidence/*.json -text
+p2/evidence/*.out -text
+p2/evidence/*.png binary

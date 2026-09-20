@@ -15,15 +15,15 @@
 | 저장소 | https://github.com/CheongMyungJ/human-ai-dev-system — 비공개 |
 | 기본 작업 디렉터리 | `C:\git\human-ai-dev-system-design` |
 | 설계 기준 | v0.6, 사용자 결정 D-01~58 |
-| 전체 개발 상태 | **제품 코드 미착수**. 설계 문서, 개발 안내서, 공통 어댑터 계약, P1-02·P1-03 실증 harness와 실행 증거, OpenCode 문서 계약·계약 시험까지 준비됨 |
+| 전체 개발 상태 | **제품 코드 P2-01까지 구현**. 제어부(FastAPI·SQLite)·로컬 Runner·React/TS 화면이 실제로 연결되고 시험 19건이 통과한다. 실제 코딩 CLI 실행 연결·진입 조건 검사·게이트·GitHub·원격은 아직이다 |
 | 현재 단계 | **P2 — 최소 업무 흐름** (P1은 제한 수용으로 종료) |
-| 현재 단계 상태 | `READY` |
-| 다음 하위 작업 | **P2-01 — 최소 골격·영속 상태.** P1에서 이월한 '중복 호출 방지' 검증을 여기에 포함한다 |
-| 활성 plan | 없음. `P1-PLAN-01`은 완료로 종료했다(내용은 보존). 다음 세션이 `P2-PLAN-01`을 작성해야 함 |
-| 마지막 구현 검증 | 2026-09-20 — 읽기·쓰기·권한 거절·세션 분리([P1-02](p1/evidence/P1-02-results.md))와 단절 시 다음 호출 차단([P1-03](p1/evidence/P1-03-results.md))을 두 CLI에서 실제 실행으로 확인 |
-| 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함 |
+| 현재 단계 상태 | `IN_PROGRESS` — P2-01 완료, P2-02부터 남음 |
+| 다음 하위 작업 | **P2-02 — 의도·피드백.** 여섯 필드 초안, 원문/가정/질문, 피드백 반영과 버전 차이, 명시 동의 |
+| 활성 plan | 없음. `P2-PLAN-01`(P2-01)은 완료로 종료했고 원문은 [plans/P2-PLAN-01.md](plans/P2-PLAN-01.md)에 있다. 다음 세션이 `P2-PLAN-02`를 작성해야 함 |
+| 마지막 구현 검증 | 2026-09-20 — P2-01: 실제 프로세스·브라우저로 제어부·Runner·화면 연결, 강제 종료 후 복원, 같은 요청 재전송의 중복 실행 방지, 원문 비보관을 확인([P2-01 결과](p2/evidence/P2-01-results.md)). pytest 19 + P1 계약 unittest 18 통과 |
+| 알려진 제약 | OpenCode는 조사 범위에서 설치 흔적 없음(2026-09-20 확인). 문서 계약만 다루고 실환경 검증은 제외 사실을 유지. Codex·Claude는 자동 업데이트가 켜져 있어 실증 결과에 관측 버전을 함께 남겨야 함. **P2-01의 Runner 실행기는 코딩 CLI가 아니다** — CLI 연결은 P2-03 |
 | 필요한 사용자 결정 | 현재 없음. 2026-09-20에 P1 제한 수용을 결정받았다(아래 제한 수용 기록 참조) |
-| 다음 세션 첫 행동 | 시작 절차 → P2 필수 참조(의도 산출물·전체 설계·데이터 경계, FR-03/04/13/15/16/23/29) 읽기 → `P2-PLAN-01` 작성·공유 → P2-01 구현 |
+| 다음 세션 첫 행동 | 시작 절차 → `scripts\bootstrap.ps1` · `scripts\run-tests.ps1` 로 현재 코드가 실제로 도는지 먼저 확인 → P2 필수 참조 중 [의도 산출물](intent-artifacts.md) 1~4절과 FR-03/04/13 다시 읽기 → `P2-PLAN-02` 작성·공유 → P2-02 구현 |
 
 위 표는 시작 시점의 기록이다. **이 표만 믿지 말고 실제 Git 상태·코드·검증 증거와 대조한다.** 코드가 이미 있는데 구현 미착수로 표시되거나, 이전 세션이 끝나지 않은 상태면 중복 구현하지 말고 먼저 상태를 복구한다.
 
@@ -52,145 +52,15 @@
 
 ### 활성 plan
 
-현재 활성 plan은 없다. 아래 `P1-PLAN-01`은 **완료로 종료**했으며 근거 보존을 위해 남겨 둔다.
-다음 세션은 P2-01을 위한 `P2-PLAN-01`을 같은 양식으로 새로 작성한다.
+현재 활성 plan은 없다. 완료된 plan 원문은 근거 보존을 위해 `plans/` 에 그대로 둔다(내용 수정 없음).
 
-```text
-Plan ID: P1-PLAN-01 (완료, 2026-09-20 종료)
-단계 / 이번 세션 하위 작업: P1 — CLI 연결 검증 / P1-01 환경·계약(완료), P1-02 실증(완료), P1-03 중지·복구(완료)
-작성·수정 시점: 2026-09-20 작성, 같은 날 P1-02·P1-03 수행 결과로 갱신
-기준 Git 브랜치·커밋 / 기존 미커밋 변경:
-  main / 815f3f3 "docs: add plan-first development guide for staged sessions"
-  시작 시 작업 트리 clean. 사용자 미커밋 변경 없음
-목표와 사용자에게 보일 결과:
-  이 PC에서 Codex·Claude·OpenCode의 실제 설치·인증·권한 상태를 사실로 확정하고,
-  CLI에 종속되지 않는 공통 실행 계약(입력·이벤트·결과·능력표) 초안을 만든 뒤,
-  최소 실행 harness로 두 CLI의 실제 동작 증거를 남긴다.
-포함 범위:
-  P1-01 환경 실측, 인증 구성 확인, 공통 어댑터 계약 초안, capability 표 초안, P1-02 실행 계획
-  P1-02 임시 시험 저장소에서의 최소 실행 harness와 실제 호출 증거
-제외 범위:
-  제품 UI·업무 엔진·DB 구현(P2), GitHub 쓰기(P5), 사용자 실제 프로젝트 변경,
-  CLI·계정의 설치·로그인·설정 변경, OpenCode 설치, 사용자 전역 CLI 설정 변경,
-  재연결·재개 실증(P2 이후)
-적용 결정·요구사항 ID: FR-28, FR-29(별도 검토 세션), NFR-07, NFR-08, D-42·44(신뢰 모드 한계), D-45(CLI 교체 확인), D-53
-읽은 근거 / 확인한 사실 / 아직 검증할 가정:
-  읽음: cli-pause-feasibility.md, review-tech-findings.md, execution-workspace-review.md, FR-28, NFR-07/08
-  확인한 사실: p1-environment-contract.md 2~5절(실행한 조회 명령과 실측값)
-  아직 검증할 가정: CLI 도움말의 옵션이 Windows 네이티브에서 실제로 동작하는지,
-    이벤트 스트림이 도구 경계를 구별 가능한 형태로 나오는지, 권한 설정이 실제로 쓰기를 막는지
-필요한 설계 선택과 이유:
-  (1) 계약을 CLI 인자 형태가 아니라 "제어부가 표현할 의미"로 정의 — NFR-07의 종속 금지 요구
-  (2) 능력 상태를 doc_only / verified / unsupported / unknown 네 값으로 분리 —
-      "도움말에 옵션이 있음"을 "지원함"으로 승격시키지 않기 위함
-  (3) outcome에 unknown을 정식 값으로 포함 — 종료 코드만으로 완료를 선언하지 않기 위함(FR-28)
-  (4) 어댑터가 자격증명 파일을 읽지 않음 — 인증은 CLI 자체 저장소에 유지(FR-28, NFR-07)
-변경할 구성 요소·파일(확정):
-  P1-01: p1-environment-contract.md(신규), DEVELOPMENT.md(상태·plan·인계). 제품 코드 없음
-  P1-02: p1/harness/run_cli.py(실증용 harness), p1/evidence/(실행 증거와 결과 문서).
-         시험 저장소는 %LOCALAPPDATA%\Temp\hads-p1\testrepo, 원본 증거는 같은 경로의 evidence\.
-         제품 코드는 아직 없다. harness는 P1 실증 도구이며 P2에서 그대로 제품에 넣지 않는다
-실행 순서:
-  1. [완료] 시작 절차: git 상태·원격·HEAD 읽기 확인, 안내서 상태표와 실제 상태 대조
-  2. [완료] P1 필수 참조와 FR-28·NFR-07/08 확인
-  3. [완료] 환경 실측: OS·셸·Python·Git·Node·gh 경로와 버전
-  4. [완료] CLI 실측: codex·claude 경로·버전·설치 방식, opencode 다중 경로 조사로 PATH 미조회와 구분
-  5. [완료] 인증 구성 확인(존재·모드만, 내용 미조회)과 doctor 진단 요약
-  6. [완료] 공통 실행 계약 초안 v0와 capability 표 작성 → p1-environment-contract.md
-  7. [완료] 이 plan 기록과 사용자 공유, 상태표·인계 갱신, 로컬 커밋
-  8. [완료] P1-02-a: 임시 시험 저장소 준비(시스템 임시 경로, git init, 샘플 파일 2~3개).
-     사용자의 실제 프로젝트와 이 설계 저장소는 대상으로 쓰지 않는다
-  9. [완료] P1-02-b: harness 최소 구현 — Python으로 CLI를 자식 프로세스로 실행하고
-     stdout/stderr 스트림을 소비, 이벤트 원문을 run_id별 파일에 append, 종료·타임아웃 처리
- 10. [완료] P1-02-c: 읽기 전용 호출 실증(두 CLI 각각) — 시험 저장소 파일 요약 요청.
-     구조화 출력(`codex exec --json`, `claude -p --output-format stream-json`) 실물 스키마 기록
- 11. [완료] P1-02-d: 작은 변경 호출 실증 — 시험 저장소의 한 파일에 정해진 한 줄 추가.
-     실행 전후 git 상태 비교로 실제 변경 확인
- 12. [완료] P1-02-e: 세션 식별·분리 확인 — 작성 호출과 검토 호출의 세션 식별자가 다름을 증거로 확인
- 13. [완료] P1-02-f: 권한 경계 확인 — 허용 밖 경로 쓰기를 요청했을 때의 실제 결과 관찰
- 14. [완료] P1-02-g: capability 표를 실측으로 갱신(doc_only → verified/unsupported)하고
-     실패·거절 사례도 함께 기록
- 15. [완료] P1-03 중지·복구 실증 — 결과: p1/evidence/P1-03-results.md
-     제어 지점 선택과 근거:
-       Codex  → 저장소 로컬 `<repo>/.codex/hooks.json`의 PreToolUse.
-                사용자 전역 `~/.codex/config.toml`을 바꾸지 않아도 되고,
-                설치 바이너리에 PreToolUse·hooks.json 식별자가 실재함을 확인했다.
-                제약: 비관리 hook은 신뢰 승인이 필요하다. 비대화식에서는
-                `--dangerously-bypass-hook-trust`가 필요한지 실측하고, 필요하면 제약으로 기록한다
-       Claude → `--settings` JSON의 PreToolUse 훅. 세션 한정이라 사용자 설정을 바꾸지 않는다.
-                `--include-hook-events`로 훅 수명주기를 스트림에서 함께 관측한다
-       app-server 경로는 이번에 쓰지 않는다. 두 CLI에 공통으로 적용 가능한 최소 경로를 먼저 검증한다
-     15-a [완료] 연결 상태 파일과 gate hook 구현(p1/harness/gate_hook.py).
-          상태가 disconnected면 PreToolUse에서 거부하고, 모든 호출의 시각·도구·판정을 로그로 남긴다
-     15-b [완료] harness에 실시간 감시 추가 — 이벤트 스트림에서 tool_call_finished를 N회 관측하면
-          연결 상태 파일을 disconnected로 바꾸고 그 시각을 기록한다(단절 주입)
-     15-c [완료] 순차 3단계 작업(a.txt → b.txt → c.txt 생성)을 시키고 1회차 완료 직후 단절 주입.
-          **부수효과로 검증한다: a.txt는 있고 b.txt·c.txt는 없어야 한다**
-     15-d [완료] 훅 없이 같은 작업을 실행해 대조군을 만든다(세 파일 모두 생성되는지)
-     15-e [완료] 강제 종료 대조 — 장시간 실행 중 harness가 자식을 종료했을 때
-          `.cmd` 진입점 아래 실제 CLI 프로세스와 그 자식이 함께 끝나는지 확인.
-          안전 중지와 강제 종료를 같은 지원 수준으로 표시하지 않는다
-     15-f [완료] 결과를 capability 표에 반영. 미지원 경로는 unsupported로 명시하고
-          해당 기능의 지원을 보류한다. 재연결 대조는 범위 밖이면 미검증으로 남긴다
- 16. [완료] P1-04 OpenCode 문서 계약·결론 — 결과: p1/opencode/contract.md
-     대상 릴리스 고정: **V2 한 계열만** 사용한다. cli-pause-feasibility.md가 경고한 대로
-       V1 server endpoint와 V2 permission 구조를 섞지 않는다. 근거로 쓴 공식 문서는
-       /v2/docs/{cli,permissions,build/plugins,build/sdk,api} 다섯 페이지로 제한한다
-     연결 방식 후보와 판단 근거:
-       (가) `opencode run` 비대화식 CLI — V2 문서에 출력 형식·세션·권한 플래그가 없다.
-            구조화 이벤트와 세션 식별을 얻을 수 없으므로 제어 경로로 부적합
-       (나) **서버/SDK 경로** — `/api/session` 생성, `/api/session/{id}/prompt`,
-            `/api/event` 구독, `/api/session/{id}/permission[/{requestID}/reply]`.
-            RunRequest·이벤트·세션·권한을 모두 표현할 수 있어 이쪽을 기준으로 계약을 쓴다
-     16-a [완료] 공식 문서에서 확인한 사실만으로 OpenCode V2 어댑터 계약 문서 작성.
-          RunRequest/이벤트/RunResult 매핑, 권한 매핑, 미지원·불명 항목 표기
-     16-b [완료] 응답·이벤트 fixture 작성. **문서에서 재구성한 것이며 실제 캡처가 아님을
-          파일과 문서에 명시한다.** 실행 증거(p1/evidence/)와 다른 디렉터리에 둔다
-     16-c [완료] 계약 시험 작성(표준 라이브러리 unittest, 외부 의존성 없음).
-          fixture → 정규화 이벤트·결과 변환을 검증하고, **확인 불가 능력이 doc_only/unknown으로
-          남아 있는지도 함께 시험한다**. 시험 통과를 실환경 검증으로 표시하지 않는다
-     16-d [완료] 세 도구 capability 표의 OpenCode 열을 문서 기준으로 채우고,
-          필수 능력의 공백·대안·후속 작업을 명시
-     16-e [완료] P1 전체 완료 조건 점검. 남은 미검증 항목과 그 처리(P2 이월/사용자 결정)를 제시
-성공 기준:
-  AC-1: 세 CLI의 설치·버전·경로·인증 구성 상태가 확인 방법과 함께 기록되고,
-        PATH 미조회와 설치 흔적 없음이 구분된다
-  AC-2: 비밀값 원문을 읽거나 기록하지 않고도 실행 가능 여부를 판단할 수 있음이 계약에 반영된다
-  AC-3: 공통 실행 입력·이벤트·결과 계약 초안이 특정 CLI 인자 구조에 종속되지 않고,
-        능력 차이를 숨기지 않는 상태값 체계를 갖는다
-  AC-4: P1-02~04의 실증 계획이 이 문서에 남아 다음 세션이 재계획 없이 이어갈 수 있다
-  AC-5(P1-02): 두 CLI 각각에 대해 읽기·작은 변경·구조화 결과·세션 분리의 실제 실행 증거가 있고,
-        성공/실패/권한 질문이 구분되며 종료 코드만으로 성공을 판정하지 않는다
-  AC-7(P1-04): OpenCode 계약이 **단일 V2 문서 계열**에서 나오고, fixture가 재구성물임이
-        파일·문서에 표시되며, 계약 시험 통과가 실환경 검증으로 표시되지 않는다.
-        필수 능력의 공백과 대안이 구체적으로 적힌다
-  AC-6(P1-03): 단절 주입 후 **다음 도구 호출이 실제로 시작되지 않았음**을 부수효과로 확인한다.
-        이미 시작한 호출의 결과는 보존된다. 지원되지 않는 CLI·경로는 unsupported로 표시하고
-        프롬프트 지시나 프로세스 종료를 안전 중지와 같은 지원 수준으로 적지 않는다
-검증 방법:
-  AC-1 → `Get-Command -All`, `<tool> --version`, `npm ls -g --depth=0`, `winget list`,
-         `Test-Path` 후보 경로, `codex doctor` / `claude doctor`.
-         증거: p1-environment-contract.md 1~4절(명령과 실측값 대조 가능)
-  AC-2 → 인증 파일은 Test-Path로 존재·크기·시각만 확인. 내용 조회 없음.
-         증거: 같은 문서 4절과 이 세션의 명령 이력
-  AC-3 → 같은 문서 6~8절을 FR-28·NFR-07 수용 기준과 한 항목씩 대조. 미확인은 unknown으로 남김
-  AC-4 → 같은 문서 9절과 이 plan의 15~16번 항목
-  AC-5 → 실제 명령·출력·git diff·세션 식별자를 증거로 기록.
-         결과: p1/evidence/P1-02-results.md 와 같은 디렉터리의 run별 result.json / stdout.jsonl
-  AC-7 → p1/opencode/contract.md 의 모든 주장에 공식 문서 출처를 달고,
-         `python -m unittest discover p1/opencode` 로 계약 시험을 실행한다.
-         fixture 파일에는 `"_source": "reconstructed-from-docs"` 를 넣는다
-  AC-6 → 시험 저장소에서 파일 존재 여부로 판정(a.txt 있음 / b.txt·c.txt 없음).
-         대조군(훅 없음)에서는 세 파일이 모두 생기는지 확인해 훅이 원인임을 보인다.
-         gate hook 로그의 호출별 시각·도구·판정과 이벤트 스트림 시각을 함께 남긴다
-실패·중단 시 상태 보존과 복구 방법:
-  P1-01 산출물은 문서뿐이므로 커밋으로 보존한다. 사용자 작업 트리는 건드리지 않는다.
-  P1-02는 시스템 임시 경로의 시험 저장소만 사용하고, 중단 시 그 경로와 남은 프로세스를 인계에 기록한다.
-  CLI 호출이 실패하면 원문 출력을 남기고 추정으로 성공/실패를 채우지 않는다.
-사용자에게 필요한 결정 / 없는 경우 없음:
-  현재 없음. 다만 P1-02는 사용자의 기존 Codex·Claude 로그인으로 실제 호출을 하므로
-  계정 사용량이 소모된다. 이는 P1 범위("기존 설치·인증을 사용한 최소 실행 harness")에 이미 포함된다.
-```
+| Plan ID | 대상 | 상태 | 원문 |
+|---|---|---|---|
+| `P1-PLAN-01` | P1-01~04 | 완료 (2026-09-20) | [plans/P1-PLAN-01.md](plans/P1-PLAN-01.md) |
+| `P2-PLAN-01` | P2-01 | **완료 (2026-09-20)** — 성공 기준 7개 모두 통과, [결과](p2/evidence/P2-01-results.md) | [plans/P2-PLAN-01.md](plans/P2-PLAN-01.md) |
+
+다음 세션은 P2-02를 위한 `P2-PLAN-02`를 같은 양식으로 새로 작성한다. 양식은 위 두 plan을 따른다.
+
 
 새 계획으로 대체할 때 이전 plan을 삭제하지 말고 이 문서의 세션 기록에 완료·대체 이유와 결과를 남긴다. 기록이 커지면 상세 로그만 저장소의 별도 문서로 옮길 수 있지만 이 문서에는 현재 plan·진행 상태·요약·정확한 참조를 유지한다. 사용자가 다음 파일을 찾아다니게 하지 않는다.
 
@@ -200,8 +70,8 @@ Plan ID: P1-PLAN-01 (완료, 2026-09-20 종료)
 
 | 단계 | 상태 | 다음 하위 작업 | 완료 증거·인계 |
 |---|---|---|---|
-| P1 CLI 연결 검증 | ACCEPTED_WITH_LIMITATIONS | — | P1-01~04 완료 — [계약](p1-environment-contract.md), [P1-02 결과](p1/evidence/P1-02-results.md), [P1-03 결과](p1/evidence/P1-03-results.md), [OpenCode 계약](p1/opencode/contract.md). **제한: 중복 호출 방지 미검증(2026-09-20 사용자 수용, P2-01 이월)** |
-| P2 최소 업무 흐름 | READY | P2-01 | 없음 |
+| P1 CLI 연결 검증 | ACCEPTED_WITH_LIMITATIONS | — | P1-01~04 완료 — [계약](p1-environment-contract.md), [P1-02 결과](p1/evidence/P1-02-results.md), [P1-03 결과](p1/evidence/P1-03-results.md), [OpenCode 계약](p1/opencode/contract.md). **제한: 중복 호출 방지 미검증(2026-09-20 사용자 수용, P2-01 이월) → [P2-01에서 검증해 닫음](p2/evidence/P2-01-results.md)** |
+| P2 최소 업무 흐름 | IN_PROGRESS | P2-02 | P2-01 완료 — [실행 결과](p2/evidence/P2-01-results.md), [`P2-PLAN-01`](plans/P2-PLAN-01.md). 제어부·Runner·화면 연결, 강제 종료 복원, 중복 실행 방지(P1 이월 항목 닫음), 원문 비보관 확인 |
 | P3 기능 개발 흐름 | PENDING | P3-01 | 없음 |
 | P4 품질·다양한 업무 | PENDING | P4-01 | 없음 |
 | P5 GitHub 연동 | PENDING | P5-01 | 없음 |
@@ -243,11 +113,13 @@ Plan ID: P1-PLAN-01 (완료, 2026-09-20 종료)
 | 수용한 제한 | P1-03 성공 기준 중 '지연 이벤트·응답 유실에서 중복 호출하지 않음'이 미검증이다 |
 | 결정 근거 | `run_id` 멱등성과 배정 세대는 제어부 설계의 일부이며 P2-01 범위와 겹친다. P1에서 최소 제어부를 앞당겨 만드는 것보다 P2-01에서 함께 하는 편이 중복이 적다 |
 | 이월 대상 | **P2-01**. 같은 요청 재전송이 중복 실행을 만들지 않는지 실제로 확인한다 |
+| 이월 결과 (2026-09-20) | **해소됨.** P2-01에서 제어 API 재전송과 '결과 보고 유실 후 재배정' 두 경우 모두 실행 부수효과가 1회임을 확인했다 → [P2-01 실행 결과](p2/evidence/P2-01-results.md) 4절, 6절 P2의 P2-01 완료 점검 |
 | 범위 제한 | 이 수용은 **이 한 항목에만** 적용된다. P1의 다른 기준이나 P2 이후의 기준을 면제하지 않는다 |
 | 시험 통과가 아님 | 이는 미검증 상태를 사용자가 감수한 것이지 검증에 통과한 것이 아니다 |
 
 P1-03 결과 7절의 나머지 미검증 항목(재연결 대조, 병렬 호출 경계, 훅 적용 공백, 훅 timeout,
-프로세스 트리 종료, 훅 신뢰 영속화)도 그대로 남아 있으며 P2 이후 해당 기능을 구현할 때 확인한다.
+프로세스 트리 종료, 훅 신뢰 영속화)은 **P2-01의 해소 범위가 아니며** 그대로 남아 있다.
+P2 이후 해당 기능을 구현할 때 확인한다.
 확인되지 않은 능력에 의존하는 기능은 그때까지 지원을 보류한다.
 
 ## 6. P2 — 최소 업무 흐름
@@ -258,12 +130,29 @@ P1-03 결과 7절의 나머지 미검증 항목(재연결 대조, 병렬 호출 
 
 | 하위 작업 | 범위 | 성공 기준·검증 |
 |---|---|---|
-| P2-01 최소 골격·영속 상태 | Python/FastAPI·SQLite·React/TS 골격, Project/Case/의도 버전/결정/Run의 최소 모델, 로컬 Runner 계약. **P1에서 이월: 같은 요청 재전송이 중복 실행을 만들지 않는지 실증** | 실제 API·DB·화면 연결과 재시작 복원. 제어 상태·요약과 Runner 원문 저장을 논리적으로 처음부터 분리. 기본 실행/시험 명령 문서화. **`run_id` 멱등성을 실제 재전송으로 확인하고 P1 이월 항목을 닫는다** |
+| P2-01 최소 골격·영속 상태 — **DONE** | Python/FastAPI·SQLite·React/TS 골격, Project/Case/의도 버전/결정/Run의 최소 모델, 로컬 Runner 계약. **P1에서 이월: 같은 요청 재전송이 중복 실행을 만들지 않는지 실증** | 실제 API·DB·화면 연결과 재시작 복원. 제어 상태·요약과 Runner 원문 저장을 논리적으로 처음부터 분리. 기본 실행/시험 명령 문서화. **`run_id` 멱등성을 실제 재전송으로 확인하고 P1 이월 항목을 닫는다** → 결과: [P2-01 실행 결과](p2/evidence/P2-01-results.md), 코드 `controller/` `runner/` `domain/` `web/`, 시험 `tests/` 19건 |
 | P2-02 의도·피드백 | 여섯 필드 초안, 원문/가정/질문, 피드백 반영과 버전 차이, 명시 동의 | 작은 기능도 초안·피드백·동의 흐름을 거침. 무응답/조회/단순 질문이 동의가 되지 않음. 오래된 의도 동의가 최신 버전에 적용되지 않음 |
 | P2-03 진입 제어·제한 실행 | QG-01의 최소 규칙·별도 의미 검토, 서버 측 실행 조건, P1에서 검증한 Runner 연결로 읽기·결과 작성 수준의 제한 작업 | UI 버튼 우회 API 호출도 미동의·필수 질문·게이트 미완료면 거부. 실제 실행 ID/결과 저장. 같은 요청 재전송은 중복 실행하지 않음 |
 | P2-04 결과·재시작 | 기준별 결과와 근거 열람, 기본 사람 최종 확인의 최소 흐름, 제어부/Runner 재시작 | 입력·동의·Run·원문 참조가 보존되고 실행 불명 상태가 성공이 되지 않음. 화면에서 처음부터 끝까지 재현 가능한 시연 절차 제공 |
 
 **제외:** 일반적인 기능 구현 자동화 전체, 설계·계획 정책 생략, 원격 배포, GitHub 쓰기. 아직 구현되지 않은 선행 조건을 임시로 항상 통과 처리하지 않는다. 기능 코드 변경 실행은 P3 선행 조건이 준비될 때 연결한다.
+
+**P2-01 완료 점검 (2026-09-20):**
+
+| P2-01 성공 기준 | 결과 |
+|---|---|
+| 실제 API·DB·화면 연결 | 충족 — 브라우저 클릭으로 Case·원문·Run을 만들고 SQLite를 직접 열어 대조 |
+| 재시작 복원 | 충족 — uvicorn 자식 프로세스를 `taskkill /F /T` 로 죽인 뒤 재기동해 확인 |
+| 제어 상태·요약과 Runner 원문 저장의 논리적 분리 | 충족 — 제어부 스키마에 본문 컬럼 없음. 표식 문자열이 제어부 DB·로그에 없고 Runner 저장소에 있음을 파일 바이트로 확인 |
+| 기본 실행/시험 명령 문서화 | 충족 — `scripts/` 4개와 [README 실행 방법](README.md) |
+| **`run_id` 멱등성을 실제 재전송으로 확인** (P1 이월) | **충족** — 제어 API 재전송과 '결과 보고 유실 후 재배정' 두 경우 모두 실행 부수효과가 1회 |
+
+**P1 이월 항목 종료 (2026-09-20):** P1에서 `ACCEPTED_WITH_LIMITATIONS` 로 남긴
+'지연 이벤트·응답 유실에서 중복 호출하지 않음'을 P2-01에서 실제로 검증해 닫았다.
+근거는 [P2-01 실행 결과](p2/evidence/P2-01-results.md) 4절과
+`tests/test_idempotency.py::test_lost_result_response_does_not_cause_re_execution` 이다.
+**P1의 다른 미검증 항목(재연결 대조, 병렬 호출 경계, 훅 적용 공백, 훅 timeout,
+프로세스 트리 종료, 훅 신뢰 영속화)은 그대로 남아 있다.** 이 종료는 그 한 항목에만 적용된다.
 
 **단계 완료 조건:** mock만이 아닌 실제 UI/API/DB와 적어도 한 실제 CLI 경로가 연결된다. 나머지 CLI도 공통 계약과 capability 제한을 유지하고 특정 CLI 전용 구조로 고정하지 않는다. 의도 진입 검사는 정상·거절·재시작 사례로 검증한다.
 
@@ -360,81 +249,96 @@ P1-03 결과 7절의 나머지 미검증 항목(재연결 대조, 병렬 호출 
 ### 최신 세션 인계
 
 ```text
-세션 기록 ID / 수행 시점: S-002 / 2026-09-20
-작업 단계·하위 작업 / 사용한 Plan ID: P1 — CLI 연결 검증 / P1-01 + P1-02 + P1-03 + P1-04 / P1-PLAN-01
+세션 기록 ID / 수행 시점: S-003 / 2026-09-20
+작업 단계·하위 작업 / 사용한 Plan ID: P2 — 최소 업무 흐름 / P2-01 최소 골격·영속 상태 / P2-PLAN-01
 실제 작업 디렉터리·브랜치·최종 코드 커밋:
-  C:\git\human-ai-dev-system-design, main. 시작 HEAD 815f3f3.
-  커밋 b642da2(P1-01), 1fbfe51·03b7664(P1-02), 그리고 P1-03 커밋.
-  사용자 승인으로 origin/main 에 3회 push 함(P1-01·02 / P1-03 / P1-04). 작업 트리 clean
-미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함
+  C:\git\human-ai-dev-system-design, main. 시작 HEAD 3c8f122(작업 트리 clean, origin/main과 동기).
+  이 세션의 커밋은 아래 "구현·변경 내용"의 파일을 담은 P2-01 커밋 1건. push 하지 않았다
+미커밋 변경과 소유 관계: 없음. 시작 시 clean이었고 이 세션 변경은 모두 커밋함.
+  var\ (제어부 DB·Runner 원문·로그), .venv\, web\node_modules\, web\dist\ 는
+  .gitignore 대상이며 커밋하지 않았다. 지워도 bootstrap 으로 다시 만들어진다
 구현·변경 내용:
-  p1-environment-contract.md 신규 — 환경·CLI·인증 실측, 권한 차이 관측,
-    공통 실행 계약 초안 v0(입력·이벤트·결과), capability 표(P1-02 실측 반영)
-  p1/harness/run_cli.py 신규 — P1 실증용 최소 실행 harness(제품 코드 아님).
-    P1-03에서 gate hook 설치, 단절 주입 감시 스레드, 훅 결정 수집을 추가
-  p1/harness/gate_hook.py 신규 — PreToolUse 훅. 연결 상태를 보고 허용/거부하고 결정을 로그로 남김.
-    상태를 읽지 못하면 거부한다(fail-closed)
-  p1/evidence/ 신규 — 실행 증거 18건과 P1-02-results.md, P1-03-results.md
-  p1/opencode/ 신규 — OpenCode V2 어댑터 계약(문서 기반), 재구성 fixture 3건,
-    adapter.py 골격, 계약 시험 18개(표준 라이브러리 unittest)
-  DEVELOPMENT.md — 현재 상태표, 활성 plan P1-PLAN-01, 단계 진행표, P1 참조, 인계·이력
-성공 기준별 결과:
-  AC-1 통과 — 세 CLI 상태와 확인 방법 기록. OpenCode는 PATH 미조회가 아니라
-    "설치 흔적 없음(조사 범위 내)"으로 근거와 함께 구분
-  AC-2 통과 — 인증 파일은 존재·크기·시각만 확인. 내용 미조회. 어댑터가 자격증명을 읽지 않는 계약 반영
-  AC-3 통과 — 계약이 CLI 인자 구조가 아닌 의미 단위이며 doc_only/verified/unsupported/unknown 구분
-  AC-4 통과 — P1-03/04 실행 순서를 plan 15~16번에 기록
-  AC-5 통과 — 두 CLI 각각 읽기·쓰기·권한 거절·세션 분리의 실제 실행 증거 확보.
-    종료 코드만으로 완료를 판정하지 않음을 실제 사례(#7·#8)로 확인
-  AC-7 통과 — OpenCode 계약이 V2 문서 5페이지에서만 나왔고, fixture에 재구성물 표시가 있으며,
-    계약 시험의 가드가 verified 승격·미확인 이벤트 매핑을 실제로 실패시킨다(변형 시험으로 확인)
-  AC-6 통과(조건부) — 단절 주입 후 두 CLI 모두 a.txt만 생성되고 b·c는 생성되지 않음.
-    대조군(훅 없음)에서는 세 파일 모두 생성. 조건: Codex는 훅 명령에 따옴표가 있으면 조용히
-    실행되지 않고 비대화식에서 --dangerously-bypass-hook-trust 가 필요했으며,
-    Claude는 훅 실패 시 호출이 그대로 진행된다(fail-open).
-    강제 종료는 안전 중지가 아님을 프로세스 잔류로 별도 확인
+  **제품 코드 첫 골격을 만들었다.** 이전까지 제품 코드는 없었다.
+  requirements.txt / requirements.lock.txt / pyproject.toml 신규 — 런타임을 Python 3.12로 고정.
+    설치 버전 잠금(fastapi 0.141.1, uvicorn 0.53.0, httpx 0.28.1, pytest 8.4.2 등)
+  domain/ 신규 — models.py(Case·Run·Decision·Availability·EventType 등 상태값,
+    RunRequest/RunResult 자료구조), ids.py
+  controller/ 신규 — schema.sql(상태 DB. **원문 본문 컬럼 없음**), db.py(WAL + synchronous=FULL),
+    repository.py, api.py, app.py(본문을 남기지 않는 요청 로그), relay.py(메모리 일시중계), config.py
+  runner/ 신규 — store.py(원문 영속 저장, fsync), ledger.py(run_id 실행 원장),
+    executor.py(**코딩 CLI 아님**. 실행마다 부수효과 파일에 한 줄), agent.py(폴링 루프), client.py
+  web/ 신규 — Vite + React 19 + TS 최소 화면. 제어부가 web/dist 를 직접 서빙
+  scripts/ 신규 — bootstrap.ps1, run-controller.ps1, run-runner.ps1, run-tests.ps1
+  tests/ 신규 — 19건(흐름 5, 멱등 6, 데이터 경계 5, 재시작 3)
+  p2/evidence/ 신규 — P2-01-results.md 와 실제 실행 로그·응답·화면 캡처
+  plans/ 신규 — 완료된 P1-PLAN-01·P2-PLAN-01 원문 이관(내용 무수정).
+    DEVELOPMENT.md 가 길어져 활성 plan 자리를 비우고 표로 참조한다
+  README.md — "실행 방법(P2-01 기준)" 추가. DEVELOPMENT.md — 상태표·plan 표·진행표·P2 절·인계
+  .gitignore(var/ 추가), .gitattributes(p2/evidence 줄바꿈·바이너리 규칙)
+성공 기준별 결과: 통과 / 실패 / 미검증 / 사용자 수용 제한
+  AC-1 통과 — 제어부·Runner를 실제 프로세스로 띄우고 설치된 Edge로 화면을 눌러
+    Case·원문·Run을 만든 뒤 SQLite를 직접 열어 대조. p2/evidence/P2-01-ui-driven.log
+  AC-2 통과 — uvicorn 자식 프로세스를 taskkill /F /T 로 죽이고 재기동해 Case·결정·Run·참조 복원 확인.
+    정상 종료가 아니라 강제 종료로 확인했다
+  AC-3 통과 — (가) 같은 run_id POST 2회 → run 행 1개·실행 1회, 응답은 201 다음 200
+    (나) 결과 보고 유실 후 같은 run_id 재배정 → Runner가 원장을 보고 재실행하지 않고
+    저장된 결과를 다시 보고. 실행 부수효과는 여전히 1회. **P1 이월 항목을 이것으로 닫았다**
+  AC-4 통과 — generation 1의 결과·이벤트 보고가 409로 거부되고 DB 상태가 바뀌지 않음
+  AC-5 통과 — 같은 (run_id, seq) 재전송이 {"stored":0,"duplicate":2}로 처리되고 이벤트 수 2 유지
+  AC-6 통과 — 표식 문자열이 제어부 sqlite(+WAL/SHM)·로그 바이트에 없고 Runner 저장소에는 있음.
+    "셋 다 없음"이 아니라 "Runner에만 있음"을 확인했다
+  AC-7 통과 — py -3.12 로 만든 .venv 를 스크립트가 직접 가리킨다. README 명령으로 재현 가능
 실행한 검증 명령·환경·결과·증거 위치:
-  PowerShell 7.6.6 / Windows 11 Home 10.0.26200 / Python 3.12.10
-  환경 조사: Get-Command -All, --version, py -0, npm ls -g, winget list, Test-Path,
-    codex doctor, claude doctor, codex/claude --help
-  실증: python p1/harness/run_cli.py --tool {codex|claude} --mode {exec|print}
-    --workspace %LOCALAPPDATA%\Temp\hads-p1\testrepo --permission {read_only|workspace_write} ...
-    [--gate-hook --disconnect-after-tool-calls 1] 를 더해 P1-03 수행.
-    P1-02 15회 + P1-03 6회 실행. git diff와 파일 존재 여부로 실제 효과 확인
-  증거: p1/evidence/P1-02-results.md, P1-03-results.md + 같은 디렉터리의 run별 원문 파일
-    (stdout.jsonl, hooklog.jsonl, settings.json, connection, result.json)
-  계약 시험: python -m unittest discover -s p1/opencode -t p1/opencode → 18 tests OK.
-    **CLI를 실행하지 않는 시험이며 OpenCode 실환경 검증이 아니다**
+  PowerShell 7.6.6 / Windows 11 Home 10.0.26200 / Python 3.12.10 / Node v22.15.1
+  scripts\bootstrap.ps1        → .venv 생성·의존성 설치·web 빌드 성공
+  scripts\run-tests.ps1        → pytest 19 passed (7.16s) + P1 unittest Ran 18, OK
+  scripts\run-controller.ps1 / run-runner.ps1 상당의 명령으로 실제 프로세스 기동 후
+    브라우저(headless Edge) 클릭과 API 경로로 각각 한 바퀴. 종료 후 포트 8765 잔여 연결 0,
+    잔여 python 프로세스 0을 확인
+  증거: p2/evidence/P2-01-results.md 와 같은 디렉터리의 P2-01-ui-driven.log/.png,
+    P2-01-live-session.log, P2-01-live-run.json, P2-01-live-case.json,
+    P2-01-ui.png, P2-01-ui-case.png, live-controller.out, live-runner.out
+  **P1 계약 시험 18건은 CLI를 실행하지 않는 문서 계약 시험이며 OpenCode 실환경 검증이 아니다**
 변경 검토 결과 / 남은 위험:
-  변경 diff 검토함. 비밀값·토큰·계정 식별자 없음. 증거 파일에는 토큰 수·비용만 포함
-  남은 위험 (1) 두 CLI 모두 자동 업데이트가 켜져 있어 실증 결과의 유효 버전이 이동한다
-  (2) Claude가 `--permission-mode manual` 요청에 `default`로 보고하는 불일치 미해결
-      (`acceptEdits`는 그대로 보고되므로 manual 고유 문제로 좁혀짐)
-  (3) `--tools` 제한이 MCP 도구를 포함하지 않음 — 현재는 `--strict-mcp-config`로 대응
-  (4) python(3.12)과 py 런처(3.14)의 기본 버전이 달라 P2-01에서 런타임을 고정해야 한다
-  (5) residual_activity는 전 구간 unknown. 강제 종료 시 자식 프로세스가 실제로 잔류함을 확인했고
-      프로세스 트리 단위 종료는 아직 구현하지 않았다
-  (6) 안전 중지가 훅 하나에 의존한다. Claude의 fail-open과 Codex의 훅 신뢰 요구가 모두
-      제품 설계에서 해소되어야 한다
+  변경 diff 검토함. 비밀값·토큰·계정 식별자 없음. .venv/node_modules/dist/var 가 커밋에 들어가지
+  않음을 확인. 검토 중 발견해 고친 것 1건: 같은 run_id 재전송이 201 Created 를 돌려주고 있었다.
+  만들지 않은 것을 Created 로 보고하지 않도록 200으로 바꾸고 증거를 다시 수집했다
+  남은 위험 (1) synchronous=FULL 은 SQLite 수준 내구성이며 백업 요구를 대신하지 않는다
+  (2) 규모 시험(프로젝트 10개·Runner 3대) 미수행
+  (3) starlette.testclient 의 httpx deprecation 경고. 다음 주요 버전에서 바뀔 수 있다
+  (4) 배정이 폴링(기본 1초)이다. 실시간 제어가 필요하면 바꿔야 한다
+  (5) runner_offline 상태값은 있으나 하트비트 만료 판정을 구현하지 않았다 — 미검증
+  (6) bump_generation 은 fencing 일 뿐 정지 증거가 아니다. 실제 정지 확인은 P6-03
+  (7) P1에서 넘어온 위험(두 CLI 자동 업데이트, Claude 훅 fail-open, Codex 훅 신뢰 요구,
+      프로세스 트리 종료 미구현)은 그대로다. 해당 기능을 붙일 때 확인한다
 새 사용자 결정·연결한 설계 변경:
-  제품 설계 결정은 없다(D-01~58 변경 없음). 진행 절차 결정 1건:
-  2026-09-20 P1 제한 수용 — '중복 호출 방지' 미검증을 P2-01로 이월. 4절 P1 절에 기록.
-  기존 FR-28·NFR-07/08·D-42/44/45/53 범위 안에서 수행했다
+  제품 설계 결정은 없다(D-01~58 변경 없음). 합의 범위 안의 구현 선택 2건을 근거와 함께 진행했다.
+  (가) Python 3.12.10 고정 — P1이 P2-01로 넘긴 항목. py -3.12 로 명시해 세션 간 흔들림 제거
+  (나) 저장소 로컬 .venv\ · web\node_modules\ 설치 — implementation-baseline 2절의
+      "별도 가상환경과 데이터 경로". 사용자 전역 설정은 바꾸지 않았다
+  검증용으로 playwright 를 **저장소 밖 임시 가상환경**에 설치했다. 제품 의존성이 아니며
+  requirements.txt 에 없다. 같은 확인을 사람이 직접 클릭해 재현할 수 있다
 남은 프로세스·실험 저장소·외부 게시 상태:
-  남은 프로세스 없음. P1-03 강제 종료 시험에서 잔류한 codex.exe(19996)·pwsh.exe(504)는 확인 후 종료함.
-  외부 게시 없음. origin/main push 1회(사용자 승인, 03b7664까지).
-  시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 그대로 둠(calc.py에 mul() 미커밋 변경 있음).
-  원본 증거는 같은 경로의 evidence\. 임시 경로이므로 필요한 증거는 저장소로 복사해 두었다
+  남은 프로세스 없음(포트 8765 잔여 연결 0, uvicorn/runner 프로세스 0 확인).
+  외부 게시 없음. **이 세션은 push 하지 않았다.** origin/main 은 3c8f122 그대로다.
+  P1 시험 저장소 %LOCALAPPDATA%\Temp\hads-p1\testrepo 는 이전 세션 상태 그대로 두었다.
+  P2 런타임 데이터는 저장소 안 var\ 이며 커밋하지 않았다
 단계 완료 여부와 이유:
-  P1 = ACCEPTED_WITH_LIMITATIONS. P1-01~04를 모두 수행했고 완료 점검은 4절 P1 절에 표로 남겼다.
-  미충족 1건('지연 이벤트·응답 유실에서 중복 호출하지 않음')은 2026-09-20 사용자 결정으로
-  P2-01에 이월하고 제한 수용했다. **시험 통과가 아니라 미검증 감수다.**
-  이 수용은 그 한 항목에만 적용되며 다른 기준을 면제하지 않는다
+  P2 = IN_PROGRESS. **P2-01만 완료**했고 P2-02·03·04가 남았다.
+  P2-01 성공 기준 7개를 모두 실제 실행으로 확인했으며 수용 제한을 새로 만들지 않았다.
+  P1에서 이월받은 '중복 호출 방지'는 여기서 검증해 닫았다. 이 종료는 그 한 항목에만 적용되며
+  P1의 다른 미검증 항목(재연결 대조, 병렬 호출 경계, 훅 적용 공백, 훅 timeout,
+  프로세스 트리 종료, 훅 신뢰 영속화)은 그대로 남아 있다
 다음 단계·하위 작업 / 다음 세션 첫 명령 또는 읽을 위치:
-  P2-01 최소 골격·영속 상태. 6절 P2의 필수 참조(의도 산출물·전체 설계·데이터 경계,
-  FR-03/04/13/15/16/23/29, NFR-01/03/09/12)를 읽고 `P2-PLAN-01`을 새로 작성해 공유한 뒤 구현한다.
-  **P1에서 이월한 항목을 P2-01 범위에 반드시 포함한다**: 같은 요청 재전송이 중복 실행을 만들지 않는지.
-  P2-01에서 Python 런타임(3.12/3.14)을 먼저 고정한다
+  P2-02 의도·피드백. 먼저 scripts\bootstrap.ps1 과 scripts\run-tests.ps1 로 현재 코드가
+  실제로 도는지 확인한다(19 + 18 통과가 기준선이다). 그다음 intent-artifacts.md 1~4절과
+  FR-03/04/13, 6절 P2 표의 P2-02 행을 읽고 `P2-PLAN-02` 를 작성해 공유한 뒤 구현한다.
+  **P2-02에서 유의할 것**: 의도 버전과 Decision 테이블·API는 이미 있다(자리만 있고 흐름이 없다).
+  동의는 대상 버전에만 붙고 새 버전으로 승계되지 않게 이미 만들어 두었으며
+  tests/test_flow.py::test_intent_version_and_agreement_are_separate_records 가 지킨다.
+  **진입 조건 검사(FR-29)는 P2-03이다. P2-02에서 앞당겨 넣지 않는다.**
+  원문 본문 열람 경로는 아직 없다. 의도 초안 본문을 화면에서 보여 줘야 한다면
+  일시중계 읽기 경로를 P2-02에서 만들지 P2-04로 미룰지 plan에서 먼저 정한다
 막힌 조건과 필요한 사용자 답변: 없음
 ```
 
@@ -464,6 +368,7 @@ P1-03 결과 7절의 나머지 미검증 항목(재연결 대조, 병렬 호출 
 |---|---|---|---|
 | S-001 | 2026-09-20 | 설계 정리 | 설계 v0.6 문서와 이 안내서 준비. 제품 코드·실증 없음 |
 | S-002 | 2026-09-20 | P1-01~04 | 환경·CLI·인증 실측 확정, 공통 실행 계약 초안 v0와 `P1-PLAN-01` 기록. harness로 두 CLI의 읽기·쓰기·권한 거절·세션 분리를 실제 실행. 이어서 PreToolUse 훅으로 단절 주입 시험을 해 **다음 도구 호출이 실제로 시작되지 않음**을 부수효과로 확인하고, 강제 종료가 안전 중지가 아님을 프로세스 잔류로 확인. 이어서 OpenCode V2 문서 계약·재구성 fixture·계약 시험 18개를 만들고 세 도구 capability 표를 채움. P1은 '중복 호출 방지' 미검증 1건을 사용자 수용으로 제한 종료(ACCEPTED_WITH_LIMITATIONS)하고 P2-01로 이월. P2 READY |
+| S-003 | 2026-09-20 | P2-01 | **제품 코드 첫 골격.** Python 3.12 고정, FastAPI 제어부·SQLite·로컬 Runner·React/TS 화면을 만들고 실제 프로세스와 브라우저로 한 줄 연결을 확인. 강제 종료 후 복원, 같은 (run_id, seq) 이벤트·같은 run_id 요청의 중복 방지, 결과 보고 유실 후 재배정에서도 실행 1회를 부수효과로 확인해 **P1 이월 항목을 닫음**. 원문이 제어부 DB·로그에 없고 Runner에만 있음을 파일 바이트로 확인. pytest 19 + P1 계약 unittest 18 통과. P2-02~04 남음 |
 
 안내서·계약 문서 작성 자체를 P1 완료로 기록하지 않는다.
 
