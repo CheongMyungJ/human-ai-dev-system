@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 def utc_now() -> str:
@@ -67,6 +67,12 @@ def migrate(conn: sqlite3.Connection) -> None:
     #     기록되지 않은 것과 확인된 것을 구별한다(FR-04).
     _add_column_if_missing(conn, "intent_version", "authoring_mode", "TEXT")
     _add_column_if_missing(conn, "intent_version", "author_run_id", "TEXT")
+
+    # v4: 결과·완료 기록은 **새 표만** 더한다. 기존 표의 컬럼을 바꾸지 않으므로
+    #     위 executescript 의 `CREATE TABLE IF NOT EXISTS` 로 이행이 끝난다.
+    #     기존 Case 에는 완료 정책 행이 없고, 그것은 "정책이 기록되지 않음"이 아니라
+    #     기본값(사람 최종 확인)을 뜻한다 — D-31의 기본값이기 때문이다.
+    #     행이 없는 상태를 자동 완료로 해석하지 않는 것이 중요하다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

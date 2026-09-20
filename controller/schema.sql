@@ -355,3 +355,170 @@ CREATE TABLE IF NOT EXISTS admission_check (
 CREATE INDEX IF NOT EXISTS idx_gate_result_case ON gate_result(case_id, gate);
 CREATE INDEX IF NOT EXISTS idx_gate_finding_result ON gate_finding(gate_result_id);
 CREATE INDEX IF NOT EXISTS idx_admission_case ON admission_check(case_id, checked_at);
+
+-- ===================================================================
+-- 스키마 v4 (P2-04 결과·재시작)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 성공 기준의 본문(관련 목표·확인 방법·기대값)은 의도 원문 안에 있고, 근거의
+-- 서술과 인수·예외의 문구도 소유 Runner에 있다. 여기에는 판정·사유 코드·참조와
+-- 짧은 요약만 남는다.
+--
+-- **세 종류의 기록을 합치지 않는다**(completion-lifecycle 4·7절).
+--   final_acceptance   사람 또는 정책이 이 후보를 인수했다
+--   exception_decision 표시된 미충족·미검증을 사람이 수용했다
+--   closure_record     업무가 실제로 종료로 확정됐다
+-- 한 화면에서 결정해도 표는 분리한다. 인수가 예외를 만들지 않고, 인수만으로
+-- 종료가 확정되지도 않는다(미정리 실행이 남으면 closure_record 가 생기지 않는다).
+-- ===================================================================
+
+-- 합의한 성공 기준. **의도 버전에 묶인다**(intent-artifacts 1절
+-- "성공 기준은 의도에서 분리되지 않도록 연결한다").
+--
+-- 새 의도 버전은 기준을 승계하지 않는다. 게이트와 같은 규칙이며, 승계하면
+-- 바뀐 의도에 옛 기준이 그대로 붙어 버린다.
+CREATE TABLE IF NOT EXISTS success_criterion (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    criterion_key     TEXT NOT NULL,   -- 버전이 바뀌어도 같은 기준을 잇는 키
+    summary           TEXT NOT NULL,   -- 짧은 요약. 원문 대체 아님
+    method_summary    TEXT NOT NULL,   -- 확인 방법의 짧은 요약. 원문 대체 아님
+    relates_to        TEXT NOT NULL,   -- 연결된 의도 항목(goal|expected_outcome|...)
+    state             TEXT NOT NULL,   -- proposed | user_confirmed | superseded
+    created_at        TEXT NOT NULL,
+    UNIQUE (intent_version_id, criterion_key),
+    CHECK (length(summary) <= 200),
+    CHECK (length(method_summary) <= 200)
+);
+
+-- 기준별 결과. **기본값은 `unverified` 다.**
+--
+-- 실행이 끝났다는 사실이 판정을 만들지 않는다. 판정을 기록하려면 근거 참조가
+-- 있어야 하고, `met` 은 근거 Run 의 outcome 이 `completed` 일 때만 받는다.
+-- outcome 이 `unknown` 인 Run을 근거로 한 `met` 은 거부된다 — 실행 불명이
+-- 성공이 되지 않게 하는 지점이다(FR-28, completion-lifecycle 5절).
+--
+-- `unknown` 은 여기 판정값에 **없다.** 실행의 불명은 run.outcome 쪽 값이며
+-- 기준 판정으로 옮기면 불명이 조용히 판정이 되어 버린다.
+CREATE TABLE IF NOT EXISTS criterion_result (
+    id                   TEXT PRIMARY KEY,
+    criterion_id         TEXT NOT NULL REFERENCES success_criterion(id),
+    case_id              TEXT NOT NULL REFERENCES "case"(id),
+    verdict              TEXT NOT NULL,   -- unverified|met|not_met|blocked|needs_recheck
+    evidence_kind        TEXT NOT NULL,   -- none|run_output|human_judgement
+    evidence_run_id      TEXT REFERENCES run(run_id),
+    evidence_artifact_id TEXT,            -- 근거 원문 참조. 본문은 Runner에
+    evidence_artifact_rev INTEGER,
+    summary              TEXT NOT NULL,   -- 짧은 요약. 원문 대체 아님
+    recorded_by          TEXT NOT NULL,
+    recorded_at          TEXT NOT NULL,
+    UNIQUE (criterion_id),
+    CHECK (length(summary) <= 200)
+);
+
+-- Case별 완료 정책(D-31). 기본은 사람 최종 확인이다.
+CREATE TABLE IF NOT EXISTS completion_policy (
+    case_id    TEXT PRIMARY KEY REFERENCES "case"(id),
+    mode       TEXT NOT NULL,   -- human_acceptance | auto_on_conditions
+    set_by     TEXT NOT NULL,
+    set_at     TEXT NOT NULL
+);
+
+-- 최종 결과 후보. 종료 후보가 준비된 시점의 **스냅샷**이다.
+--
+-- `snapshot_hash` 는 이 후보가 무엇을 보여 줬는지를 고정한다. 그 사이 기준 판정·
+-- 게이트·동의·실행 상태가 바뀌면 해시가 달라지고 새 후보가 생기며 이전 후보는
+-- superseded 가 된다. 사용자가 본 것과 다른 것을 인수하지 않게 하기 위해서다
+-- (completion-lifecycle 3절 "후보가 의미 있게 바뀌면 이전 확인을 재사용하지 않는다").
+CREATE TABLE IF NOT EXISTS completion_candidate (
+    id                     TEXT PRIMARY KEY,
+    case_id                TEXT NOT NULL REFERENCES "case"(id),
+    revision               INTEGER NOT NULL,
+    intent_version_id      TEXT REFERENCES intent_version(id),
+    intent_agreement_state TEXT NOT NULL,
+    gate_verdict           TEXT NOT NULL,
+    criteria_total         INTEGER NOT NULL,
+    criteria_met           INTEGER NOT NULL,
+    unresolved_json        TEXT NOT NULL,   -- 미해결 항목의 코드·참조 목록(본문 없음)
+    unsettled_runs_json    TEXT NOT NULL,   -- 진행 중·결과 불명 Run 목록(본문 없음)
+    snapshot_hash          TEXT NOT NULL,
+    state                  TEXT NOT NULL,   -- open | superseded
+    created_at             TEXT NOT NULL,
+    superseded_at          TEXT,
+    UNIQUE (case_id, revision)
+);
+
+-- 후보가 본 기준별 판정의 사본. 나중에 판정이 바뀌어도 "그때 무엇을 보고
+-- 인수했는가"가 남아야 한다(FR-23 "사용자가 본 대상").
+CREATE TABLE IF NOT EXISTS candidate_criterion (
+    candidate_id  TEXT NOT NULL REFERENCES completion_candidate(id),
+    criterion_id  TEXT NOT NULL REFERENCES success_criterion(id),
+    verdict       TEXT NOT NULL,
+    PRIMARY KEY (candidate_id, criterion_id)
+);
+
+-- 최종 인수. **자동 완료를 사람 인수로 적지 않는다**(FR-17, D-31).
+-- `decision_id` 로 FR-23의 결정 목록과 이어 두되 표는 따로 둔다.
+CREATE TABLE IF NOT EXISTS final_acceptance (
+    id           TEXT PRIMARY KEY,
+    case_id      TEXT NOT NULL REFERENCES "case"(id),
+    candidate_id TEXT NOT NULL REFERENCES completion_candidate(id),
+    decision_id  TEXT NOT NULL REFERENCES decision(id),
+    mode         TEXT NOT NULL,   -- human | auto_policy
+    actor        TEXT NOT NULL,
+    statement_artifact_id TEXT,   -- 인수 문구의 원문 참조. 본문은 Runner에
+    accepted_at  TEXT NOT NULL,
+    UNIQUE (candidate_id)
+);
+
+-- 예외 결정. **원래 판정을 보존한다.**
+-- `original_verdict` 를 복사해 두고 criterion_result 는 건드리지 않는다.
+-- 예외 수용이 미충족을 충족으로 바꾸지 않는다(completion-lifecycle 4절).
+CREATE TABLE IF NOT EXISTS exception_decision (
+    id               TEXT PRIMARY KEY,
+    case_id          TEXT NOT NULL REFERENCES "case"(id),
+    candidate_id     TEXT NOT NULL REFERENCES completion_candidate(id),
+    decision_id      TEXT NOT NULL REFERENCES decision(id),
+    target_type      TEXT NOT NULL,   -- criterion
+    target_id        TEXT NOT NULL,
+    original_verdict TEXT NOT NULL,   -- 수용 시점의 판정. 바꾸지 않는다
+    scope_summary    TEXT NOT NULL,   -- 이 예외가 적용되는 범위의 짧은 요약
+    actor            TEXT NOT NULL,
+    decided_at       TEXT NOT NULL,
+    UNIQUE (candidate_id, target_type, target_id),
+    CHECK (length(scope_summary) <= 200)
+);
+
+-- 종료 확정 기록. **인수만으로 만들어지지 않는다.**
+-- 미정리 실행(진행 중이거나 결과 불명)이 남아 있으면 인수 기록은 남기되 이 행을
+-- 만들지 않는다(completion-lifecycle 5절).
+CREATE TABLE IF NOT EXISTS closure_record (
+    id                  TEXT PRIMARY KEY,
+    case_id             TEXT NOT NULL REFERENCES "case"(id),
+    candidate_id        TEXT NOT NULL REFERENCES completion_candidate(id),
+    final_acceptance_id TEXT REFERENCES final_acceptance(id),
+    closure_kind        TEXT NOT NULL,  -- completed | closed_with_exceptions | cancelled
+    exception_count     INTEGER NOT NULL,
+    confirmed_at        TEXT NOT NULL,
+    UNIQUE (case_id)
+);
+
+-- Case 사이의 연결. 완료 후 수정은 기존 Case 재개가 아니라 연결된 새 Case 다(D-33).
+CREATE TABLE IF NOT EXISTS case_relation (
+    id             TEXT PRIMARY KEY,
+    from_case_id   TEXT NOT NULL REFERENCES "case"(id),
+    to_case_id     TEXT NOT NULL REFERENCES "case"(id),
+    relation       TEXT NOT NULL,   -- follow_up_change
+    reason_summary TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    UNIQUE (from_case_id, to_case_id, relation),
+    CHECK (length(reason_summary) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_criterion_case ON success_criterion(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_criterion_intent ON success_criterion(intent_version_id);
+CREATE INDEX IF NOT EXISTS idx_criterion_result_case ON criterion_result(case_id, verdict);
+CREATE INDEX IF NOT EXISTS idx_candidate_case ON completion_candidate(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_exception_case ON exception_decision(case_id);
+CREATE INDEX IF NOT EXISTS idx_case_relation_from ON case_relation(from_case_id);

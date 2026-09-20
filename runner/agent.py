@@ -166,6 +166,9 @@ class RunnerAgent:
             "intent_version_id": context["intent_version_id"],
             "fields": structure["fields"],
             "questions": structure["questions"],
+            # 성공 기준의 요약도 같은 보고로 올라간다(P2-04). 기대값과 확인 방법의
+            # 본문은 이 Runner의 원문 안에 남는다.
+            "criteria": structure["criteria"],
         }
         return self.client.send_intent_structure(payload)
 
@@ -350,7 +353,7 @@ class RunnerAgent:
         메모리를 지나 이 Runner로 왔다. 여기서는 초안이 이 Runner에서 태어나므로
         제어부에는 참조와 구조만 올라간다 — **본문은 올라가지 않는다.**
         """
-        fields, questions = prompts.parse_intent_draft(output.final_message)
+        fields, questions, criteria = prompts.parse_intent_draft(output.final_message)
         case_id = assignment["case_id"]
         run_id = assignment["run_id"]
         body = intent_doc.compose(
@@ -360,6 +363,7 @@ class RunnerAgent:
             authored_by=f"{assignment['tool_id']}/{assignment['mode']}",
             authoring_mode=AuthoringMode.AI_DRAFTED,
             author_run_id=run_id,
+            criteria=criteria,
         )
         artifact_id = ids.new_artifact_id()
         stored = self.store.put(artifact_id, 1, body)

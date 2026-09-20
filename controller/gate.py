@@ -189,7 +189,23 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
             _required("not_latest_version", "document", "이 버전은 최신 의도 버전이 아니다")
         )
 
-    # 7. 원문을 읽을 수 없으면 사람에게 검토를 요청할 수 없다.
+    # 7. 합의할 성공 기준이 하나도 없으면 결과를 무엇에 견줄지 없다.
+    #    **권고로 둔다.** 기준의 내용이 충분한지는 본문을 읽어야 알 수 있고 그것은
+    #    AI 의미 검토(`unverifiable_success_criteria`)의 몫이다. 규칙은 "0건"이라는
+    #    구조적 사실만 드러낸다. 다만 이 상태로는 최종 인수가 거부된다 —
+    #    기준 없이 결과를 인수할 수는 없기 때문이다(controller/repository.py
+    #    check_acceptance 의 `no_success_criteria`).
+    if not detail.get("criteria"):
+        findings.append(
+            _advisory(
+                "no_success_criteria",
+                "document",
+                "합의할 성공 기준이 0건이다. 이대로는 결과를 견줄 기준이 없어 최종 인수가 거부된다",
+                FindingCertainty.CONFIRMED,
+            )
+        )
+
+    # 8. 원문을 읽을 수 없으면 사람에게 검토를 요청할 수 없다.
     if detail.get("availability") != Availability.AVAILABLE.value:
         findings.append(
             _required(

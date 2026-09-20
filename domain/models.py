@@ -467,3 +467,102 @@ class AuthoringMode(str, Enum):
 
     HUMAN_TYPED = "human_typed"
     AI_DRAFTED = "ai_drafted"
+
+
+# --------------------------------------------------------------------- P2-04
+
+
+class CriterionState(str, Enum):
+    """성공 기준의 확인 상태(intent-artifacts.md 1절).
+
+    "초안 단계의 기준은 제안이며, 사용자가 확인한 기준과 구별한다."
+    `USER_CONFIRMED` 는 사람이 그 의도 버전의 원문을 읽고 명시 동의했을 때만 붙는다.
+    """
+
+    PROPOSED = "proposed"
+    USER_CONFIRMED = "user_confirmed"
+    SUPERSEDED = "superseded"
+
+
+class CriterionVerdict(str, Enum):
+    """기준별 결과.
+
+    **`UNVERIFIED` 가 기본값이다.** 실행이 끝났다는 사실이 판정을 만들지 않는다.
+
+    **`unknown` 이 이 목록에 없는 것이 중요하다.** 실행의 불명은 `RunOutcome.UNKNOWN`
+    이며 거기 머문다. 불명인 실행을 근거로 한 `MET` 은 기록 자체가 거부된다.
+    불명을 기준 판정으로 옮기면 불명이 조용히 판정이 되어 버린다
+    (FR-28, completion-lifecycle.md 5절).
+
+    `BLOCKED` 는 확인할 수 없었던 상태이며 `NOT_MET` 과 다르다.
+    """
+
+    UNVERIFIED = "unverified"
+    MET = "met"
+    NOT_MET = "not_met"
+    BLOCKED = "blocked"
+    NEEDS_RECHECK = "needs_recheck"
+
+
+class EvidenceKind(str, Enum):
+    """판정의 근거 종류. 근거 없는 판정은 기록하지 않는다."""
+
+    NONE = "none"
+    RUN_OUTPUT = "run_output"
+    HUMAN_JUDGEMENT = "human_judgement"
+
+
+class CompletionMode(str, Enum):
+    """완료 정책(D-31). 기본은 사람 최종 확인이다."""
+
+    HUMAN_ACCEPTANCE = "human_acceptance"
+    AUTO_ON_CONDITIONS = "auto_on_conditions"
+
+
+class AcceptanceMode(str, Enum):
+    """인수를 만든 주체. **자동 완료를 사람 확인으로 적지 않는다**(FR-17)."""
+
+    HUMAN = "human"
+    AUTO_POLICY = "auto_policy"
+
+
+class ClosureKind(str, Enum):
+    """종료의 종류.
+
+    `CANCELLED` 는 성공도 예외 인수도 아니다(completion-lifecycle.md 2절).
+    `CLOSED_WITH_EXCEPTIONS` 는 원래 판정을 보존한 채 사람이 수용한 종료다.
+    """
+
+    COMPLETED = "completed"
+    CLOSED_WITH_EXCEPTIONS = "closed_with_exceptions"
+    CANCELLED = "cancelled"
+
+
+class CandidateState(str, Enum):
+    OPEN = "open"
+    SUPERSEDED = "superseded"
+
+
+class AcceptanceRefusal(str, Enum):
+    """최종 인수·예외 수용을 기록할 수 없는 이유.
+
+    **세 번째 독립 목록이다.** P2-02의 `AgreementRefusal` 은 "사람의 동의를 기록할
+    수 있는가", P2-03의 `AdmissionRefusal` 은 "실행을 배정해도 되는가", 이쪽은
+    "이 후보를 종료로 확정해도 되는가"를 본다. 세 목록을 합치지 않는다(FR-23).
+    """
+
+    NOT_EXPLICIT = "not_explicit"
+    CANDIDATE_SUPERSEDED = "candidate_superseded"
+    UNRESOLVED_CRITERIA = "unresolved_criteria"
+    NO_SUCCESS_CRITERIA = "no_success_criteria"
+    UNSETTLED_RUNS_PRESENT = "unsettled_runs_present"
+    INTENT_NOT_AGREED = "intent_not_agreed"
+    CASE_ALREADY_CLOSED = "case_already_closed"
+    AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION = "auto_policy_cannot_accept_exception"
+    EXCEPTION_TARGET_NOT_FAILING = "exception_target_not_failing"
+
+
+class CaseRelationKind(str, Enum):
+    """Case 사이의 연결. 완료 후 수정은 재개가 아니라 연결된 새 Case 다(D-33)."""
+
+    FOLLOW_UP_CHANGE = "follow_up_change"

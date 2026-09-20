@@ -344,3 +344,102 @@ def test_the_controller_stores_no_prompt_text(harness):
         text = path.read_text(encoding="utf-8")
         assert "당신은" not in text, f"{path} 에 CLI 지시문으로 보이는 문구가 있다"
         assert "prompts" not in text.replace("# ", ""), f"{path} 가 지시문 모듈을 쓴다"
+
+
+# --------------------------------------------------------------------- P2-04
+
+
+def test_success_criteria_and_acceptance_bodies_stay_on_the_runner(harness):
+    """AC-13 — 성공 기준의 본문과 인수·예외의 문구가 제어부 바이트에 남지 않는다.
+
+    기준의 본문(기대값·확인 방법)은 의도 원문 안에 있고, 인수 문구는 제어부가
+    판단에만 쓰고 버린다. 제어부에는 짧은 요약과 판정만 남아야 한다.
+    """
+    criterion_marker = f"{MARKER}-CRITERION-TEXT"
+    method_marker = f"{MARKER}-METHOD-TEXT"
+    statement_marker = f"{MARKER}-ACCEPTANCE-STATEMENT"
+
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    harness.submit_intent_draft(
+        case["id"],
+        {
+            "goal": {"text": "목표", "origin": "user_requirement"},
+            "expected_outcome": {"text": "기대 결과", "origin": "ai_proposal"},
+        },
+        criteria=[
+            {
+                "key": "C-01",
+                "relates_to": "expected_outcome",
+                "text": criterion_marker,
+                "method": method_marker,
+                # 요약에는 표식을 넣지 않는다. 요약은 제어부에 남는 것이 정상이다.
+                "summary": "기준 한 줄 요약",
+                "method_summary": "확인 방법 한 줄 요약",
+            }
+        ],
+    )
+    intent = harness.latest_intent(case["id"])
+    harness.ai_gate_review(case["id"], intent)
+    harness.read_intent_original(intent)
+    assert harness.agree(case["id"], intent).status_code == 201
+
+    criterion = harness.criteria(case["id"])[0]
+    assert (
+        harness.record_result(
+            case["id"], criterion["id"], "met", evidence_kind="human_judgement"
+        ).status_code
+        == 200
+    )
+    candidate = harness.build_candidate(case["id"])
+    accepted = harness.accept(
+        case["id"],
+        candidate["id"],
+        statement=f"이 결과를 인수합니다. {statement_marker}",
+    )
+    assert accepted.status_code == 201, accepted.text
+
+    controller = _controller_bytes(harness)
+    log = Path(harness.controller_config.log_path).read_bytes()
+    for marker in (criterion_marker, method_marker, statement_marker):
+        encoded = marker.encode("utf-8")
+        assert encoded not in controller, f"{marker} 가 제어부 DB에 남았다"
+        assert encoded not in log, f"{marker} 가 제어부 로그에 남았다"
+
+    # 기준 본문은 Runner의 의도 원문 안에 있다. 셋 다 없으면 경계 확인이 무의미하다.
+    runner = _runner_bytes(harness)
+    assert criterion_marker.encode("utf-8") in runner
+    assert method_marker.encode("utf-8") in runner
+    # 인수 문구는 **어디에도 저장되지 않는다.** 제어부가 판단에만 쓰고 버린다.
+    # 남겨야 한다면 원문 참조(statement_artifact_id)로 Runner에 저장해야 한다.
+    assert statement_marker.encode("utf-8") not in runner
+
+
+def test_the_result_view_carries_references_not_bodies(harness):
+    """AC-13 — 결과 화면에 내려가는 것은 판정·요약·참조뿐이다."""
+    project = harness.create_project()
+    case = harness.create_case(project["id"])
+    harness.submit_intent_draft(
+        case["id"], {"goal": {"text": "목표", "origin": "user_requirement"}}
+    )
+    view = harness.result(case["id"])
+    criterion = view["criteria"][0]
+    assert set(criterion) == {
+        "id",
+        "case_id",
+        "intent_version_id",
+        "criterion_key",
+        "summary",
+        "method_summary",
+        "relates_to",
+        "state",
+        "created_at",
+        "verdict",
+        "evidence_kind",
+        "evidence_run_id",
+        "evidence_artifact_id",
+        "evidence_artifact_rev",
+        "result_summary",
+        "recorded_by",
+        "recorded_at",
+    }, sorted(criterion)

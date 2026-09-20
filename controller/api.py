@@ -19,18 +19,29 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from controller.relay import content_hash
-from controller.repository import ConflictError, NotFoundError, Repository
+from controller.repository import (
+    AcceptanceRefused,
+    ConflictError,
+    NotFoundError,
+    Repository,
+)
 from domain import ids, intent_doc
 from domain.models import (
+    AcceptanceMode,
+    AcceptanceRefusal,
     AgreementRefusal,
     ArtifactKind,
     AuthoringMode,
     Availability,
     CaseKind,
+    CompletionMode,
     ConfirmationState,
     ContentOrigin,
+    CriterionVerdict,
     DecideAt,
     DecisionKind,
+    EvidenceKind,
+    IntentField,
     Permission,
     ReadRequestState,
     RunOutcome,
@@ -48,6 +59,16 @@ def _repo(request: Request) -> Repository:
 def _handle(exc: Exception) -> HTTPException:
     if isinstance(exc, NotFoundError):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, AcceptanceRefused):
+        # 사유 코드를 구조로 돌려준다. 화면과 직접 API 호출이 같은 코드를 받아야
+        # "왜 종료가 확정되지 않았는가"를 같은 근거로 설명할 수 있다.
+        return HTTPException(
+            status_code=409,
+            detail={
+                "refusals": [r.value for r in exc.refusals],
+                "message": str(exc),
+            },
+        )
     if isinstance(exc, ConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     raise exc
@@ -281,6 +302,9 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 않았는가"를 다른 화면을 찾아다니지 않고 알 수 있어야 한다(FR-14).
     case["gate"] = repo.gate_state(case_id)
     case["admission_checks"] = repo.list_admission_checks(case_id)
+    # 결과·완료 상태도 같은 응답에 담는다. "현재 무엇을 기다리는가"를 알기 위해
+    # 다른 화면을 찾아다니게 하지 않는다(FR-14).
+    case["result"] = repo.result_view(case_id)
     return case
 
 
@@ -623,6 +647,23 @@ class IntentQuestionIn(BaseModel):
     blocks: list[str] = Field(default_factory=list)
 
 
+class IntentCriterionIn(BaseModel):
+    """성공 기준(P2-04).
+
+    기준의 본문(기대값·확인 방법)은 의도 문서 안으로 들어가고 제어부에는 짧은
+    요약만 남는다. `method` 를 필수로 받는 이유는 확인 방법이 없는 기준이 곧
+    QG-01의 `unverifiable_success_criteria` 이기 때문이다 — 빈 값으로 통과시키면
+    게이트가 볼 것이 없어진다.
+    """
+
+    key: str = Field(min_length=1, max_length=64)
+    relates_to: IntentField = IntentField.EXPECTED_OUTCOME
+    text: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=200)
+    method_summary: str = Field(min_length=1, max_length=200)
+
+
 class IntentDraftIn(BaseModel):
     """의도 초안 제출.
 
@@ -635,6 +676,8 @@ class IntentDraftIn(BaseModel):
     authored_by: str = "owner"
     fields: dict[str, IntentFieldIn] = Field(default_factory=dict)
     questions: list[IntentQuestionIn] = Field(default_factory=list)
+    #: 합의할 성공 기준. 비워 두면 기준 0건이며 시스템이 채우지 않는다.
+    criteria: list[IntentCriterionIn] = Field(default_factory=list)
     #: 이 버전이 반영한 피드백. 반영/미반영을 이유와 함께 닫는다.
     reflects_feedback: list[str] = Field(default_factory=list)
     not_reflected: dict[str, str] = Field(default_factory=dict)
@@ -688,6 +731,10 @@ class IntentStructureIn(BaseModel):
     intent_version_id: str
     fields: list[dict[str, Any]]
     questions: list[dict[str, Any]] = Field(default_factory=list)
+    # 성공 기준도 같은 보고로 온다(P2-04). 기준의 본문은 의도 원문 안에 있고
+    # 여기에는 짧은 요약·확인 방법 요약·연결된 의도 항목만 온다.
+    # `None` 은 "기준을 보고하지 않음"이고 `[]` 는 "기준이 0건"이다 — 다르다.
+    criteria: list[dict[str, Any]] | None = None
 
 
 def _refuse(reason: AgreementRefusal, detail: str) -> HTTPException:
@@ -720,6 +767,7 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
             questions=[q.model_dump() for q in payload.questions],
             case_id=case_id,
             authored_by=payload.authored_by,
+            criteria=[c.model_dump(mode="json") for c in payload.criteria],
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1031,7 +1079,10 @@ def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dic
     """Runner가 계산한 의도 구조를 받는다. 본문은 오지 않는다."""
     try:
         return _repo(request).apply_intent_structure(
-            payload.intent_version_id, payload.fields, payload.questions
+            payload.intent_version_id,
+            payload.fields,
+            payload.questions,
+            payload.criteria,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -1155,6 +1206,243 @@ def runner_gate_review(request: Request, payload: GateReviewIn) -> dict[str, Any
             intent_version_id=payload.intent_version_id,
             run_id=payload.run_id,
             raw_findings=payload.findings,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== P2-04
+#
+# 결과·근거 열람과 사람 최종 확인.
+#
+# **본문은 여기도 지나가지 않는다.** 기준의 본문은 의도 원문 안에, 근거의 서술은
+# 실행 결과 원문 안에 있고, 둘 다 기존 일시중계 경로(`read-requests`)로만 읽는다.
+# 인수·예외의 문구도 참조로만 받는다.
+#
+# 인수 거절은 `AcceptanceRefused` 로 올라가 사유 코드 목록과 함께 409가 된다.
+# **P2-02의 동의 거절, P2-03의 진입 거부와 별개 목록이다**(FR-23).
+
+
+class CriterionResultIn(BaseModel):
+    """기준별 판정 기록. **본문 필드가 없다.**
+
+    `summary` 는 목록에 보일 짧은 요약이며 근거 원문을 대체하지 않는다.
+    """
+
+    verdict: CriterionVerdict
+    summary: str = Field(min_length=1, max_length=200)
+    recorded_by: str = Field(min_length=1, max_length=120)
+    evidence_kind: EvidenceKind = EvidenceKind.NONE
+    evidence_run_id: str | None = None
+    evidence_artifact_id: str | None = None
+    evidence_artifact_rev: int | None = None
+
+
+class CompletionPolicyIn(BaseModel):
+    mode: CompletionMode
+    set_by: str = Field(min_length=1, max_length=120)
+
+
+class AcceptanceIn(BaseModel):
+    """최종 인수. 대상이 분명한 행동이어야 한다(FR-03/FR-23의 같은 원칙).
+
+    `statement` 는 사용자가 직접 쓴 인수 문구이며 **저장하지 않는다.**
+    제어부는 그 문구가 인수를 뜻하는지만 보고 본문은 버린다.
+    """
+
+    actor: str = Field(min_length=1, max_length=120)
+    statement: str = Field(min_length=1, max_length=400)
+    statement_artifact_id: str | None = None
+
+
+class ExceptionIn(BaseModel):
+    """표시된 미충족·미검증의 수용. 원래 판정을 바꾸지 않는다."""
+
+    actor: str = Field(min_length=1, max_length=120)
+    criterion_id: str
+    scope_summary: str = Field(min_length=1, max_length=200)
+
+
+class SuccessorCaseIn(BaseModel):
+    """완료 후 수정 요청. 기존 Case 재개가 아니라 연결된 새 Case 다(D-33)."""
+
+    title: str = Field(min_length=1, max_length=200)
+    kind: CaseKind = CaseKind.FEATURE
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+#: 인수로 인정하는 문구. 대상이 분명한 행동만 받는다.
+#: "좋아 보인다", "고맙다" 같은 반응을 인수로 확대하지 않는다(FR-23).
+_ACCEPTANCE_PHRASES = ("이 결과를 인수", "결과 인수", "최종 인수", "accept this result")
+
+
+@router.get("/api/cases/{case_id}/result")
+def get_result_view(request: Request, case_id: str) -> dict[str, Any]:
+    """기준별 결과·근거·미정리 실행·종료 후보를 한 묶음으로 돌려준다(FR-17).
+
+    총점 하나를 만들지 않는다. 기준마다 판정과 근거를 그대로 둔다.
+    """
+    try:
+        return _repo(request).result_view(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/criteria/{criterion_id}/result")
+def record_criterion_result(
+    request: Request, case_id: str, criterion_id: str, payload: CriterionResultIn
+) -> dict[str, Any]:
+    """기준별 판정을 기록한다.
+
+    **실행이 끝났다는 사실이 판정을 만들지 않는다.** `met` 은 근거 Run 의 outcome 이
+    `completed` 일 때만 받는다. `unknown` 을 근거로 한 `met` 은 409로 거부된다.
+    """
+    repo = _repo(request)
+    try:
+        criterion = repo.get_success_criterion(criterion_id)
+        if criterion["case_id"] != case_id:
+            raise ConflictError("criterion belongs to another case")
+        return repo.record_criterion_result(
+            criterion_id=criterion_id,
+            verdict=payload.verdict,
+            summary=payload.summary,
+            recorded_by=payload.recorded_by,
+            evidence_kind=payload.evidence_kind,
+            evidence_run_id=payload.evidence_run_id,
+            evidence_artifact_id=payload.evidence_artifact_id,
+            evidence_artifact_rev=payload.evidence_artifact_rev,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/completion-policy")
+def set_completion_policy(
+    request: Request, case_id: str, payload: CompletionPolicyIn
+) -> dict[str, Any]:
+    """Case 의 완료 정책(D-31). 기본은 사람 최종 확인이다."""
+    try:
+        return _repo(request).set_completion_mode(case_id, payload.mode, payload.set_by)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/completion-candidates", status_code=201)
+def build_candidate(request: Request, case_id: str) -> dict[str, Any]:
+    """종료 후보를 만든다. 내용이 그대로면 기존 후보를 그대로 돌려준다."""
+    try:
+        candidate, created = _repo(request).build_completion_candidate(case_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"created": created, "candidate": candidate}
+
+
+@router.get("/api/cases/{case_id}/completion-candidates")
+def list_candidates(request: Request, case_id: str) -> list[dict[str, Any]]:
+    try:
+        return _repo(request).list_completion_candidates(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/completion-candidates/{candidate_id}/exceptions",
+             status_code=201)
+def accept_exception(
+    request: Request, case_id: str, candidate_id: str, payload: ExceptionIn
+) -> dict[str, Any]:
+    """표시된 미충족·미검증을 수용한다. **원래 판정은 보존된다.**"""
+    repo = _repo(request)
+    try:
+        candidate = repo.get_completion_candidate(candidate_id)
+        if candidate["case_id"] != case_id:
+            raise ConflictError("candidate belongs to another case")
+        return repo.record_exception_decision(
+            candidate_id=candidate_id,
+            target_id=payload.criterion_id,
+            scope_summary=payload.scope_summary,
+            actor=payload.actor,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/completion-candidates/{candidate_id}/acceptance",
+             status_code=201)
+def accept_result(
+    request: Request, case_id: str, candidate_id: str, payload: AcceptanceIn
+) -> dict[str, Any]:
+    """최종 인수를 기록한다.
+
+    **인수가 곧 종료는 아니다.** 결과를 확정할 수 없는 실행이 남아 있으면 인수는
+    기록하고 종료 기록은 만들지 않는다(completion-lifecycle 5절).
+    """
+    repo = _repo(request)
+    try:
+        candidate = repo.get_completion_candidate(candidate_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    if candidate["case_id"] != case_id:
+        raise _handle(ConflictError("candidate belongs to another case"))
+
+    statement = payload.statement.strip()
+    if not any(phrase in statement for phrase in _ACCEPTANCE_PHRASES):
+        # 모호한 반응을 인수로 확대하지 않는다. 대상이 분명한 행동만 받는다.
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "refusals": [AcceptanceRefusal.NOT_EXPLICIT.value],
+                "message": (
+                    "인수 문구에 대상이 분명한 표현이 없다."
+                    f" 다음 중 하나를 포함해야 한다: {', '.join(_ACCEPTANCE_PHRASES)}"
+                ),
+            },
+        )
+    try:
+        acceptance = repo.record_final_acceptance(
+            candidate_id=candidate_id,
+            actor=payload.actor,
+            mode=AcceptanceMode.HUMAN,
+            statement_artifact_id=payload.statement_artifact_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {
+        "acceptance": acceptance,
+        "closure": repo.get_closure(case_id),
+        "candidate": repo.get_completion_candidate(candidate_id),
+    }
+
+
+@router.post("/api/cases/{case_id}/auto-complete")
+def auto_complete(request: Request, case_id: str) -> dict[str, Any]:
+    """자동 완료 정책을 적용한다.
+
+    **자동 완료를 사람 인수로 표시하지 않는다.** 정책이 사람 확인이면 아무 것도
+    하지 않고, 조건을 못 갖추면 사유를 돌려주며 예외를 스스로 수용하지 않는다.
+    """
+    repo = _repo(request)
+    try:
+        result = repo.auto_complete_if_allowed(case_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    result["closure"] = repo.get_closure(case_id)
+    return result
+
+
+@router.post("/api/cases/{case_id}/successor", status_code=201)
+def create_successor(
+    request: Request, case_id: str, payload: SuccessorCaseIn
+) -> dict[str, Any]:
+    """완료 후 수정을 위한 연결된 새 Case 를 만든다.
+
+    **이전 동의를 승계하지 않는다.** 새 Case 는 의도 버전 0개로 시작한다.
+    """
+    try:
+        return _repo(request).create_successor_case(
+            from_case_id=case_id,
+            title=payload.title,
+            kind=payload.kind,
+            reason_summary=payload.reason_summary,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

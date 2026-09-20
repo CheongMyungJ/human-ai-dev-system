@@ -50,6 +50,13 @@ INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 
 4. 사람의 결정이 필요한 미정 사항은 questions 에 넣는다. 질문을 숨기거나 임의로
    답하지 않는다. summary 는 목록에 보일 짧은 한 줄을 **따로** 쓴다(본문 발췌 금지).
 5. decide_at 은 intent / design / plan 중 하나다. 지금 사람이 정해야 하면 intent 다.
+6. **성공 기준 후보**를 criteria 에 쓴다. 기준마다 관련 의도 항목(relates_to),
+   기대값(text), **확인 방법**(method)을 잇는다. 확인할 방법을 쓸 수 없는 기준은
+   쓰지 마라 — 그런 기준은 검토에서 `unverifiable_success_criteria` 로 걸린다.
+   미정 때문에 기대값을 확정할 수 없으면 그 사실을 text 에 적고 관련 질문을
+   questions 에 넣는다. **수치를 모르면 지어내지 않는다.**
+   summary 와 method_summary 는 목록용 짧은 한 줄을 따로 쓴다(본문 발췌 금지).
+   기준이 하나도 없으면 criteria 를 빈 목록으로 둔다.
 
 출력은 이 형태의 JSON **하나만** 낸다. 설명 문장을 앞뒤에 붙이지 않는다.
 
@@ -64,6 +71,11 @@ INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 
   }},
   "questions": [
     {{"key": "q1", "text": "질문 본문", "summary": "짧은 요약", "decide_at": "intent"}}
+  ],
+  "criteria": [
+    {{"key": "C-01", "relates_to": "expected_outcome",
+      "text": "무엇이 되면 충족인가", "method": "어떻게 확인하는가",
+      "summary": "짧은 한 줄", "method_summary": "확인 방법 한 줄"}}
   ]
 }}
 
@@ -164,11 +176,16 @@ def extract_json(text: str) -> dict[str, Any]:
     raise ValueError("JSON 객체가 닫히지 않았다")
 
 
-def parse_intent_draft(text: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """AI가 쓴 초안을 여섯 항목과 질문 목록으로 바꾼다.
+def parse_intent_draft(
+    text: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+    """AI가 쓴 초안을 여섯 항목·질문·성공 기준으로 바꾼다.
 
     **비운 항목을 채우지 않는다.** 항목이 통째로 빠져 있어도 여기서 만들어 내지
     않고, `domain.intent_doc.compose` 가 `undecided`/`none` 으로 남긴다.
+
+    성공 기준도 같다. **확인 방법이 없는 기준은 버린다** — 채워서 통과시키면
+    QG-01이 볼 문제가 사라진다. 버린 사실은 기준 0건으로 드러난다.
     """
     doc = extract_json(text)
     raw_fields = doc.get("fields") or {}
@@ -210,7 +227,35 @@ def parse_intent_draft(text: str) -> tuple[dict[str, Any], list[dict[str, Any]]]
                 "blocks": [str(b) for b in (raw.get("blocks") or [])],
             }
         )
-    return fields, questions
+
+    criteria: list[dict[str, Any]] = []
+    for index, raw in enumerate(doc.get("criteria") or [], start=1):
+        if not isinstance(raw, dict):
+            continue
+        body = str(raw.get("text") or "").strip()
+        method = str(raw.get("method") or "").strip()
+        if not body or not method:
+            # 확인 방법 없는 기준을 만들어 채우지 않는다. 빠뜨린 것은 빠뜨린 대로
+            # 남고, 그 자체가 QG-01의 검토 대상이다.
+            continue
+        summary = " ".join(str(raw.get("summary") or "").split())[:200]
+        method_summary = " ".join(str(raw.get("method_summary") or "").split())[:200]
+        key = str(raw.get("key") or f"C-{index:02d}")[:64]
+        if not summary:
+            summary = f"성공 기준 {key} (요약 없음 — 원문을 열람해 확인)"
+        if not method_summary:
+            method_summary = f"확인 방법 {key} (요약 없음 — 원문을 열람해 확인)"
+        criteria.append(
+            {
+                "key": key,
+                "relates_to": str(raw.get("relates_to") or "expected_outcome"),
+                "text": body,
+                "method": method,
+                "summary": summary,
+                "method_summary": method_summary,
+            }
+        )
+    return fields, questions, criteria
 
 
 def parse_gate_review(text: str) -> list[dict[str, Any]]:

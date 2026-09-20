@@ -99,6 +99,9 @@ export interface CaseDetail extends Case {
   runs: Run[]
   gate: GateResult
   admission_checks: AdmissionCheck[]
+  // P2-04: 기준별 결과·미정리 실행·종료 후보를 같은 응답에 담는다.
+  // "지금 무엇을 기다리는가"를 다른 화면에서 찾게 하지 않는다(FR-14).
+  result: ResultView
 }
 
 export interface RunnerCapability {
@@ -317,6 +320,8 @@ export interface IntentVersionDetail extends IntentVersion {
   superseded_by: string | null
   fields: IntentFieldState[]
   questions: IntentQuestion[]
+  // 성공 기준은 의도와 같은 묶음으로 온다. 다른 곳에서 찾게 하지 않는다.
+  criteria: SuccessCriterion[]
   content_hash: string
   availability: Availability
   summary: string
@@ -381,6 +386,22 @@ export interface DraftQuestionInput {
   decide_at: DecideAt
 }
 
+/**
+ * 성공 기준 입력.
+ *
+ * `method` 를 따로 받는 이유는 **확인 방법 없는 기준은 기준이 아니기** 때문이다.
+ * 비워 두면 서버가 422로 거절한다 — 빈 값으로 통과시키면 QG-01의
+ * `unverifiable_success_criteria` 가 볼 것이 없어진다.
+ */
+export interface DraftCriterionInput {
+  key: string
+  relates_to: string
+  text: string
+  method: string
+  summary: string
+  method_summary: string
+}
+
 export const intentApi = {
   // 여섯 항목 본문은 정규 문서로 묶여 Runner로 간다. 서버에 저장되지 않는다.
   submitDraft: (
@@ -390,6 +411,7 @@ export const intentApi = {
       target_runner_id: string
       fields: Record<string, DraftFieldInput>
       questions: DraftQuestionInput[]
+      criteria?: DraftCriterionInput[]
       reflects_feedback?: string[]
       not_reflected?: Record<string, string>
     },
@@ -577,4 +599,246 @@ export const gateApi = {
 
   admissionChecks: (caseId: string) =>
     request<AdmissionCheck[]>(`/api/cases/${caseId}/admission-checks`),
+}
+
+// ===================================================================== P2-04
+//
+// 기준별 결과·근거 · 최종 결과 후보 · 사람 최종 확인 · 예외 수용 · 종료 후 새 Case.
+//
+// **총점 하나를 만들지 않는다.** 기준마다 판정과 근거를 그대로 보여 준다
+// (sizing-and-review-ux 6절). 그리고 인수·예외·종료는 서로 다른 기록이며
+// 화면이 한자리에서 결정하더라도 합쳐서 보여 주지 않는다.
+
+export type CriterionVerdict =
+  | 'unverified'
+  | 'met'
+  | 'not_met'
+  | 'blocked'
+  | 'needs_recheck'
+
+export type EvidenceKind = 'none' | 'run_output' | 'human_judgement'
+
+export type CompletionMode = 'human_acceptance' | 'auto_on_conditions'
+
+export type ClosureKind = 'completed' | 'closed_with_exceptions' | 'cancelled'
+
+export interface SuccessCriterion {
+  id: string
+  case_id: string
+  intent_version_id: string
+  criterion_key: string
+  summary: string
+  method_summary: string
+  relates_to: string
+  state: 'proposed' | 'user_confirmed' | 'superseded'
+  created_at: string
+  verdict: CriterionVerdict
+  evidence_kind: EvidenceKind
+  evidence_run_id: string | null
+  evidence_artifact_id: string | null
+  evidence_artifact_rev: number | null
+  result_summary: string
+  recorded_by: string
+  recorded_at: string
+}
+
+export interface UnsettledRun {
+  run_id: string
+  status: string
+  outcome: string | null
+  purpose: RunPurpose | null
+  tool_id: string
+}
+
+export interface ExceptionDecision {
+  id: string
+  candidate_id: string
+  target_type: string
+  target_id: string
+  original_verdict: CriterionVerdict
+  scope_summary: string
+  actor: string
+  decided_at: string
+}
+
+export interface FinalAcceptance {
+  id: string
+  candidate_id: string
+  decision_id: string
+  mode: 'human' | 'auto_policy'
+  actor: string
+  accepted_at: string
+}
+
+export interface CandidateCriterion {
+  criterion_id: string
+  verdict: CriterionVerdict
+  criterion_key: string
+  summary: string
+  method_summary: string
+  relates_to: string
+  state: string
+}
+
+export interface CompletionCandidate {
+  id: string
+  case_id: string
+  revision: number
+  intent_version_id: string | null
+  intent_agreement_state: string
+  gate_verdict: string
+  criteria_total: number
+  criteria_met: number
+  unresolved: { kind: string; id: string; key?: string; verdict: string }[]
+  unsettled_runs: UnsettledRun[]
+  snapshot_hash: string
+  state: 'open' | 'superseded'
+  created_at: string
+  criteria: CandidateCriterion[]
+  exceptions: ExceptionDecision[]
+  acceptance: FinalAcceptance | null
+}
+
+export interface ClosureRecord {
+  id: string
+  case_id: string
+  candidate_id: string
+  final_acceptance_id: string | null
+  closure_kind: ClosureKind
+  exception_count: number
+  confirmed_at: string
+}
+
+export interface CaseRelation {
+  id: string
+  from_case_id: string
+  to_case_id: string
+  relation: string
+  reason_summary: string
+  created_at: string
+}
+
+export interface ResultView {
+  case_id: string
+  completion_mode: CompletionMode
+  criteria: SuccessCriterion[]
+  unsettled_runs: UnsettledRun[]
+  candidate: CompletionCandidate | null
+  closure: ClosureRecord | null
+  relations: CaseRelation[]
+}
+
+//: 판정을 사람 말로. `unverified` 와 `not_met` 을 합치지 않는다 — 확인하지 않은 것과
+//: 확인해서 미충족인 것은 다르다. `blocked` 도 미충족이 아니다.
+export const CRITERION_VERDICT_LABEL: Record<CriterionVerdict, string> = {
+  unverified: '미확인',
+  met: '충족',
+  not_met: '미충족',
+  blocked: '확인 불가',
+  needs_recheck: '재검토 필요',
+}
+
+export const EVIDENCE_KIND_LABEL: Record<EvidenceKind, string> = {
+  none: '근거 없음',
+  run_output: '실행 결과',
+  human_judgement: '사람 판단',
+}
+
+export const CLOSURE_KIND_LABEL: Record<ClosureKind, string> = {
+  completed: '완료',
+  closed_with_exceptions: '예외 수용으로 종료',
+  cancelled: '취소',
+}
+
+export const ACCEPTANCE_REFUSAL_LABEL: Record<string, string> = {
+  not_explicit: '대상이 분명한 인수 문구가 아니다',
+  candidate_superseded: '그 사이 결과 후보가 바뀌었다 — 지금 후보를 다시 본다',
+  unresolved_criteria: '충족되지 않은 기준이 남아 있다 (예외를 수용하거나 채워야 한다)',
+  no_success_criteria: '합의한 성공 기준이 0건이다 — 견줄 기준 없이 인수할 수 없다',
+  unsettled_runs_present: '결과를 확정할 수 없는 실행이 남아 있다',
+  intent_not_agreed: '최신 의도에 대한 사람의 동의가 없다',
+  case_already_closed: '이미 종료된 업무다 — 수정은 연결된 새 Case 로 한다',
+  auto_policy_cannot_accept_exception: '자동 완료 모드는 예외를 수용하지 않는다',
+  exception_target_not_failing: '충족된 기준에는 예외를 걸 수 없다',
+}
+
+/** 인수 문구로 인정하는 표현. 서버의 목록과 같아야 한다. */
+export const ACCEPTANCE_PHRASES = ['이 결과를 인수', '결과 인수', '최종 인수']
+
+export const resultApi = {
+  view: (caseId: string) => request<ResultView>(`/api/cases/${caseId}/result`),
+
+  recordVerdict: (
+    caseId: string,
+    criterionId: string,
+    payload: {
+      verdict: CriterionVerdict
+      summary: string
+      recorded_by?: string
+      evidence_kind: EvidenceKind
+      evidence_run_id?: string | null
+      evidence_artifact_id?: string | null
+      evidence_artifact_rev?: number | null
+    },
+  ) =>
+    request<SuccessCriterion>(`/api/cases/${caseId}/criteria/${criterionId}/result`, {
+      method: 'POST',
+      body: JSON.stringify({ recorded_by: 'owner', ...payload }),
+    }),
+
+  setCompletionMode: (caseId: string, mode: CompletionMode) =>
+    request<{ mode: CompletionMode }>(`/api/cases/${caseId}/completion-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ mode, set_by: 'owner' }),
+    }),
+
+  buildCandidate: (caseId: string) =>
+    request<{ created: boolean; candidate: CompletionCandidate }>(
+      `/api/cases/${caseId}/completion-candidates`,
+      { method: 'POST' },
+    ),
+
+  acceptException: (
+    caseId: string,
+    candidateId: string,
+    criterionId: string,
+    scopeSummary: string,
+  ) =>
+    request<ExceptionDecision>(
+      `/api/cases/${caseId}/completion-candidates/${candidateId}/exceptions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          actor: 'owner',
+          criterion_id: criterionId,
+          scope_summary: scopeSummary,
+        }),
+      },
+    ),
+
+  // 인수 문구는 서버가 판단에만 쓰고 버린다. 저장되지 않는다.
+  accept: (caseId: string, candidateId: string, statement: string) =>
+    request<{
+      acceptance: FinalAcceptance
+      closure: ClosureRecord | null
+      candidate: CompletionCandidate
+    }>(`/api/cases/${caseId}/completion-candidates/${candidateId}/acceptance`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner', statement }),
+    }),
+
+  autoComplete: (caseId: string) =>
+    request<{
+      applied: boolean
+      reason?: string
+      refusals?: string[]
+      candidate: CompletionCandidate
+      closure: ClosureRecord | null
+    }>(`/api/cases/${caseId}/auto-complete`, { method: 'POST' }),
+
+  createSuccessor: (caseId: string, title: string, kind: string, reason: string) =>
+    request<Case>(`/api/cases/${caseId}/successor`, {
+      method: 'POST',
+      body: JSON.stringify({ title, kind, reason_summary: reason }),
+    }),
 }

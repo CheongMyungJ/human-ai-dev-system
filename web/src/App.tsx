@@ -25,6 +25,7 @@ import {
   type RunPurpose,
 } from './api'
 import { IntentPanel } from './IntentPanel'
+import { ResultPanel } from './ResultPanel'
 
 //: 화면에서 고를 수 있는 목적. `feature_implementation` 도 **일부러 남겨 둔다** —
 //: 고르면 서버가 "선행 조건이 아직 구현되지 않았다"고 거부하는 것을 볼 수 있어야
@@ -425,6 +426,10 @@ function CaseDetailPanel(props: {
       </ul>
 
       <GatePanel detail={detail} onChanged={props.onChanged} />
+
+      {/* 결과·근거와 최종 확인. 게이트 판정과 **다른 기록**이므로 패널을 나눈다 —
+          게이트 통과가 결과 인수가 아니고, 인수가 게이트를 통과시키지도 않는다. */}
+      <ResultPanel detail={detail} onChanged={props.onChanged} />
 
       <h3>실행</h3>
       <p className="muted small">

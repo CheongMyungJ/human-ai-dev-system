@@ -27,6 +27,7 @@ import {
   intentApi,
   type ContentOrigin,
   type DecideAt,
+  type DraftCriterionInput,
   type DraftFieldInput,
   type DraftQuestionInput,
   type IntentDiff,
@@ -81,6 +82,14 @@ const EDITABLE_ORIGINS: ContentOrigin[] = [
 
 type FieldDraft = { text: string; origin: ContentOrigin }
 type QuestionDraft = { key: string; summary: string; text: string; decide_at: DecideAt }
+type CriterionDraft = {
+  key: string
+  relates_to: string
+  text: string
+  method: string
+  summary: string
+  method_summary: string
+}
 
 function emptyFields(): Record<string, FieldDraft> {
   const out: Record<string, FieldDraft> = {}
@@ -484,6 +493,29 @@ function LatestVersion(props: {
         {intent.questions.length === 0 && <li className="muted">없음</li>}
       </ul>
 
+      {/* 성공 기준은 의도와 **같은 화면**에 둔다. 다른 곳으로 옮기면 기준이 의도에서
+          분리된다(intent-artifacts 1절). 판정과 근거는 아래 결과 패널에 있다. */}
+      <h4>성공 기준</h4>
+      <ul className="list">
+        {intent.criteria.map((criterion) => (
+          <li key={criterion.id} className="small">
+            <strong>{criterion.criterion_key}</strong> {criterion.summary}
+            <br />
+            <span className="muted">
+              확인 방법: {criterion.method_summary} · 연결된 항목: {criterion.relates_to} ·{' '}
+              {criterion.state === 'user_confirmed'
+                ? '사람이 확인한 기준'
+                : '아직 제안 상태의 기준'}
+            </span>
+          </li>
+        ))}
+        {intent.criteria.length === 0 && (
+          <li className="muted">
+            없음 — 시스템이 채우지 않는다. 기준 0건으로는 결과를 인수할 수 없다
+          </li>
+        )}
+      </ul>
+
       <h4>원문 열람</h4>
       <p className="muted small">
         본문은 소유 Runner에서 온다. 제어부는 메모리로 한 번 중계할 뿐 보관하지 않는다.
@@ -590,6 +622,7 @@ function DraftForm(props: {
 }) {
   const [fields, setFields] = useState<Record<string, FieldDraft>>(emptyFields)
   const [questions, setQuestions] = useState<QuestionDraft[]>([])
+  const [criteria, setCriteria] = useState<CriterionDraft[]>([])
   const [summary, setSummary] = useState('')
   const [reflects, setReflects] = useState<string[]>([])
 
@@ -618,16 +651,37 @@ function DraftForm(props: {
               summary: q.summary.trim(),
               decide_at: q.decide_at,
             }))
+          // 확인 방법이 없는 기준은 보내지 않는다. 서버도 거절하지만, 보내기 전에
+          // 무엇이 빠졌는지 보여 주는 편이 낫다.
+          const payloadCriteria: DraftCriterionInput[] = criteria
+            .filter(
+              (c) =>
+                c.key.trim() &&
+                c.text.trim() &&
+                c.method.trim() &&
+                c.summary.trim() &&
+                c.method_summary.trim(),
+            )
+            .map((c) => ({
+              key: c.key.trim(),
+              relates_to: c.relates_to,
+              text: c.text,
+              method: c.method,
+              summary: c.summary.trim(),
+              method_summary: c.method_summary.trim(),
+            }))
           void props.onAction(async () => {
             await intentApi.submitDraft(props.caseId, {
               summary: summary.trim(),
               target_runner_id: props.runnerId as string,
               fields: payloadFields,
               questions: payloadQuestions,
+              criteria: payloadCriteria,
               reflects_feedback: reflects,
             })
             setFields(emptyFields())
             setQuestions([])
+            setCriteria([])
             setSummary('')
             setReflects([])
             props.onNotice(
@@ -731,6 +785,80 @@ function DraftForm(props: {
           }
         >
           질문 추가
+        </button>
+
+        <h4>성공 기준</h4>
+        <p className="muted small">
+          기준마다 <strong>확인 방법</strong>을 함께 쓴다. 확인할 방법이 없는 기준은
+          기준이 아니라 바람이며 QG-01에서 걸린다. 기준을 하나도 쓰지 않으면 0건으로
+          남고, 그 상태로는 결과를 인수할 수 없다. 수치를 모르면 지어내지 말고 미정
+          질문으로 남긴다.
+        </p>
+        {criteria.map((criterion, index) => {
+          const update = (patch: Partial<CriterionDraft>) => {
+            const next = [...criteria]
+            next[index] = { ...criterion, ...patch }
+            setCriteria(next)
+          }
+          return (
+            <div key={index} className="field">
+              <input
+                value={criterion.key}
+                placeholder="기준 키 (예: C-01 — 버전이 바뀌어도 같은 기준을 잇는다)"
+                onChange={(e) => update({ key: e.target.value })}
+              />
+              <select
+                value={criterion.relates_to}
+                onChange={(e) => update({ relates_to: e.target.value })}
+              >
+                {INTENT_FIELDS.map((field) => (
+                  <option key={field.key} value={field.key}>
+                    연결된 항목: {field.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={criterion.summary}
+                placeholder="기준 요약 — 이것만 제어부에 남는다"
+                onChange={(e) => update({ summary: e.target.value })}
+              />
+              <textarea
+                rows={2}
+                value={criterion.text}
+                placeholder="무엇이 되면 충족인가 (원문은 Runner에 저장된다)"
+                onChange={(e) => update({ text: e.target.value })}
+              />
+              <input
+                value={criterion.method_summary}
+                placeholder="확인 방법 요약 — 이것만 제어부에 남는다"
+                onChange={(e) => update({ method_summary: e.target.value })}
+              />
+              <textarea
+                rows={2}
+                value={criterion.method}
+                placeholder="어떻게 확인하는가 (원문은 Runner에 저장된다)"
+                onChange={(e) => update({ method: e.target.value })}
+              />
+            </div>
+          )
+        })}
+        <button
+          type="button"
+          onClick={() =>
+            setCriteria([
+              ...criteria,
+              {
+                key: `C-${String(criteria.length + 1).padStart(2, '0')}`,
+                relates_to: 'expected_outcome',
+                text: '',
+                method: '',
+                summary: '',
+                method_summary: '',
+              },
+            ])
+          }
+        >
+          성공 기준 추가
         </button>
 
         {props.unresolvedFeedback.length > 0 && (

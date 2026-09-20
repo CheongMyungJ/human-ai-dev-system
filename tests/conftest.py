@@ -48,13 +48,71 @@ FAKE_DRAFT_RESPONSE = """여기 초안입니다.
     "constraints": {"text": "Windows 로컬 파일만", "origin": "observation"},
     "open_questions": {"text": "대소문자 구분 여부가 미정", "origin": "ai_assumption"}
   },
-  "questions": []
+  "questions": [],
+  "criteria": [
+    {"key": "C-01", "relates_to": "expected_outcome",
+     "text": "ERROR 로 시작하는 줄만 출력되고 다른 줄은 나오지 않는다",
+     "method": "ERROR 2줄과 INFO 2줄이 섞인 표본 파일로 출력 줄 수를 비교한다",
+     "summary": "ERROR 줄만 출력된다", "method_summary": "표본 파일로 출력 줄 수 비교"},
+    {"key": "C-02", "relates_to": "constraints",
+     "text": "Windows 로컬 경로의 파일을 읽을 수 있다",
+     "method": "로컬 경로 한 건으로 읽기를 확인한다",
+     "summary": "Windows 로컬 경로를 읽는다", "method_summary": "로컬 경로 한 건 확인"}
+  ]
 }
 ```
 """
 
+#: 성공 기준이 하나도 없는 초안. "기준 0건"이 0건으로 남는지 확인할 때 쓴다.
+#: 시스템이 빈 자리를 채우지 않는다는 것을 확인하는 데 쓴다.
+FAKE_DRAFT_WITHOUT_CRITERIA = """초안입니다.
+
+```json
+{
+  "fields": {
+    "goal": {"text": "로그 파일에서 오류 줄만 뽑는 기능", "origin": "user_requirement"},
+    "expected_outcome": {"text": "ERROR 로 시작하는 줄만 출력된다", "origin": "ai_proposal"},
+    "scope": {"text": "읽기 전용 조회", "origin": "ai_proposal"},
+    "exclusions": {"text": "로그 회전과 보존 정책은 다루지 않는다", "origin": "ai_proposal"},
+    "constraints": {"text": "Windows 로컬 파일만", "origin": "observation"},
+    "open_questions": {"text": "대소문자 구분 여부가 미정", "origin": "ai_assumption"}
+  },
+  "questions": [],
+  "criteria": []
+}
+```
+"""
+
+#: 확인 방법이 빠진 기준. 채워서 통과시키지 않고 **버린다**는 것을 확인할 때 쓴다.
+FAKE_DRAFT_UNVERIFIABLE_CRITERION = FAKE_DRAFT_WITHOUT_CRITERIA.replace(
+    '"criteria": []',
+    '"criteria": [{"key": "C-01", "relates_to": "expected_outcome",'
+    ' "text": "빠르게 동작한다", "summary": "빠르다", "method_summary": ""}]',
+)
+
 #: 기본 AI 검토 응답. 문제를 찾지 못한 경우.
 FAKE_REVIEW_CLEAN = '{"findings": []}'
+
+#: 사람이 화면에서 쓰는 초안의 기본 성공 기준. 확인 방법을 반드시 함께 쓴다 —
+#: 확인 방법이 없는 기준은 기준이 아니라 바람이다(intent-artifacts 1절).
+DEFAULT_CRITERIA = [
+    {
+        "key": "C-01",
+        "relates_to": "expected_outcome",
+        "text": "ERROR 로 시작하는 줄만 출력되고 다른 줄은 나오지 않는다",
+        "method": "ERROR 2줄과 INFO 2줄이 섞인 표본으로 출력 줄 수를 비교한다",
+        "summary": "ERROR 줄만 출력된다",
+        "method_summary": "표본 파일로 출력 줄 수 비교",
+    },
+    {
+        "key": "C-02",
+        "relates_to": "constraints",
+        "text": "Windows 로컬 경로의 파일을 읽을 수 있다",
+        "method": "로컬 경로 한 건으로 읽기를 확인한다",
+        "summary": "Windows 로컬 경로를 읽는다",
+        "method_summary": "로컬 경로 한 건 확인",
+    },
+]
 
 
 class FakeCliExecutor:
@@ -335,6 +393,101 @@ class Harness:
     def admission_checks(self, case_id: str) -> list[dict[str, Any]]:
         return self.client.get(f"/api/cases/{case_id}/admission-checks").json()
 
+    # ------------------------------------------------------ P2-04 도우미
+
+    def result(self, case_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/api/cases/{case_id}/result")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def criteria(self, case_id: str) -> list[dict[str, Any]]:
+        return self.result(case_id)["criteria"]
+
+    def record_result(
+        self,
+        case_id: str,
+        criterion_id: str,
+        verdict: str,
+        evidence_kind: str = "human_judgement",
+        evidence_run_id: str | None = None,
+        evidence_artifact_id: str | None = None,
+        evidence_artifact_rev: int | None = None,
+        summary: str = "확인함",
+        recorded_by: str = "owner",
+    ):
+        return self.client.post(
+            f"/api/cases/{case_id}/criteria/{criterion_id}/result",
+            json={
+                "verdict": verdict,
+                "summary": summary,
+                "recorded_by": recorded_by,
+                "evidence_kind": evidence_kind,
+                "evidence_run_id": evidence_run_id,
+                "evidence_artifact_id": evidence_artifact_id,
+                "evidence_artifact_rev": evidence_artifact_rev,
+            },
+        )
+
+    def mark_all_criteria_met(self, case_id: str, run_id: str | None = None) -> None:
+        """모든 기준을 충족으로 기록한다. 근거는 사람 판단 또는 실행 결과다."""
+        for crit in self.criteria(case_id):
+            response = self.record_result(
+                case_id,
+                crit["id"],
+                "met",
+                evidence_kind="run_output" if run_id else "human_judgement",
+                evidence_run_id=run_id,
+            )
+            assert response.status_code == 200, response.text
+
+    def build_candidate(self, case_id: str) -> dict[str, Any]:
+        response = self.client.post(f"/api/cases/{case_id}/completion-candidates")
+        assert response.status_code == 201, response.text
+        return response.json()["candidate"]
+
+    def accept(
+        self,
+        case_id: str,
+        candidate_id: str,
+        statement: str = "이 결과를 인수합니다.",
+        actor: str = "owner",
+    ):
+        return self.client.post(
+            f"/api/cases/{case_id}/completion-candidates/{candidate_id}/acceptance",
+            json={"actor": actor, "statement": statement},
+        )
+
+    def accept_exception(
+        self,
+        case_id: str,
+        candidate_id: str,
+        criterion_id: str,
+        scope_summary: str = "이번 종료에만 적용",
+        actor: str = "owner",
+    ):
+        return self.client.post(
+            f"/api/cases/{case_id}/completion-candidates/{candidate_id}/exceptions",
+            json={
+                "actor": actor,
+                "criterion_id": criterion_id,
+                "scope_summary": scope_summary,
+            },
+        )
+
+    def set_completion_mode(self, case_id: str, mode: str, set_by: str = "owner"):
+        return self.client.put(
+            f"/api/cases/{case_id}/completion-policy",
+            json={"mode": mode, "set_by": set_by},
+        )
+
+    def ready_for_acceptance(self, case_id: str, project_id: str) -> dict[str, Any]:
+        """의도 동의까지 마친 Case 를 만든다. 반환값은 최신 의도 버전이다."""
+        intent = self.latest_intent(case_id)
+        self.read_intent_original(intent)
+        response = self.agree(case_id, intent)
+        assert response.status_code == 201, response.text
+        return intent
+
     # ------------------------------------------------------ P2-02 도우미
 
     def submit_intent_draft(
@@ -346,6 +499,7 @@ class Harness:
         reflects_feedback: list[str] | None = None,
         not_reflected: dict[str, str] | None = None,
         persist: bool = True,
+        criteria: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """의도 초안을 제출하고(기본으로) Runner가 저장·구조 보고까지 하게 한다.
 
@@ -358,6 +512,9 @@ class Harness:
                 "target_runner_id": RUNNER_ID,
                 "fields": fields,
                 "questions": questions or [],
+                # 기본으로 기준 두 건을 붙인다. 기준 0건의 동작은 그것을 보는
+                # 시험에서 명시적으로 `criteria=[]` 를 준다.
+                "criteria": DEFAULT_CRITERIA if criteria is None else criteria,
                 "reflects_feedback": reflects_feedback or [],
                 "not_reflected": not_reflected or {},
             },

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from typing import Any, Iterable
@@ -19,17 +20,26 @@ from controller.admission import evaluate as evaluate_admission
 from controller.db import transaction, utc_now
 from domain import ids
 from domain.models import (
+    AcceptanceMode,
+    AcceptanceRefusal,
     AdmissionOutcome,
     ArtifactKind,
     AuthoringMode,
     Availability,
     CapabilityState,
+    CandidateState,
     CaseKind,
+    CaseRelationKind,
     CaseStatus,
+    ClosureKind,
+    CompletionMode,
     ConfirmationState,
     ContentOrigin,
+    CriterionState,
+    CriterionVerdict,
     DecideAt,
     DecisionKind,
+    EvidenceKind,
     FeedbackState,
     FieldChange,
     FindingCertainty,
@@ -58,6 +68,24 @@ class ConflictError(Exception):
 
 class NotFoundError(Exception):
     """대상 기록이 없다. HTTP 404로 돌려준다."""
+
+
+class AcceptanceRefused(ConflictError):
+    """최종 인수·예외 수용을 기록할 수 없다.
+
+    **사유 코드를 들고 다니는 것이 핵심이다.** 화면과 API 직접 호출이 같은 코드를
+    받아야 "왜 종료가 확정되지 않았는가"를 같은 근거로 설명할 수 있다.
+    P2-02의 동의 거절, P2-03의 진입 거부와 **별개 목록**이다(FR-23).
+    """
+
+    def __init__(self, refusals: list[AcceptanceRefusal]) -> None:
+        self.refusals = refusals
+        super().__init__("acceptance refused: " + ", ".join(r.value for r in refusals))
+
+
+def _snapshot_hash(payload: str) -> str:
+    """종료 후보 내용의 지문. 사용자가 본 후보가 지금 것과 같은지 대조한다."""
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _summary(text: str) -> str:
@@ -303,6 +331,7 @@ class Repository:
         그 전까지는 저장 완료가 아니다(NFR-01, D-51).
         """
         self.get_case(case_id)
+        self.guard_open_case(case_id)
         self.get_runner(target_runner_id)
         artifact_id = artifact_id or ids.new_artifact_id()
         intake_id = ids.new_intake_id()
@@ -416,6 +445,7 @@ class Repository:
         검토 세션이 작성 세션과 달랐는지 확인할 수 있게 한다(FR-29).
         """
         self.get_case(case_id)
+        self.guard_open_case(case_id)
         ref = self.get_artifact_ref(artifact_id, artifact_rev)
         if ref["kind"] != ArtifactKind.INTENT.value:
             raise ConflictError("artifact is not an intent artifact")
@@ -462,6 +492,34 @@ class Repository:
                     "UPDATE gate_result SET verdict = ?, superseded_at = ?"
                     " WHERE case_id = ? AND intent_version_id != ? AND superseded_at IS NULL",
                     (GateVerdict.NEEDS_RECHECK.value, now, case_id, intent_id),
+                )
+                # 성공 기준도 같은 규칙이다. 이전 버전의 기준과 그 결과를 새 버전이
+                # 승계하지 않는다 — 승계하면 바뀐 의도에 옛 기준과 옛 판정이 그대로
+                # 붙는다(intent-artifacts 3절 "의도가 바뀌면 연결된 성공 기준을
+                # 재검토한다"). 기준 자체는 지우지 않고 대체됨으로 남긴다.
+                self.conn.execute(
+                    "UPDATE success_criterion SET state = ?"
+                    " WHERE case_id = ? AND intent_version_id != ? AND state != ?",
+                    (
+                        CriterionState.SUPERSEDED.value,
+                        case_id,
+                        intent_id,
+                        CriterionState.SUPERSEDED.value,
+                    ),
+                )
+                self.conn.execute(
+                    "UPDATE criterion_result SET verdict = ?, recorded_at = ?"
+                    " WHERE criterion_id IN ("
+                    "   SELECT id FROM success_criterion"
+                    "   WHERE case_id = ? AND intent_version_id != ?"
+                    " ) AND verdict != ?",
+                    (
+                        CriterionVerdict.NEEDS_RECHECK.value,
+                        now,
+                        case_id,
+                        intent_id,
+                        CriterionVerdict.NEEDS_RECHECK.value,
+                    ),
                 )
         return self.get_intent_version(intent_id)
 
@@ -808,6 +866,7 @@ class Repository:
         intent_version_id: str,
         fields: Iterable[dict[str, Any]],
         questions: Iterable[dict[str, Any]],
+        criteria: Iterable[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Runner가 계산한 의도 구조를 반영한다.
 
@@ -862,6 +921,11 @@ class Repository:
                         now,
                     ),
                 )
+        # 성공 기준도 같은 보고로 들어온다. 기준을 따로 입력받는 본문 API 를 만들면
+        # 제어부가 기준 본문을 갖게 되므로 경계가 뚫린다(data-boundary-review 1절).
+        # 기준이 0건이면 0건으로 남긴다 — 없는 기준을 시스템이 채우지 않는다.
+        if criteria is not None:
+            self.apply_success_criteria(intent_version_id, criteria)
         # 구조가 보고된 순간이 규칙 검사가 가능해진 순간이다. 여기서 한 번 돌려
         # 게이트 상태를 항상 최신 구조에 맞춰 둔다. **AI 검토는 건드리지 않는다** —
         # 규칙만 통과한 상태는 여전히 `not_run` 이다.
@@ -903,6 +967,7 @@ class Repository:
         확대하지 않는다." 그래서 이 메서드는 decision 표를 건드리지 않는다.
         """
         question = self.get_question(question_id)
+        self.guard_open_case(question["case_id"])
         if question["state"] != QuestionState.OPEN.value:
             raise ConflictError(f"question is {question['state']}")
         with transaction(self.conn):
@@ -937,6 +1002,9 @@ class Repository:
         ref = self.get_artifact_ref(intent["artifact_id"], intent["artifact_rev"])
         intent["fields"] = self.list_intent_fields(intent_version_id)
         intent["questions"] = self.list_questions(intent_version_id)
+        # 성공 기준은 의도에서 분리되지 않게 같은 묶음으로 돌려준다
+        # (intent-artifacts 1절). 화면이 기준을 다른 곳에서 찾게 하지 않는다.
+        intent["criteria"] = self.list_success_criteria(intent_version_id)
         intent["content_hash"] = ref["content_hash"]
         intent["availability"] = ref["availability"]
         intent["summary"] = ref["summary"]
@@ -965,6 +1033,7 @@ class Repository:
         피드백을 줬다는 사실이 초안 전체에 동의했다는 뜻이 되지 않게
         decision 표와 완전히 분리해 둔다(FR-03 수용 기준).
         """
+        self.guard_open_case(case_id)
         intent = self.get_intent_version(target_intent_version_id)
         if intent["case_id"] != case_id:
             raise ConflictError("intent version belongs to another case")
@@ -1114,6 +1183,7 @@ class Repository:
         evidence_ref: str | None = None,
     ) -> dict[str, Any]:
         """명시 동의를 기록한다. 동의는 **그 버전 그 원문**에만 붙는다."""
+        self.guard_open_case(case_id)
         intent = self.get_intent_version(intent_version_id)
         decision_id = ids.new_decision_id()
         with transaction(self.conn):
@@ -1146,6 +1216,20 @@ class Repository:
                     ConfirmationState.USER_CONFIRMED.value,
                     intent_version_id,
                     ConfirmationState.UNDECIDED.value,
+                ),
+            )
+            # 그 버전의 **성공 기준**도 여기서 제안에서 확인으로 올라간다.
+            # 사람이 원문을 읽고 그 버전에 명시 동의한 것이 곧 그 문서 안 기준에
+            # 대한 확인이기 때문이다(intent-artifacts 1절 "초안 단계의 기준은 제안이며
+            # 사용자가 확인한 기준과 구별한다"). 동의 없이 기준만 확인하는 경로는
+            # 만들지 않는다 — 그러면 기준이 의도에서 분리된다.
+            self.conn.execute(
+                "UPDATE success_criterion SET state = ?"
+                " WHERE intent_version_id = ? AND state = ?",
+                (
+                    CriterionState.USER_CONFIRMED.value,
+                    intent_version_id,
+                    CriterionState.PROPOSED.value,
                 ),
             )
         row = self.conn.execute("SELECT * FROM decision WHERE id = ?", (decision_id,)).fetchone()
@@ -1794,6 +1878,11 @@ class Repository:
         if existing is not None:
             return self.get_run(run_id), False, None, None
 
+        # 종료된 Case 는 새 실행을 받지 않는다. 완료 후 수정은 연결된 새 Case 다(D-33).
+        # 진입 조건표보다 앞에 두는 이유는, 이것이 "조건을 갖추면 열린다"가 아니라
+        # "이 Case 에서는 더 이상 실행하지 않는다"이기 때문이다.
+        self.guard_open_case(case_id)
+
         result = self.check_admission(
             case_id=case_id,
             run_id=run_id,
@@ -1828,3 +1917,744 @@ class Repository:
             case_id, run_id, task_id, purpose, role, permission, tool_id, result, run["run_id"]
         )
         return run, created, result, check
+
+    # =================================================================== P2-04
+    #
+    # 결과·완료 기록. 아래 접근자에도 본문을 받는 인자가 없다. 성공 기준의 본문
+    # (관련 목표·확인 방법·기대값)은 의도 원문 안에 있고, 근거의 서술과 인수·예외의
+    # 문구도 소유 Runner에 있다. 여기에는 판정·사유 코드·참조와 짧은 요약만 남는다.
+
+    # ----------------------------------------------------------- 성공 기준
+
+    def apply_success_criteria(
+        self, intent_version_id: str, criteria: Iterable[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Runner가 의도 원문에서 읽어 낸 성공 기준을 반영한다.
+
+        **기준은 의도 버전에 묶인다**(intent-artifacts 1절). 기준이 0건이면 0건으로
+        남긴다 — 없는 기준을 시스템이 만들지 않는다. 기준 없는 초안은 QG-01의
+        `unverifiable_success_criteria` 관점에서 AI 검토가 볼 문제이지, 제어부가
+        빈 통과로 채울 자리가 아니다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        rows = list(criteria)
+        now = utc_now()
+        with transaction(self.conn):
+            for row in rows:
+                self.conn.execute(
+                    "INSERT INTO success_criterion"
+                    " (id, case_id, intent_version_id, criterion_key, summary,"
+                    "  method_summary, relates_to, state, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(intent_version_id, criterion_key) DO UPDATE SET"
+                    "   summary = excluded.summary,"
+                    "   method_summary = excluded.method_summary,"
+                    "   relates_to = excluded.relates_to",
+                    (
+                        ids.new_id("crit"),
+                        intent["case_id"],
+                        intent_version_id,
+                        str(row["key"]),
+                        _summary(row["summary"]),
+                        _summary(row.get("method_summary", "")),
+                        IntentField(row["relates_to"]).value,
+                        CriterionState.PROPOSED.value,
+                        now,
+                    ),
+                )
+            # 기준이 생기는 순간 결과는 `unverified` 로 시작한다. 결과 행이 없는 것과
+            # "아직 확인하지 않았다"를 구별하기 위해 행을 미리 만든다.
+            for crit in self.conn.execute(
+                "SELECT id, case_id FROM success_criterion WHERE intent_version_id = ?",
+                (intent_version_id,),
+            ).fetchall():
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO criterion_result"
+                    " (id, criterion_id, case_id, verdict, evidence_kind, summary,"
+                    "  recorded_by, recorded_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("critres"),
+                        crit["id"],
+                        crit["case_id"],
+                        CriterionVerdict.UNVERIFIED.value,
+                        EvidenceKind.NONE.value,
+                        "아직 확인하지 않음",
+                        "system",
+                        now,
+                    ),
+                )
+        return self.list_success_criteria(intent_version_id)
+
+    def list_success_criteria(self, intent_version_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT c.*, r.verdict, r.evidence_kind, r.evidence_run_id,"
+            "       r.evidence_artifact_id, r.evidence_artifact_rev,"
+            "       r.summary AS result_summary, r.recorded_by, r.recorded_at"
+            " FROM success_criterion c"
+            " LEFT JOIN criterion_result r ON r.criterion_id = c.id"
+            " WHERE c.intent_version_id = ?"
+            " ORDER BY c.created_at, c.criterion_key",
+            (intent_version_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_success_criterion(self, criterion_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM success_criterion WHERE id = ?", (criterion_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"success criterion not found: {criterion_id}")
+        return dict(row)
+
+    def current_criteria(self, case_id: str) -> list[dict[str, Any]]:
+        """**최신 의도 버전의** 기준과 결과. 대체된 버전의 기준은 돌려주지 않는다."""
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return []
+        return self.list_success_criteria(latest["id"])
+
+    # ----------------------------------------------------------- 기준별 결과
+
+    def record_criterion_result(
+        self,
+        criterion_id: str,
+        verdict: CriterionVerdict,
+        summary: str,
+        recorded_by: str,
+        evidence_kind: EvidenceKind,
+        evidence_run_id: str | None = None,
+        evidence_artifact_id: str | None = None,
+        evidence_artifact_rev: int | None = None,
+    ) -> dict[str, Any]:
+        """기준별 판정을 기록한다.
+
+        **여기가 "실행 불명이 성공이 되지 않는다"를 강제하는 지점이다.**
+
+        `met` 을 받으려면 근거 Run 의 `outcome` 이 `completed` 여야 한다.
+        `unknown`·`failed`·`cancelled` 를 근거로 한 `met` 은 거부한다. 종료 코드나
+        "실행이 끝났다"는 사실로 충족을 적지 않는다(FR-28, completion-lifecycle 5절).
+
+        `needs_recheck` 는 사람이 직접 적는 값이 아니다 — 대상이 바뀌었을 때
+        시스템이 전이시키는 값이므로 여기서는 거부한다.
+        """
+        criterion = self.get_success_criterion(criterion_id)
+        self.guard_open_case(criterion["case_id"])
+        if criterion["state"] == CriterionState.SUPERSEDED.value:
+            raise ConflictError(
+                "criterion belongs to a superseded intent version;"
+                " record the result on the current version instead"
+            )
+        if verdict is CriterionVerdict.NEEDS_RECHECK:
+            raise ConflictError(
+                "needs_recheck is set by the system when the subject changes,"
+                " not recorded directly"
+            )
+
+        # 근거 없는 판정은 받지 않는다. `unverified` 로 되돌리는 것만 근거가 필요 없다.
+        if verdict is not CriterionVerdict.UNVERIFIED and evidence_kind is EvidenceKind.NONE:
+            raise ConflictError(f"verdict {verdict.value} requires evidence")
+
+        run: dict[str, Any] | None = None
+        if evidence_run_id is not None:
+            run = self.get_run(evidence_run_id)
+            if run["case_id"] != criterion["case_id"]:
+                raise ConflictError("evidence run belongs to a different case")
+
+        if verdict is CriterionVerdict.MET:
+            if evidence_kind is EvidenceKind.RUN_OUTPUT:
+                if run is None:
+                    raise ConflictError("run_output evidence requires evidence_run_id")
+                if run["status"] != RunStatus.FINISHED.value:
+                    raise ConflictError(
+                        f"cannot record 'met' from run {evidence_run_id}:"
+                        f" the run is still {run['status']}"
+                    )
+                if run["outcome"] != RunOutcome.COMPLETED.value:
+                    # 이 한 줄이 P2-04 성공 기준 "실행 불명 상태가 성공이 되지
+                    # 않음"의 구체적 구현이다. unknown 을 실패로 바꾸지도 않는다.
+                    raise ConflictError(
+                        f"cannot record 'met' from run {evidence_run_id}:"
+                        f" its outcome is '{run['outcome']}', not 'completed'"
+                    )
+            if evidence_artifact_id is not None and evidence_artifact_rev is not None:
+                ref = self.get_artifact_ref(evidence_artifact_id, evidence_artifact_rev)
+                if ref["availability"] == Availability.LOST_BEFORE_PERSIST.value:
+                    raise ConflictError("evidence original was lost before persistence")
+
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
+                " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
+                " summary = ?, recorded_by = ?, recorded_at = ? WHERE criterion_id = ?",
+                (
+                    verdict.value,
+                    evidence_kind.value,
+                    evidence_run_id,
+                    evidence_artifact_id,
+                    evidence_artifact_rev,
+                    _summary(summary),
+                    recorded_by,
+                    now,
+                    criterion_id,
+                ),
+            )
+        return self.get_criterion_result(criterion_id)
+
+    def get_criterion_result(self, criterion_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM criterion_result WHERE criterion_id = ?", (criterion_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"criterion result not found: {criterion_id}")
+        return dict(row)
+
+    # ----------------------------------------------------------- 완료 정책
+
+    def completion_mode(self, case_id: str) -> CompletionMode:
+        """Case 의 완료 정책. **행이 없으면 기본값(사람 최종 확인)이다**(D-31)."""
+        row = self.conn.execute(
+            "SELECT mode FROM completion_policy WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if row is None:
+            return CompletionMode.HUMAN_ACCEPTANCE
+        return CompletionMode(row["mode"])
+
+    def set_completion_mode(
+        self, case_id: str, mode: CompletionMode, set_by: str
+    ) -> dict[str, Any]:
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO completion_policy (case_id, mode, set_by, set_at)"
+                " VALUES (?, ?, ?, ?)"
+                " ON CONFLICT(case_id) DO UPDATE SET"
+                "   mode = excluded.mode, set_by = excluded.set_by, set_at = excluded.set_at",
+                (case_id, mode.value, set_by, utc_now()),
+            )
+        return {"case_id": case_id, "mode": mode.value, "set_by": set_by}
+
+    # ------------------------------------------------- 실행 정리 상태
+
+    def unsettled_runs(self, case_id: str) -> list[dict[str, Any]]:
+        """결과를 확정할 수 없는 실행.
+
+        진행 중(`pending`/`assigned`/`running`)이거나 결과가 `unknown` 인 Run이다.
+        **이들이 남아 있는 동안은 업무 종료를 확정하지 않는다**(completion-lifecycle
+        5절). 인수 결정 자체는 보존하되 종료 기록을 만들지 않는다.
+        """
+        rows = self.conn.execute(
+            "SELECT run_id, status, outcome, purpose, tool_id FROM run"
+            " WHERE case_id = ? AND (status != ? OR outcome = ? OR outcome IS NULL)"
+            " ORDER BY created_at",
+            (case_id, RunStatus.FINISHED.value, RunOutcome.UNKNOWN.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ----------------------------------------------------- 최종 결과 후보
+
+    def _candidate_snapshot(self, case_id: str) -> dict[str, Any]:
+        """지금 시점의 종료 후보 내용. 저장하지 않고 계산만 한다."""
+        case = self.get_case(case_id)
+        state = self.intent_state(case_id)
+        latest = state["latest_intent_version"]
+        gate = self.gate_state(case_id)
+        criteria = self.current_criteria(case_id)
+        unsettled = self.unsettled_runs(case_id)
+
+        unresolved: list[dict[str, Any]] = []
+        for crit in criteria:
+            if crit["verdict"] != CriterionVerdict.MET.value:
+                unresolved.append(
+                    {
+                        "kind": "criterion",
+                        "id": crit["id"],
+                        "key": crit["criterion_key"],
+                        "verdict": crit["verdict"],
+                    }
+                )
+        for question in state["open_intent_questions"]:
+            unresolved.append(
+                {"kind": "open_intent_question", "id": question["id"], "verdict": "open"}
+            )
+        for item in state["unresolved_feedback"]:
+            unresolved.append({"kind": "unresolved_feedback", "id": item["id"], "verdict": "open"})
+
+        met = sum(1 for c in criteria if c["verdict"] == CriterionVerdict.MET.value)
+        payload = {
+            "case_id": case_id,
+            "case_kind": case["kind"],
+            "intent_version_id": latest["id"] if latest else None,
+            "intent_agreement_state": state["agreement_state"],
+            "gate_verdict": gate["verdict"],
+            "criteria": [
+                {"id": c["id"], "key": c["criterion_key"], "verdict": c["verdict"]}
+                for c in criteria
+            ],
+            "criteria_total": len(criteria),
+            "criteria_met": met,
+            "unresolved": unresolved,
+            "unsettled_runs": unsettled,
+        }
+        payload["snapshot_hash"] = _snapshot_hash(
+            json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        )
+        return payload
+
+    def build_completion_candidate(self, case_id: str) -> tuple[dict[str, Any], bool]:
+        """종료 후보를 만든다. 내용이 그대로면 새 후보를 만들지 않는다.
+
+        반환: (후보, 이번에 만들었는지)
+
+        내용이 바뀌면 **새 후보**가 생기고 이전 후보는 `superseded` 가 된다. 이전
+        후보에 대한 인수는 새 후보의 인수가 되지 않는다(completion-lifecycle 3절
+        "후보가 의미 있게 바뀌면 이전 확인을 새 결과의 인수로 사용하지 않는다").
+        """
+        snapshot = self._candidate_snapshot(case_id)
+        open_row = self.conn.execute(
+            "SELECT * FROM completion_candidate WHERE case_id = ? AND state = ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (case_id, CandidateState.OPEN.value),
+        ).fetchone()
+        if open_row is not None and open_row["snapshot_hash"] == snapshot["snapshot_hash"]:
+            return self.get_completion_candidate(open_row["id"]), False
+
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM completion_candidate WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        candidate_id = ids.new_id("cand")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE completion_candidate SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND state = ?",
+                (CandidateState.SUPERSEDED.value, now, case_id, CandidateState.OPEN.value),
+            )
+            self.conn.execute(
+                "INSERT INTO completion_candidate"
+                " (id, case_id, revision, intent_version_id, intent_agreement_state,"
+                "  gate_verdict, criteria_total, criteria_met, unresolved_json,"
+                "  unsettled_runs_json, snapshot_hash, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    candidate_id,
+                    case_id,
+                    revision,
+                    snapshot["intent_version_id"],
+                    snapshot["intent_agreement_state"],
+                    snapshot["gate_verdict"],
+                    snapshot["criteria_total"],
+                    snapshot["criteria_met"],
+                    json.dumps(snapshot["unresolved"], ensure_ascii=False),
+                    json.dumps(snapshot["unsettled_runs"], ensure_ascii=False),
+                    snapshot["snapshot_hash"],
+                    CandidateState.OPEN.value,
+                    now,
+                ),
+            )
+            for crit in snapshot["criteria"]:
+                self.conn.execute(
+                    "INSERT INTO candidate_criterion (candidate_id, criterion_id, verdict)"
+                    " VALUES (?, ?, ?)",
+                    (candidate_id, crit["id"], crit["verdict"]),
+                )
+            # 화면이 "무엇을 기다리는가"를 알 수 있도록 Case 상태를 옮긴다.
+            # 종료가 아니라 **최종 확인 대기**다.
+            self.conn.execute(
+                'UPDATE "case" SET status = ?, updated_at = ? WHERE id = ? AND status NOT IN (?, ?)',
+                (
+                    CaseStatus.WAITING_FINAL_ACCEPTANCE.value,
+                    now,
+                    case_id,
+                    CaseStatus.CLOSED.value,
+                    CaseStatus.CANCELLED.value,
+                ),
+            )
+        return self.get_completion_candidate(candidate_id), True
+
+    def get_completion_candidate(self, candidate_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM completion_candidate WHERE id = ?", (candidate_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"completion candidate not found: {candidate_id}")
+        candidate = dict(row)
+        candidate["unresolved"] = json.loads(candidate.pop("unresolved_json"))
+        candidate["unsettled_runs"] = json.loads(candidate.pop("unsettled_runs_json"))
+        candidate["criteria"] = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT cc.criterion_id, cc.verdict, sc.criterion_key, sc.summary,"
+                "       sc.method_summary, sc.relates_to, sc.state"
+                " FROM candidate_criterion cc"
+                " JOIN success_criterion sc ON sc.id = cc.criterion_id"
+                " WHERE cc.candidate_id = ? ORDER BY sc.criterion_key",
+                (candidate_id,),
+            ).fetchall()
+        ]
+        candidate["exceptions"] = self.list_exception_decisions(candidate_id)
+        candidate["acceptance"] = self.get_final_acceptance(candidate_id)
+        return candidate
+
+    def current_completion_candidate(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT id FROM completion_candidate WHERE case_id = ? AND state = ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (case_id, CandidateState.OPEN.value),
+        ).fetchone()
+        if row is None:
+            return None
+        return self.get_completion_candidate(row["id"])
+
+    def list_completion_candidates(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id FROM completion_candidate WHERE case_id = ? ORDER BY revision",
+            (case_id,),
+        ).fetchall()
+        return [self.get_completion_candidate(r["id"]) for r in rows]
+
+    # --------------------------------------------- 인수·예외·종료 기록
+
+    def get_final_acceptance(self, candidate_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM final_acceptance WHERE candidate_id = ?", (candidate_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_exception_decisions(self, candidate_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM exception_decision WHERE candidate_id = ? ORDER BY decided_at",
+            (candidate_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_exception_decision(
+        self,
+        candidate_id: str,
+        target_id: str,
+        scope_summary: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        """표시된 미충족·미검증을 사람이 수용한다.
+
+        **원래 판정을 바꾸지 않는다.** 수용 시점의 판정을 `original_verdict` 로
+        복사해 두고 `criterion_result` 는 건드리지 않는다. '10만 행 통과'로
+        표시하지 않는다는 규칙의 구현이다(completion-lifecycle 4절).
+        """
+        candidate = self.get_completion_candidate(candidate_id)
+        self.guard_open_case(candidate["case_id"])
+        if candidate["state"] != CandidateState.OPEN.value:
+            raise ConflictError(
+                f"{AcceptanceRefusal.CANDIDATE_SUPERSEDED.value}:"
+                " this candidate was replaced; review the current one"
+            )
+        if self.completion_mode(candidate["case_id"]) is CompletionMode.AUTO_ON_CONDITIONS:
+            # 자동 완료 모드가 예외를 수용하지 않는다는 규칙은 요청 경로에서도
+            # 막아야 한다. 정책을 사람 확인으로 되돌린 뒤에 수용해야 한다.
+            raise ConflictError(
+                f"{AcceptanceRefusal.AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION.value}:"
+                " switch the case back to human acceptance to decide an exception"
+            )
+        criterion = self.get_success_criterion(target_id)
+        if criterion["case_id"] != candidate["case_id"]:
+            raise ConflictError("exception target belongs to a different case")
+        result = self.get_criterion_result(target_id)
+        if result["verdict"] == CriterionVerdict.MET.value:
+            raise ConflictError(
+                f"{AcceptanceRefusal.EXCEPTION_TARGET_NOT_FAILING.value}:"
+                " the criterion is already met; there is nothing to accept as an exception"
+            )
+
+        decision_id = ids.new_decision_id()
+        exception_id = ids.new_id("exc")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, subject_content_hash)"
+                " VALUES (?, ?, ?, 'success_criterion', ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    candidate["case_id"],
+                    DecisionKind.EXCEPTION_CLOSURE.value,
+                    target_id,
+                    candidate["revision"],
+                    actor,
+                    now,
+                    candidate["snapshot_hash"],
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO exception_decision"
+                " (id, case_id, candidate_id, decision_id, target_type, target_id,"
+                "  original_verdict, scope_summary, actor, decided_at)"
+                " VALUES (?, ?, ?, ?, 'criterion', ?, ?, ?, ?, ?)",
+                (
+                    exception_id,
+                    candidate["case_id"],
+                    candidate_id,
+                    decision_id,
+                    target_id,
+                    result["verdict"],
+                    _summary(scope_summary),
+                    actor,
+                    now,
+                ),
+            )
+        row = self.conn.execute(
+            "SELECT * FROM exception_decision WHERE id = ?", (exception_id,)
+        ).fetchone()
+        return dict(row)
+
+    def check_acceptance(
+        self, candidate_id: str, mode: AcceptanceMode
+    ) -> list[AcceptanceRefusal]:
+        """이 후보를 인수해도 되는지 확인한다. 거절 사유 목록을 돌려준다.
+
+        **P2-02의 동의 거절, P2-03의 진입 거부와 다른 검사다.** 세 목록을 합치지
+        않는다. 여기서 보는 것은 "이 후보를 종료 후보로 확정해도 되는가"뿐이다.
+        """
+        candidate = self.get_completion_candidate(candidate_id)
+        case = self.get_case(candidate["case_id"])
+        refusals: list[AcceptanceRefusal] = []
+
+        if case["status"] in (CaseStatus.CLOSED.value, CaseStatus.CANCELLED.value):
+            refusals.append(AcceptanceRefusal.CASE_ALREADY_CLOSED)
+        if candidate["state"] != CandidateState.OPEN.value:
+            refusals.append(AcceptanceRefusal.CANDIDATE_SUPERSEDED)
+        else:
+            # 그 사이 내용이 바뀌었으면 사용자가 본 후보가 아니다.
+            current = self._candidate_snapshot(candidate["case_id"])
+            if current["snapshot_hash"] != candidate["snapshot_hash"]:
+                refusals.append(AcceptanceRefusal.CANDIDATE_SUPERSEDED)
+
+        # 기능 개발 Case는 최신 의도에 동의가 있어야 한다. 의도 버전이 하나라도
+        # 있으면 유형과 무관하게 본다(P2-03의 우회 차단과 같은 기준).
+        if candidate["intent_version_id"] is not None:
+            if candidate["intent_agreement_state"] != IntentAgreementState.AGREED_CURRENT.value:
+                refusals.append(AcceptanceRefusal.INTENT_NOT_AGREED)
+            # **기준이 0건이면 인수할 수 없다.** 견줄 기준이 없으면 "미해결 0건"이
+            # 되어 아무 것도 확인하지 않은 결과가 조용히 통과한다. 빈 통과를 만드는
+            # 대신 거부로 드러낸다(FR-17 "기준별 증거로 판단한다").
+            if candidate["criteria_total"] == 0:
+                refusals.append(AcceptanceRefusal.NO_SUCCESS_CRITERIA)
+
+        excepted = {e["target_id"] for e in candidate["exceptions"]}
+        unresolved = [
+            item
+            for item in candidate["unresolved"]
+            if not (item["kind"] == "criterion" and item["id"] in excepted)
+        ]
+        if unresolved:
+            refusals.append(AcceptanceRefusal.UNRESOLVED_CRITERIA)
+
+        # 미정리 실행은 인수를 막지 않는다 — 인수는 기록하고 **종료 확정만** 보류한다.
+        # 다만 자동 완료는 미정리 실행이 있으면 아예 완료하지 않는다.
+        if mode is AcceptanceMode.AUTO_POLICY and candidate["unsettled_runs"]:
+            refusals.append(AcceptanceRefusal.UNSETTLED_RUNS_PRESENT)
+        # 자동 모드는 예외를 스스로 수용하지 않는다. 예외가 걸린 후보는 사람만 닫는다.
+        if mode is AcceptanceMode.AUTO_POLICY and candidate["exceptions"]:
+            refusals.append(AcceptanceRefusal.AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION)
+        return refusals
+
+    def record_final_acceptance(
+        self,
+        candidate_id: str,
+        actor: str,
+        mode: AcceptanceMode,
+        statement_artifact_id: str | None = None,
+    ) -> dict[str, Any]:
+        """최종 인수를 기록하고, 가능하면 종료까지 확정한다.
+
+        **인수와 종료는 다른 기록이다.** 결과를 확정할 수 없는 실행이 남아 있으면
+        인수는 남기고 `closure_record` 는 만들지 않는다. 화면에는
+        `인수됨 · 실행 상태 확인 필요` 로 두 상태를 함께 보인다
+        (completion-lifecycle 5절).
+        """
+        candidate = self.get_completion_candidate(candidate_id)
+        if candidate["acceptance"] is not None:
+            return candidate["acceptance"]
+        refusals = self.check_acceptance(candidate_id, mode)
+        if refusals:
+            raise AcceptanceRefused(refusals)
+
+        decision_id = ids.new_decision_id()
+        acceptance_id = ids.new_id("accept")
+        now = utc_now()
+        exceptions = candidate["exceptions"]
+        unsettled = candidate["unsettled_runs"]
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, evidence_ref, subject_content_hash)"
+                " VALUES (?, ?, ?, 'completion_candidate', ?, ?, ?, ?, ?, ?)",
+                (
+                    decision_id,
+                    candidate["case_id"],
+                    DecisionKind.FINAL_ACCEPTANCE.value,
+                    candidate_id,
+                    candidate["revision"],
+                    actor,
+                    now,
+                    statement_artifact_id,
+                    candidate["snapshot_hash"],
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO final_acceptance"
+                " (id, case_id, candidate_id, decision_id, mode, actor,"
+                "  statement_artifact_id, accepted_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    acceptance_id,
+                    candidate["case_id"],
+                    candidate_id,
+                    decision_id,
+                    mode.value,
+                    actor,
+                    statement_artifact_id,
+                    now,
+                ),
+            )
+            if not unsettled:
+                kind = (
+                    ClosureKind.CLOSED_WITH_EXCEPTIONS
+                    if exceptions
+                    else ClosureKind.COMPLETED
+                )
+                self.conn.execute(
+                    "INSERT INTO closure_record"
+                    " (id, case_id, candidate_id, final_acceptance_id, closure_kind,"
+                    "  exception_count, confirmed_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("closure"),
+                        candidate["case_id"],
+                        candidate_id,
+                        acceptance_id,
+                        kind.value,
+                        len(exceptions),
+                        now,
+                    ),
+                )
+                self.conn.execute(
+                    'UPDATE "case" SET status = ?, updated_at = ? WHERE id = ?',
+                    (CaseStatus.CLOSED.value, now, candidate["case_id"]),
+                )
+        return self.get_final_acceptance(candidate_id)
+
+    def get_closure(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM closure_record WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def auto_complete_if_allowed(self, case_id: str) -> dict[str, Any]:
+        """자동 완료 정책을 적용한다(D-31).
+
+        **자동 완료를 사람 인수로 적지 않는다.** `mode=auto_policy` 이고 actor 는
+        정책 식별자다. 자동 모드는 미충족·미검증을 스스로 예외 수용하지 않으며,
+        조건을 못 갖추면 그대로 사람 확인 대기로 남는다.
+
+        **판정 자체는 모드에 따라 달라지지 않는다** — 같은 후보를 기본 모드로 봐도
+        기준 충족 여부는 같다(completion-lifecycle 9절 1).
+        """
+        mode = self.completion_mode(case_id)
+        candidate, _ = self.build_completion_candidate(case_id)
+        if mode is not CompletionMode.AUTO_ON_CONDITIONS:
+            return {
+                "applied": False,
+                "reason": "policy_is_human_acceptance",
+                "candidate": candidate,
+            }
+        refusals = self.check_acceptance(candidate["id"], AcceptanceMode.AUTO_POLICY)
+        if refusals:
+            return {
+                "applied": False,
+                "reason": "conditions_not_met",
+                "refusals": [r.value for r in refusals],
+                "candidate": candidate,
+            }
+        acceptance = self.record_final_acceptance(
+            candidate["id"], actor="policy:auto_on_conditions", mode=AcceptanceMode.AUTO_POLICY
+        )
+        return {
+            "applied": True,
+            "acceptance": acceptance,
+            "candidate": self.get_completion_candidate(candidate["id"]),
+        }
+
+    # ------------------------------------------------- 종료 후 새 Case
+
+    def case_is_closed(self, case_id: str) -> bool:
+        case = self.get_case(case_id)
+        return case["status"] in (CaseStatus.CLOSED.value, CaseStatus.CANCELLED.value)
+
+    def guard_open_case(self, case_id: str) -> None:
+        """종료된 Case를 바꾸려는 시도를 막는다.
+
+        완료 후 수정은 기존 Case 재개가 아니라 **연결된 새 Case** 다(D-33).
+        되살리는 API 를 만들지 않는 편이 "완료 기록을 유지한다"를 지키기 쉽다.
+        """
+        if self.case_is_closed(case_id):
+            raise ConflictError(
+                f"{AcceptanceRefusal.CASE_ALREADY_CLOSED.value}: this case is closed;"
+                " create a linked follow-up case instead of changing the closed one"
+            )
+
+    def create_successor_case(
+        self, from_case_id: str, title: str, kind: CaseKind, reason_summary: str
+    ) -> dict[str, Any]:
+        """종료된 업무의 후속 수정을 위한 새 Case를 만들고 출처로 연결한다.
+
+        **이전 동의를 승계하지 않는다.** 새 Case는 의도 버전이 0개로 시작하므로
+        기능 개발이면 새 초안·새 동의·새 게이트를 다시 거친다(D-33,
+        completion-lifecycle 6절 "이전 인수나 의도 동의를 포괄 허용으로 쓰지 않는다").
+        """
+        origin = self.get_case(from_case_id)
+        new_case = self.create_case(origin["project_id"], title, kind)
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_relation"
+                " (id, from_case_id, to_case_id, relation, reason_summary, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("rel"),
+                    from_case_id,
+                    new_case["id"],
+                    CaseRelationKind.FOLLOW_UP_CHANGE.value,
+                    _summary(reason_summary),
+                    utc_now(),
+                ),
+            )
+        return new_case
+
+    def list_case_relations(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM case_relation WHERE from_case_id = ? OR to_case_id = ?"
+            " ORDER BY created_at",
+            (case_id, case_id),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    # ----------------------------------------------------------- 결과 화면
+
+    def result_view(self, case_id: str) -> dict[str, Any]:
+        """FR-17이 요구하는 "기준별 증거·미충족·미검증"의 한 묶음.
+
+        총점 하나를 만들지 않는다. 기준마다 판정·근거 종류·근거 참조를 그대로 둔다
+        (sizing-and-review-ux 6절 "총점 하나와 녹색 표시만 보여주지 않는다").
+        """
+        self.get_case(case_id)
+        return {
+            "case_id": case_id,
+            "completion_mode": self.completion_mode(case_id).value,
+            "criteria": self.current_criteria(case_id),
+            "unsettled_runs": self.unsettled_runs(case_id),
+            "candidate": self.current_completion_candidate(case_id),
+            "closure": self.get_closure(case_id),
+            "relations": self.list_case_relations(case_id),
+        }

@@ -176,15 +176,34 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     assert conn.execute("SELECT COUNT(*) c FROM run").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM intent_version").fetchone()["c"] == 1
 
-    # 새 표가 생겼다.
+    # 새 표가 생겼다. v3 의 게이트·진입 표와 v4 의 결과·완료 표가 모두 있어야 한다.
+    expected = {
+        "gate_result",
+        "gate_finding",
+        "admission_check",
+        "success_criterion",
+        "criterion_result",
+        "completion_policy",
+        "completion_candidate",
+        "candidate_criterion",
+        "final_acceptance",
+        "exception_decision",
+        "closure_record",
+        "case_relation",
+    }
+    placeholders = ",".join("?" for _ in expected)
     new_tables = {
         r["name"]
         for r in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN"
-            " ('gate_result','gate_finding','admission_check')"
+            f"SELECT name FROM sqlite_master WHERE type='table' AND name IN ({placeholders})",
+            sorted(expected),
         )
     }
-    assert new_tables == {"gate_result", "gate_finding", "admission_check"}, new_tables
+    assert new_tables == expected, sorted(expected - new_tables)
+
+    # **완료 정책 행은 생기지 않는다.** 행이 없는 것이 기본값(사람 최종 확인)이며,
+    # 옛 Case 를 자동 완료로 바꾸지 않는다(D-31).
+    assert conn.execute("SELECT COUNT(*) c FROM completion_policy").fetchone()["c"] == 0
 
     # 옛 행의 새 컬럼은 NULL 이다. 기록되지 않은 것과 확인된 것을 구별한다.
     assert conn.execute("SELECT purpose FROM run").fetchone()[0] is None
@@ -194,7 +213,12 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     assert row["authoring_mode"] is None
     assert row["author_run_id"] is None
 
-    assert conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"] == 3
+    # 현재 스키마 버전까지 올라간다. 숫자를 여기 박아 두면 스키마가 오를 때마다
+    # 시험이 거짓으로 깨지므로 코드의 상수와 대조한다.
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
 
     # 다시 돌려도 아무 것도 바뀌지 않는다.
     versions = conn.execute("SELECT COUNT(*) c FROM schema_version").fetchone()["c"]

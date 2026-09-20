@@ -29,7 +29,12 @@ from domain.models import (
 )
 
 DOC_TYPE = "hads.intent-draft"
-DOC_VERSION = 1
+#: v2 에서 성공 기준(`criteria`)이 문서 안으로 들어왔다. 기준을 별도 문서로 두면
+#: "성공 기준은 의도에서 분리되지 않도록 연결한다"(intent-artifacts 1절)를 지키기
+#: 어렵다. v1 문서도 계속 읽을 수 있고, 그 문서의 기준은 **0건**이다 —
+#: 없던 기준을 지금 와서 만들어 내지 않는다.
+DOC_VERSION = 2
+SUPPORTED_DOC_VERSIONS = (1, 2)
 
 #: 필수 여섯 항목의 고정 순서. 줄이지 않는다.
 FIELD_ORDER: tuple[IntentField, ...] = (
@@ -74,6 +79,7 @@ def compose(
     authored_by: str,
     authoring_mode: AuthoringMode = AuthoringMode.HUMAN_TYPED,
     author_run_id: str | None = None,
+    criteria: list[dict[str, Any]] | None = None,
 ) -> bytes:
     """여섯 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
@@ -94,6 +100,9 @@ def compose(
         "authoring_note": AUTHORING_NOTE[AuthoringMode(authoring_mode)],
         "fields": {},
         "questions": [],
+        # 성공 기준은 **이 문서 안에** 있다. 기준마다 관련 의도 항목 → 확인 방법 →
+        # 기대값을 이어서 적는다(intent-artifacts 1절). 제어부에는 짧은 요약만 간다.
+        "criteria": [],
     }
 
     for field in FIELD_ORDER:
@@ -143,6 +152,40 @@ def compose(
             }
         )
 
+    seen_criteria: set[str] = set()
+    for raw in criteria or []:
+        key = str(raw.get("key") or "").strip()
+        text = str(raw.get("text") or "").strip()
+        method = str(raw.get("method") or "").strip()
+        summary = _short(str(raw.get("summary") or "").strip())
+        method_summary = _short(str(raw.get("method_summary") or "").strip())
+        if not key or not text:
+            raise ValueError("success criterion needs both a key and a text")
+        if not method:
+            # 확인 방법이 없는 기준은 기준이 아니라 바람이다. QG-01의
+            # `unverifiable_success_criteria` 가 잡는 바로 그 문제이며, 여기서
+            # 빈 값을 통과시키면 게이트가 볼 것이 없어진다.
+            raise ValueError(f"criterion {key} needs a verification method")
+        if not summary or not method_summary:
+            raise ValueError(
+                f"criterion {key} needs its own summary and method_summary,"
+                " not an excerpt of the text"
+            )
+        if key in seen_criteria:
+            raise ValueError(f"duplicate criterion key: {key}")
+        seen_criteria.add(key)
+        relates_to = IntentField(raw.get("relates_to") or IntentField.EXPECTED_OUTCOME.value)
+        body["criteria"].append(
+            {
+                "key": key,
+                "relates_to": relates_to.value,
+                "text": text,
+                "method": method,
+                "summary": summary,
+                "method_summary": method_summary,
+            }
+        )
+
     return json.dumps(body, ensure_ascii=False, indent=2, sort_keys=False).encode("utf-8")
 
 
@@ -150,6 +193,12 @@ def parse(body: bytes) -> dict[str, Any]:
     doc = json.loads(body.decode("utf-8"))
     if doc.get("doc_type") != DOC_TYPE:
         raise ValueError(f"not an intent draft document: {doc.get('doc_type')!r}")
+    version = doc.get("doc_version")
+    if version not in SUPPORTED_DOC_VERSIONS:
+        raise ValueError(f"unsupported intent draft version: {version!r}")
+    # v1 문서에는 기준 항목이 없다. 빈 목록으로 읽되 "기준 0건"과 "기준을 못 읽음"을
+    # 섞지 않기 위해 원본은 그대로 두고 읽는 쪽에서만 기본값을 쓴다.
+    doc.setdefault("criteria", [])
     return doc
 
 
@@ -197,11 +246,23 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
         for q in doc["questions"]
     ]
 
+    # 기준도 **요약만** 올린다. 기대값과 확인 방법의 본문은 이 원문 안에 남는다.
+    criteria = [
+        {
+            "key": c["key"],
+            "relates_to": c["relates_to"],
+            "summary": c["summary"],
+            "method_summary": c["method_summary"],
+        }
+        for c in doc["criteria"]
+    ]
+
     prev_keys = {q["key"] for q in prev_doc["questions"]} if prev_doc else set()
     current_keys = {q["key"] for q in questions}
     return {
         "fields": fields,
         "questions": questions,
+        "criteria": criteria,
         "question_diff": {
             "added": sorted(current_keys - prev_keys),
             "removed": sorted(prev_keys - current_keys),
