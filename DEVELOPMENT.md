@@ -20,9 +20,9 @@
 | 활성 plan | 없음. 다음 세션이 `plans/P3-PLAN-04.md`를 작성·공유한 뒤 구현. 완료된 `P3-PLAN-R4`·`P3-PLAN-R3`·`P3-PLAN-R2`·`P3-PLAN-R1`·`P3-PLAN-03`을 다시 열지 않음 |
 | 다음 순서 | P3-04 수직 통합 → P4 → P5 → P6 |
 | 마지막 제품 검증 | P3-R4 보고 기준 **pytest 395 + P1 계약 unittest 18 통과**, 스키마 **v11**, 실제 Codex 라이브로 controlled 차단·해제와 조건부 독립 검토·가벼운 확인·자동 완료 확인. [P3-R4 근거](p3/evidence/P3-R4-results.md). R3의 341·R2의 313·R1의 286·P3-03의 242는 그 시점 수치로 보존 |
-| 이 문서 개정 시작 상태 | `main`, HEAD `b45fc60`, 작업 트리 clean으로 관측. **이 세션의 변경은 아직 커밋하지 않았다** — 커밋·push 는 사용자 확인을 받아야 한다. 실제 상태는 `git status --short --branch` 로 확인 |
+| 이 문서 개정 시작 상태 | `main`, HEAD `b45fc60`, 작업 트리 clean으로 관측. 이 세션의 변경은 **사용자 지시로 커밋해 `origin/main`에 push했다**. 실제 커밋은 `git log --oneline b45fc60..HEAD`, 원격 반영은 로컬/원격 ref로 확인 |
 | 남은 제품 결정 | **`autonomy = NULL` Case의 처리는 R4에서 확인받아 controlled 취급으로 확정했다**(2026-09-22). P3-04의 실제 시험 기능은 그 작업 시작 시 정한다 |
-| 외부 반영 허용 | **없다.** P3-R4 변경의 커밋·push 허용을 아직 받지 않았다. 이전 세션들이 받은 허용은 그 커밋에만 적용됐고 이 변경으로 확대되지 않는다. 실제 반영 상태는 로컬/원격 ref로 확인 |
+| 외부 반영 허용 | 사용자의 후속 지시로 P3-R4 변경의 커밋과 `origin/main` push를 허용받아 반영했다. **이 허용은 그 커밋에만 적용되며 이후 새 변경·PR·병합으로 확대되지 않는다.** 다음 세션의 변경은 다시 확인받는다. 실제 반영 상태는 로컬/원격 ref로 확인 |
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
 
@@ -188,9 +188,9 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 - **구현 중 찾은 결함 셋:** (1) `record_exception_decision()` 이 완료 모드가 자동이면 **사람의** 예외 수용까지 거부했다 — 자동이 기본이 되면 "기본 Case 에서는 사람이 예외를 수용할 수 없다"가 되어 D-32 와 어긋난다. 막아야 하는 것은 자동 정책이 **스스로** 수용하는 것 하나이며 그 검사는 그대로 있다. (2) 자동 진행을 조건 충족 시점에 기록하자 **그 뒤의 사람 검토가 조용히 삼켜졌다** — 사람 검토가 더 강한 사실이므로 그쪽이 남게 했다. (3) `create_intent_version()` 이 새 버전마다 **모든** 판정을 `needs_recheck` 로 내려, "영향받은 것만"을 붙일 입력 자체가 지워지고 있었다 — 판단을 구조 보고 뒤로 옮겼다.
 - **다음 행동:** 실제 Git 상태 확인 → P3-04 범위와 [완료](completion-lifecycle.md)·[Profile](case-profiles.md)·P3-R4 결과 확인 → **P3-PLAN-04 작성·공유 → P3-04 구현·검증**. R1~R4 의 모델을 재설계하지 않고 그 위에서 **실제 작은 기능**을 만든다 — 같은 Runner 2 저장소 연동과 `deep + ask-on-decision` 조합, controlled·예산 대기 대표 경로를 실제로 돌린다. 외부 push·PR·CI 는 P5 이며 통과로 가장하지 않는다.
 - **사람에게 물어야 할 것:** **P3-04 의 실제 시험 기능이 무엇인가.** 그 선택은 P3-04 plan 에서 정한다(인계가 그렇게 지정했다).
-- **작업공간:** 시작 `main`/`b45fc60`, clean 관측. 새 파일 `domain/progression.py`, `tests/test_progression.py`, `plans/P3-PLAN-R4.md`, `p3/evidence/P3-R4-results.md` 와 수정 파일들(`controller/{admission,api,db,repository,schema.sql}`, `domain/{models,prep_doc}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_budget,test_completion,test_data_boundary,test_migration,test_policy,test_preparation,test_restart_recovery,test_results,test_work_graph}.py`, `web/src/{api.ts,PolicyPanel.tsx,ResultPanel.tsx}`)이 **미커밋으로 남아 있다.** 커밋·push 는 사용자 확인 뒤에만 한다.
+- **작업공간:** 시작 `main`/`b45fc60`, clean 관측. 새 파일 `domain/progression.py`, `tests/test_progression.py`, `plans/P3-PLAN-R4.md`, `p3/evidence/P3-R4-*` 와 수정 파일들(`controller/{admission,api,db,repository,schema.sql}`, `domain/{models,prep_doc}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_budget,test_completion,test_data_boundary,test_migration,test_policy,test_preparation,test_restart_recovery,test_results,test_work_graph}.py`, `web/src/{api.ts,PolicyPanel.tsx,ResultPanel.tsx}`)을 **사용자 지시로 커밋하고 `origin/main`에 push했다**(그 허용은 이 변경에만 적용된다). 실제 커밋은 `git log --oneline b45fc60..HEAD`, 원격 반영은 로컬/원격 ref로 확인한다. 인계 소비 시 실제 상태를 재확인한다.
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 종료했다(스크립트가 `finally` 에서 정리한다). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p3-r4-live` 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 증거 사본은 `p3/evidence/P3-R4-*` 에 있다. R1~R3 의 라이브 데이터도 그대로 있다.
-- **다음 세션이 특히 주의할 것:** `tests/test_migration.py` 의 옛 스키마 조회는 작업 트리가 아니라 **커밋 이력**에서 `git show` 로 찾는다(`_v7_schema`·`_v8_schema`·`_v9_schema`·`_v10_schema`). 새로 더한 `_v10_schema()` 는 `material_delta` 가 없는 가장 최근 커밋을 고르므로 **v11 을 커밋한 뒤에는 그 이전 커밋의 스키마를 찾는다** — 커밋 뒤 재실행해 확인한다. 그리고 **`FakeCliExecutor` 가 올바른 형식을 내는 것이 지시문의 정확성을 보장하지 않는다**(위 라이브 결함). 새 지시문을 만들면 실제 CLI 로 한 번 돌려 본다.
+- **다음 세션이 이어서 할 때:** 작업 트리는 clean 이고 `origin/main` 과 같다. `tests/test_migration.py` 의 옛 스키마 조회는 작업 트리가 아니라 **커밋 이력**에서 `git show` 로 찾는다(`_v7_schema`·`_v8_schema`·`_v9_schema`·`_v10_schema`). 새로 더한 `_v10_schema()` 는 `material_delta` 가 없는 가장 최근 커밋을 고르므로 v11 을 커밋한 뒤에는 `41252ab` 의 스키마를 찾는다 — **push 뒤 재실행해 확인했다**(6건 통과). 그리고 **`FakeCliExecutor` 가 올바른 형식을 내는 것이 지시문의 정확성을 보장하지 않는다**(위 라이브 결함). 새 지시문을 만들면 실제 CLI 로 한 번 돌려 본다.
 
 ### 이전 인계 — S-013 / 2026-09-22 / P3-R3 예산 예약·집계·정지
 
