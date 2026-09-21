@@ -41,4 +41,4 @@ OpenCode V2의 permission 훅은 allow 결과도 ask로 전환할 수 있다는 
 | 긴 셸·백그라운드 자식·기존 세션 입력 | 도구 반환 뒤 남은 활동과 이미 승인된 프로세스에 대한 후속 입력을 추적. 즉시 pause 완료로 표시하지 않음 |
 | 재연결·프로세스 재시작 | 현재 정책·실행 결과를 대조한 뒤 미수행 호출만 재개. 성공한 도구를 다시 실행하지 않음 |
 
-시험 결과는 `tool_boundary_observed`, `next_call_blockable`, `background_activity_tracked`, `reconnect_reconciled` 같은 개별 능력과 근거로 남긴다. 전체 안전 중지 지원 여부는 필요한 능력을 모두 확인한 정확한 버전·모드에만 부여한다. 미지원 조합은 해당 기능의 지원을 보류한다. D-45에 따라 다른 CLI로 바꾸기 전에 확인받고, 실제 시험에서 확인한 제한과 대안을 제시한다. 사용자의 안전 중지 정책을 조용히 완화하지 않는다.
+시험 결과는 `tool_boundary_observed`, `next_call_blockable`, `background_activity_tracked`, `reconnect_reconciled` 같은 개별 능력과 근거로 남긴다. 전체 안전 중지 지원 여부는 필요한 능력을 모두 확인한 정확한 버전·모드에만 부여한다. 미지원 조합은 해당 기능의 지원을 보류한다. 현재 D-45에 따라 사전 허용되지 않은 다른 CLI로 바꾸기 전에 확인받고, 실제 시험에서 확인한 제한과 대안을 제시한다. 사용자의 안전 중지 정책을 조용히 완화하지 않는다.

@@ -2,6 +2,8 @@
 
 확인일: 2026-09-20. 공식 문서에 근거한 호환성 설계 참고이다. 제품의 구현 완료·설치 검증·성능 측정 결과를 뜻하지 않는다.
 
+현재 제품 정책은 v0.7 [사용자 결정](decisions.md)을 따른다. 아래는 조사일 당시 기술 참고이며 이번 설계 개정에서 외부 기술 문서를 재검증한 기록은 아니다. 이후 실제 구현·실증 상태는 [DEVELOPMENT.md](DEVELOPMENT.md) 및 evidence를 따른다.
+
 ## Windows와 코딩 CLI
 
 - Codex 공식 Windows 문서는 네이티브 실행과 Windows sandbox를 설명한다. 설치한 CLI 버전의 인터페이스·권한·중단 동작은 별도 실험으로 확인해야 한다. 공식 영문 주소는 조회 시 404여서 실제 조회 가능한 공식 번역 문서를 참고했다. [공식 Windows sandbox 문서](https://developers.openai.com/es-419/docs/windows/windows-sandbox)
