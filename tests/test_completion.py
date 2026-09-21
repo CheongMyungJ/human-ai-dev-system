@@ -364,11 +364,12 @@ def test_code_changing_execution_is_still_refused_before_closure(harness, agreed
     )
     assert response.status_code == 409
     refusals = response.json()["detail"]["admission"]["refusals"]
-    # 준비 산출물이 없다는 사유(P3-01)와 쓰기 권한이 열려 있지 않다는 사유는
-    # **서로 다른 것**이다. 준비를 갖춰도 쓰기 권한은 생기지 않는다(P3-03).
+    # 준비 산출물이 없다는 사유(P3-01)와 작업공간이 없다는 사유(P3-03)는
+    # **서로 다른 것**이다. P3-03에서 쓰기 권한이 열렸지만 준비된 전용
+    # 작업공간이 없으면 여전히 코드를 바꿀 수 없다(FR-08·FR-26).
     assert "design_missing" in refusals
     assert "plan_missing" in refusals
-    assert "permission_not_allowed_in_stage" in refusals
+    assert "workspace_not_ready" in refusals
 
 
 # ------------------------------------------------------------------ AC-10

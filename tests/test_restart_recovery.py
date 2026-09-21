@@ -971,3 +971,126 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
         "task_not_in_work_graph",
     ):
         assert code not in refusals, f"{code} 가 재시작 뒤에 다시 나타났다"
+
+
+def test_workspace_and_execution_effects_survive_a_forced_kill(controller):
+    """P3-03 AC-14 — 작업공간·기준 커밋·실행 효과·명령 기록이 강제 종료 후 복원된다.
+
+    P3-03이 여는 문은 "준비된 작업공간이 있으면 코드를 바꾼다"이다. 재시작이 그
+    근거를 잃으면 두 방향으로 틀어진다 — 준비된 작업공간이 사라져 진행이 막히거나,
+    **무엇이 바뀌었는지의 기록을 잃어** 바뀌지 않은 실행을 완료로 읽게 된다.
+
+    여기서는 제어부 API 만 쓴다. 실제 git·CLI는 부르지 않는다 — 이 시험이 보는
+    것은 **복원**이고, git 동작은 tests/test_workspace.py 가 진짜 저장소로 본다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "ws-restart", "repo_path": "C:/tmp/ws", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "작업공간 재시작 Case", "kind": "analysis"},
+        timeout=10.0,
+    ).json()
+
+    requested = httpx.post(
+        f"{base}/api/cases/{case['id']}/workspace", json={"base_ref": "HEAD"}, timeout=10.0
+    ).json()
+    assert requested["state"] == "requested"
+
+    httpx.post(
+        f"{base}/api/runner/workspaces/{case['id']}/ready",
+        json={
+            "runner_id": RUNNER_ID,
+            "repo_path": "C:/tmp/ws",
+            "worktree_path": "C:/tmp/worktrees/ws-restart",
+            "branch": f"hads/{case['id']}",
+            "base_commit": "0123456789abcdef0123456789abcdef01234567",
+            "base_ref": "HEAD",
+            "user_tree_dirty": True,
+            "user_tree_entries": 3,
+        },
+        timeout=10.0,
+    ).raise_for_status()
+
+    accepted = httpx.post(
+        f"{base}/api/cases/{case['id']}/artifacts",
+        json={
+            "kind": "instruction",
+            "content": "작업공간 위에서 실행할 지시",
+            "summary": "지시 원문",
+            "target_runner_id": RUNNER_ID,
+        },
+        timeout=10.0,
+    ).json()
+    httpx.post(
+        f"{base}/api/runner/intakes/{accepted['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": accepted["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(
+        f"{base}/api/cases/{case['id']}/runs",
+        json={"run_id": "run-ws-1", "instruction_artifact_id": accepted["artifact_id"]},
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(f"{base}/api/runner/{RUNNER_ID}/assignments", timeout=10.0).raise_for_status()
+
+    httpx.post(
+        f"{base}/api/runner/runs/run-ws-1/commands",
+        json={
+            "runner_id": RUNNER_ID,
+            "generation": 1,
+            "commands": [
+                {"seq": 1, "command_summary": "전체 시험", "exit_code": 1, "duration_ms": 1200}
+            ],
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(
+        f"{base}/api/runner/runs/run-ws-1/result",
+        json={
+            "runner_id": RUNNER_ID,
+            "generation": 1,
+            "outcome": "completed",
+            "exit_code": 0,
+            "workspace_effect": {
+                "base_commit": "0123456789abcdef0123456789abcdef01234567",
+                "head_before": "0123456789abcdef0123456789abcdef01234567",
+                "head_after": "0123456789abcdef0123456789abcdef01234567",
+                "entries_before": 0,
+                "entries_after": 2,
+                "changed": True,
+                "files_changed": 2,
+                "insertions": 7,
+                "deletions": 1,
+                "isolation": "worktree_file_layout_only",
+                "outside_workspace_observed": True,
+                "outside_workspace_changed": False,
+            },
+        },
+        timeout=10.0,
+    ).raise_for_status()
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    workspace = httpx.get(f"{base}/api/cases/{case['id']}/workspace", timeout=10.0).json()
+    assert workspace["state"] == "ready"
+    assert workspace["base_commit"] == "0123456789abcdef0123456789abcdef01234567"
+    assert workspace["branch"] == f"hads/{case['id']}"
+    # 사용자의 원래 트리를 정리하지 않았다는 관측도 남아 있다.
+    assert workspace["user_tree_dirty"] is True
+    assert workspace["user_tree_entries"] == 3
+    # 격리 한계 문구는 **값으로** 복원된다. 화면이 지어내지 않는다(D-44).
+    assert workspace["isolation"] == "worktree_file_layout_only"
+
+    restored = httpx.get(f"{base}/api/runs/run-ws-1", timeout=10.0).json()
+    assert restored["workspace_effect"]["files_changed"] == 2
+    assert restored["workspace_effect"]["changed"] is True
+    # **종료 코드 1 이 그대로다.** 실패한 시험을 복원 과정에서 성공으로 바꾸지 않는다.
+    assert [c["exit_code"] for c in restored["commands"]] == [1]

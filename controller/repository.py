@@ -31,6 +31,7 @@ from domain.models import (
     AxisWeight,
     CapabilityState,
     CandidateState,
+    ClaimDeferral,
     CaseKind,
     CaseRelationKind,
     CaseStatus,
@@ -74,9 +75,19 @@ from domain.models import (
     WorkGraphSource,
     WorkGraphState,
     WorkLevel,
+    WorkspaceState,
 )
 
 MAX_SUMMARY = 200
+
+#: 읽기 전용이 아닌 권한. 이 권한의 실행은 같은 Case 안에서 직렬화한다(FR-26).
+WRITE_PERMISSIONS = (
+    Permission.WORKSPACE_WRITE.value,
+    Permission.EXPLICIT_ESCALATED.value,
+)
+
+#: 같은 Runner 가 동시에 맡는 쓰기 실행의 기본 수(FR-26·D-55).
+RUNNER_WRITE_LIMIT = 1
 
 
 class ConflictError(Exception):
@@ -697,7 +708,14 @@ class Repository:
         rows = self.conn.execute(
             "SELECT run_id FROM run WHERE case_id = ? ORDER BY created_at DESC", (case_id,)
         ).fetchall()
-        return [self.get_run(r["run_id"]) for r in rows]
+        runs = []
+        for row in rows:
+            run = self.get_run(row["run_id"])
+            # 무엇을 실제로 실행했는가(P3-03). 화면이 실행 목록에서 바로 보려면
+            # 여기 있어야 한다 — 실행마다 따로 조회하게 하지 않는다(FR-14).
+            run["commands"] = self.list_run_commands(row["run_id"])
+            runs.append(run)
+        return runs
 
     def claim_assignments(self, runner_id: str, limit: int = 10) -> list[dict[str, Any]]:
         """대기 중인 Run을 이 Runner에 배정한다.
@@ -707,12 +725,21 @@ class Repository:
         """
         self.get_runner(runner_id)
         claimed: list[dict[str, Any]] = []
+        # **쓰기 자리는 기본 1개다**(FR-26 "동일 Runner 쓰기 실행은 기본 1개").
+        # 자리가 없으면 그 실행을 **거부하지 않고 `pending` 으로 남긴다** — 앞의
+        # 쓰기가 끝나면 그대로 배정된다. 거부로 만들면 사람이 고칠 조건이 없는
+        # 사유를 보게 된다(`ClaimDeferral`).
+        write_slots = RUNNER_WRITE_LIMIT - len(self.unfinished_write_runs(runner_id=runner_id))
         with transaction(self.conn):
             rows = self.conn.execute(
-                "SELECT run_id FROM run WHERE status = ? ORDER BY created_at LIMIT ?",
+                "SELECT run_id, permission FROM run WHERE status = ? ORDER BY created_at LIMIT ?",
                 (RunStatus.PENDING.value, limit),
             ).fetchall()
             for row in rows:
+                if row["permission"] in WRITE_PERMISSIONS:
+                    if write_slots <= 0:
+                        continue
+                    write_slots -= 1
                 self.conn.execute(
                     "UPDATE run SET status = ?, assigned_runner_id = ?, assigned_at = ?"
                     " WHERE run_id = ? AND status = ?",
@@ -739,6 +766,22 @@ class Repository:
         case = self.get_case(run["case_id"])
         project = self.get_project(case["project_id"])
         run["repo_path"] = project["repo_path"]
+        # **Case 작업공간이 준비돼 있으면 그 안에서 실행한다**(D-39·FR-08).
+        # 읽기 전용 실행도 같은 worktree 를 쓴다 — 그래야 검토·조사가 이 Case 가
+        # 실제로 만들고 있는 코드를 본다. 준비된 작업공간이 없으면 저장소 경로를
+        # 그대로 쓰며, 그 상태에서는 진입 검사가 쓰기를 이미 막았다.
+        workspace = self.get_workspace(run["case_id"])
+        if workspace is not None and workspace["state"] == WorkspaceState.READY.value:
+            run["workspace"] = {
+                "branch": workspace["branch"],
+                "worktree_path": workspace["worktree_path"],
+                "repo_path": workspace["repo_path"],
+                "base_commit": workspace["base_commit"],
+            }
+            run["workspace_path"] = workspace["worktree_path"]
+        else:
+            run["workspace"] = None
+            run["workspace_path"] = project["repo_path"]
         run["case_title"] = case["title"]
         run["case_kind"] = case["kind"]
         # 의미 검토의 대상 의도 버전은 지시 원문에서 끌어낸다. 별도 컬럼을 두면
@@ -1844,6 +1887,9 @@ class Repository:
             # 수준·설계·계획·검토 상태. **DB에서 지금 다시 읽는다** — 메모리에 통과
             # 상태를 두지 않는다는 규칙이 선행 조건에도 그대로 적용된다(FR-29).
             preparation_state=self.preparation_state(case_id),
+            # 작업공간과 쓰기 경합도 같은 규칙으로 지금 읽는다(P3-03).
+            workspace_state=self.workspace_state(case_id),
+            case_write_runs=self.unfinished_write_runs(case_id=case_id),
         )
         return evaluate_admission(request)
 
@@ -4097,3 +4143,310 @@ class Repository:
             return None
 
         return self._replan(case_id, mutate, reason_summary, actor)
+
+    # =================================================================== P3-03
+    #
+    # 작업공간과 실행 효과. 아래 접근자에도 본문을 받는 인자가 없다. diff·파일
+    # 경로·명령 원문·빌드 로그는 Runner 의 산출물에 있고 여기에는 식별자(SHA·
+    # 경로·브랜치)와 **수**, 짧은 요약만 온다(D-43·NFR-12).
+
+    # --------------------------------------------------------- Case 작업공간
+
+    @staticmethod
+    def branch_for_case(case_id: str) -> str:
+        """Case 전용 브랜치 이름.
+
+        접두사를 두는 이유는 사람이 고른 이름과 섞이지 않게 하기 위해서다.
+        **이름이 같다고 우리 것으로 간주하지는 않는다** — 소유는 기록된 worktree
+        경로와 대조해 확인한다(execution-workspace-review 2절).
+        """
+        return f"hads/{case_id}"
+
+    def request_workspace(self, case_id: str, base_ref: str = "HEAD") -> dict[str, Any]:
+        """이 Case 에 전용 작업공간이 필요하다고 기록한다.
+
+        **여기서 git 을 부르지 않는다.** 저장소와 파일은 Runner 호스트에 있고
+        (D-43·FR-27) 제어부가 직접 만들면 단일 호스트에서만 동작한다. 이 행은
+        요청이며 `requested` 상태는 **준비됨이 아니다.**
+
+        이미 `ready` 인 Case 는 그대로 돌려준다. 같은 Case 에 두 번째 작업공간을
+        만들지 않는다 — 어느 쪽이 유효한지 알 수 없게 된다(D-38·D-39).
+        """
+        case = self.get_case(case_id)
+        row = self.get_workspace(case_id)
+        if row is not None and row["state"] == WorkspaceState.READY.value:
+            return row
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_workspace"
+                " (case_id, project_id, state, branch, base_ref, requested_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id) DO UPDATE SET"
+                "  state = excluded.state, base_ref = excluded.base_ref,"
+                "  failure_reason = '', requested_at = excluded.requested_at,"
+                "  ready_at = NULL",
+                (
+                    case_id,
+                    case["project_id"],
+                    WorkspaceState.REQUESTED.value,
+                    self.branch_for_case(case_id),
+                    base_ref,
+                    now,
+                ),
+            )
+        return self.get_workspace(case_id)
+
+    def get_workspace(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM case_workspace WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        workspace = dict(row)
+        workspace["user_tree_dirty"] = bool(workspace["user_tree_dirty"])
+        return workspace
+
+    def claim_workspace_requests(self, runner_id: str, limit: int = 5) -> list[dict[str, Any]]:
+        """Runner 가 맡을 작업공간 준비 요청.
+
+        아직 `requested` 인 것만 내려간다. **요청을 내려보내는 것이 준비 완료로
+        표시하는 것은 아니다** — 상태는 Runner 가 실제 결과를 보고할 때 바뀐다.
+        """
+        self.get_runner(runner_id)
+        rows = self.conn.execute(
+            "SELECT case_id FROM case_workspace WHERE state = ? ORDER BY requested_at LIMIT ?",
+            (WorkspaceState.REQUESTED.value, limit),
+        ).fetchall()
+        payloads = []
+        for row in rows:
+            workspace = self.get_workspace(row["case_id"])
+            project = self.get_project(workspace["project_id"])
+            workspace["repo_path"] = project["repo_path"]
+            workspace["project_name"] = project["name"]
+            payloads.append(workspace)
+        return payloads
+
+    def report_workspace_ready(
+        self,
+        case_id: str,
+        runner_id: str,
+        repo_path: str,
+        worktree_path: str,
+        branch: str,
+        base_commit: str,
+        base_ref: str,
+        user_tree_dirty: bool,
+        user_tree_entries: int,
+    ) -> dict[str, Any]:
+        """Runner 가 실제로 만든 결과를 기록한다.
+
+        **기준 커밋 SHA 가 없으면 받지 않는다.** "어떤 코드 위에서 시작했는가"를
+        모르면 나중에 무엇이 바뀌었는지도 말할 수 없다(FR-08·FR-26).
+
+        `user_tree_dirty` 는 준비 시점에 관측한 **사용자의 원래 작업 트리** 상태다.
+        시스템이 그것을 정리하지 않았다는 사실을 남기기 위한 값이며, 파일 경로는
+        올라오지 않고 수만 센다.
+        """
+        if self.get_workspace(case_id) is None:
+            raise NotFoundError(f"workspace not requested for case: {case_id}")
+        self.get_runner(runner_id)
+        if not base_commit:
+            raise ConflictError("a workspace cannot be ready without a base commit")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE case_workspace SET state = ?, runner_id = ?, repo_path = ?,"
+                " worktree_path = ?, branch = ?, base_commit = ?, base_ref = ?,"
+                " user_tree_dirty = ?, user_tree_entries = ?, failure_reason = '',"
+                " ready_at = ? WHERE case_id = ?",
+                (
+                    WorkspaceState.READY.value,
+                    runner_id,
+                    repo_path,
+                    worktree_path,
+                    branch,
+                    base_commit,
+                    base_ref,
+                    1 if user_tree_dirty else 0,
+                    int(user_tree_entries),
+                    utc_now(),
+                    case_id,
+                ),
+            )
+        return self.get_workspace(case_id)
+
+    def report_workspace_failed(
+        self, case_id: str, runner_id: str, reason: str
+    ) -> dict[str, Any]:
+        """만들 수 없었다. **실패를 준비됨으로 바꾸지 않는다.**
+
+        사유를 남기는 이유는 사람이 무엇을 고쳐야 하는지 알아야 하기 때문이다 —
+        저장소가 이 호스트에 없는 것과 브랜치가 이미 있는 것은 다른 조치를 부른다.
+        """
+        if self.get_workspace(case_id) is None:
+            raise NotFoundError(f"workspace not requested for case: {case_id}")
+        self.get_runner(runner_id)
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE case_workspace SET state = ?, runner_id = ?, failure_reason = ?,"
+                " ready_at = NULL WHERE case_id = ?",
+                (WorkspaceState.FAILED.value, runner_id, reason[:MAX_SUMMARY], case_id),
+            )
+        return self.get_workspace(case_id)
+
+    def workspace_state(self, case_id: str) -> dict[str, Any]:
+        """진입 검사가 보는 작업공간 상태. **없음을 준비됨으로 읽지 않는다.**"""
+        workspace = self.get_workspace(case_id)
+        if workspace is None:
+            return {"present": False, "state": None, "ready": False}
+        return {
+            "present": True,
+            "state": workspace["state"],
+            "ready": workspace["state"] == WorkspaceState.READY.value,
+            "branch": workspace["branch"],
+            "base_commit": workspace["base_commit"],
+            "worktree_path": workspace["worktree_path"],
+            "failure_reason": workspace["failure_reason"],
+        }
+
+    def workspace_view(self, case_id: str) -> dict[str, Any] | None:
+        """작업공간과 그 위에서 일어난 실행 효과.
+
+        **`unexpected_external_change` 는 저장하지 않고 도출한다.** 직전 실행이
+        남긴 상태와 이번 실행이 시작할 때 본 상태를 비교할 뿐이며, 컬럼으로 두면
+        "누가 그 값을 적었는가"라는 물음이 생긴다. Task 완료를 실행에서 도출하는
+        것과 같은 이유다(P3-02 설계 선택 다).
+
+        드러내기만 하고 **자동으로 되돌리거나 덮어쓰지 않는다.** 사용자가 직접
+        worktree 를 고쳤을 수 있고, 그 변경을 보존하는 것이 FR-26의 요구다.
+        """
+        workspace = self.get_workspace(case_id)
+        if workspace is None:
+            return None
+        rows = self.conn.execute(
+            "SELECT run_id, task_id, purpose, permission, outcome, finished_at,"
+            " workspace_effect_json FROM run"
+            " WHERE case_id = ? AND workspace_effect_json IS NOT NULL"
+            " ORDER BY finished_at",
+            (case_id,),
+        ).fetchall()
+        effects: list[dict[str, Any]] = []
+        previous: dict[str, Any] | None = None
+        for row in rows:
+            effect = json.loads(row["workspace_effect_json"])
+            unexpected = False
+            if previous is not None:
+                unexpected = (
+                    previous.get("head_after") != effect.get("head_before")
+                    or previous.get("entries_after") != effect.get("entries_before")
+                )
+            effects.append(
+                {
+                    "run_id": row["run_id"],
+                    "task_id": row["task_id"],
+                    "purpose": row["purpose"],
+                    "permission": row["permission"],
+                    "outcome": row["outcome"],
+                    "finished_at": row["finished_at"],
+                    "effect": effect,
+                    # 직전 실행이 남긴 상태와 다른 자리에서 시작했다. 사람이 직접
+                    # 고쳤을 수 있으며 **되돌리지 않고 드러낸다**(FR-26).
+                    "unexpected_external_change": unexpected,
+                }
+            )
+            previous = effect
+        workspace["run_effects"] = effects
+        workspace["outside_workspace_changed"] = any(
+            e["effect"].get("outside_workspace_changed") for e in effects
+        )
+        # 관측 한계를 값으로 남긴다. worktree 는 파일 배치의 분리이며 OS 격리가
+        # 아니다(D-44). 화면이 이 문장을 그대로 보여 준다.
+        workspace["isolation"] = "worktree_file_layout_only"
+        workspace["isolation_note"] = (
+            "worktree 는 파일 배치의 분리다. 다른 경로·자격증명 접근을 막는"
+            " OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
+        )
+        return workspace
+
+    # ------------------------------------------------------------ 쓰기 경합
+
+    def unfinished_write_runs(
+        self, case_id: str | None = None, runner_id: str | None = None
+    ) -> list[dict[str, Any]]:
+        """아직 끝나지 않은 쓰기 실행.
+
+        **`finished` 가 아닌 모든 상태를 센다.** `pending` 도 포함하는 이유는,
+        배정되기 전의 쓰기 요청이 이미 그 Case 의 다음 쓰기 자리를 잡고 있기
+        때문이다. 이것을 빼면 두 요청이 동시에 통과한 뒤 둘 다 배정된다.
+        """
+        permissions = WRITE_PERMISSIONS
+        clauses = [
+            "status <> ?",
+            "permission IN (" + ", ".join("?" for _ in permissions) + ")",
+        ]
+        params: list[Any] = [RunStatus.FINISHED.value, *permissions]
+        if case_id is not None:
+            clauses.append("case_id = ?")
+            params.append(case_id)
+        if runner_id is not None:
+            clauses.append("assigned_runner_id = ?")
+            params.append(runner_id)
+        rows = self.conn.execute(
+            "SELECT run_id, case_id, task_id, status, permission FROM run WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY created_at",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def write_slot_state(self, runner_id: str) -> dict[str, Any]:
+        """그 Runner 가 지금 쓰기를 맡을 수 있는가(FR-26 "동일 Runner 쓰기 기본 1개").
+
+        **이것은 진입 거부가 아니다.** 자리가 없으면 그 실행은 `pending` 으로
+        남았다가 앞의 쓰기가 끝나면 그대로 배정된다. 화면이 "왜 아직 시작되지
+        않는가"를 답할 수 있도록 상태로 내보낸다.
+        """
+        in_flight = self.unfinished_write_runs(runner_id=runner_id)
+        return {
+            "runner_id": runner_id,
+            "limit": RUNNER_WRITE_LIMIT,
+            "in_flight": in_flight,
+            "available": len(in_flight) < RUNNER_WRITE_LIMIT,
+            "deferral_reason": None if len(in_flight) < RUNNER_WRITE_LIMIT else ClaimDeferral.RUNNER_WRITE_SLOT_BUSY.value,
+        }
+
+    # ----------------------------------------------------------- 실행한 명령
+
+    def record_run_commands(
+        self, run_id: str, generation: int, commands: Iterable[dict[str, Any]]
+    ) -> int:
+        """그 실행이 실제로 실행한 명령. **원문은 올라오지 않는다.**
+
+        같은 `(run_id, seq)` 재전송은 새 행을 만들지 않는다 — 이벤트와 같은 규칙이다.
+        `exit_code` 가 `None` 인 것은 "끝을 확인하지 못했다"이며 실패가 아니다.
+        """
+        self._check_generation(run_id, generation)
+        stored = 0
+        with transaction(self.conn):
+            for command in commands:
+                cur = self.conn.execute(
+                    "INSERT OR IGNORE INTO run_command"
+                    " (run_id, seq, command_summary, exit_code, duration_ms, started_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        run_id,
+                        int(command["seq"]),
+                        str(command.get("command_summary", ""))[:MAX_SUMMARY],
+                        command.get("exit_code"),
+                        command.get("duration_ms"),
+                        command.get("started_at") or utc_now(),
+                    ),
+                )
+                stored += cur.rowcount
+        return stored
+
+    def list_run_commands(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM run_command WHERE run_id = ? ORDER BY seq", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]

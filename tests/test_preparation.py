@@ -46,20 +46,25 @@ def _refusals(response) -> list[str]:
     return response.json()["detail"]["admission"]["refusals"]
 
 
-def _prepare_both(harness, case_id, finish_first_task: bool = True):
+def _prepare_both(harness, case_id, finish_first_task: bool = True, run_prefix: str = ""):
     """설계와 계획을 AI로 작성하고 둘 다 사람 검토한다.
 
     **P3-02부터 계획이 작업 그래프를 낳는다.** `FAKE_TASKS` 의 T2 는 T1 을
     기다리므로, 구현 배정을 보려는 시험은 T1 을 실제 실행으로 끝내야 한다.
     사람이 "끝났다"고 적는 경로는 만들지 않았다 — 실행 증거 없이 의존을 푸는
     문이 되기 때문이다. 의존 자체를 확인하는 시험은 `finish_first_task=False` 다.
+
+    `run_prefix` 는 한 시험이 Case 를 둘 만들 때 실행 id 가 겹치지 않게 한다.
+    겹치면 두 번째 요청이 "같은 run_id 의 재전송"으로 읽혀 아무 것도 만들어지지
+    않는다(P2-01이 일부러 만든 멱등성이다).
     """
-    assert harness.ai_prepare(case_id, "design").status_code == 201
+    prefix = run_prefix or "run"
+    assert harness.ai_prepare(case_id, "design", run_id=f"{prefix}-design").status_code == 201
     assert harness.review_stage(case_id, "design").status_code == 201
-    assert harness.ai_prepare(case_id, "plan").status_code == 201
+    assert harness.ai_prepare(case_id, "plan", run_id=f"{prefix}-plan").status_code == 201
     assert harness.review_stage(case_id, "plan").status_code == 201
     if finish_first_task:
-        harness.complete_task(case_id, "T1")
+        harness.complete_task(case_id, "T1", run_id=f"{prefix}-t1")
 
 
 # ------------------------------------------------------------------- AC-1
@@ -495,10 +500,11 @@ def test_the_implementation_opens_once_everything_is_ready(harness):
 
 
 def test_finishing_the_reviews_does_not_create_write_permission(harness):
-    """AC-11: **검토를 마쳤다는 사실이 쓰기 권한을 만들지 않는다.**
+    """AC-11 → P3-03 AC-4: **검토를 마쳤다는 사실이 쓰기 권한을 만들지 않는다.**
 
-    같은 상태에서 `workspace_write` 는 계속 거부된다. 작업공간·브랜치 준비는
-    P3-03이며, 거부되는 것이 이번 단계의 올바른 동작이다.
+    P3-03에서 `workspace_write` 가 열렸지만 **준비된 Case 작업공간이 있을 때만**
+    이다. 설계·계획 검토를 마친 것만으로는 여전히 코드를 바꿀 수 없고, 사유는
+    "권한이 없다"가 아니라 "작업공간이 없다"로 바뀐다(FR-08·FR-26).
     """
     case, _intent = _agreed_case(harness)
     _prepare_both(harness, case["id"])
@@ -509,8 +515,8 @@ def test_finishing_the_reviews_does_not_create_write_permission(harness):
     )
     assert response.status_code == 409
     refusals = _refusals(response)
-    assert "permission_not_allowed_in_stage" in refusals
-    # 준비 부족이 아니다. 준비는 갖췄고 권한만 열려 있지 않다.
+    assert "workspace_not_ready" in refusals
+    # 준비 부족이 아니다. 준비는 갖췄고 작업공간만 없다.
     assert "design_missing" not in refusals
     assert "plan_missing" not in refusals
 
@@ -640,30 +646,32 @@ def test_a_malformed_preparation_response_fails_the_run(harness):
     assert harness.preparation(case["id"])["design"]["artifact"] is None
 
 
-def test_an_admitted_implementation_run_without_an_executor_fails_cleanly(harness):
-    """AC-11(보강): 진입 조건과 실행 경로는 **서로 다른 것**이다.
+def test_an_implementation_run_without_a_workspace_cannot_complete(harness):
+    """AC-11(보강) → P3-03: **관측하지 못한 것을 "바뀌지 않았다"로도 "바뀌었다"로도
+    읽지 않는다.**
 
-    P3-01은 `feature_implementation` 의 배정 조건을 열었지만 실행기는 P3-03이다.
-    그 배정을 받은 Runner 는 **실행하지 않고 실패로 보고한다.** 예외로 죽으면
-    실행이 `assigned` 로 멈춘 채 남고 사람은 왜 아무 일도 일어나지 않는지 알 수 없다
-    (라이브에서 실제로 났던 일).
+    P3-01은 `feature_implementation` 의 배정 조건을 열었고 P3-03이 실행 경로를
+    만들었다. 그래서 이제 실행은 실제로 일어난다. 다만 작업공간이 없으면 실행
+    전후를 대조할 수 없고, 대조 없이 완료를 선언하면 P3-02가 연 의존 해제가
+    증거 없이 풀린다(FR-09).
+
+    실행 경로가 없던 시절의 `refused_no_execution_path` 경로는 **지우지 않았다** —
+    `verification_run` 처럼 지시문이 없는 목적이 생기면 같은 자리에서 걸린다.
     """
     case, _intent = _agreed_case(harness)
     _prepare_both(harness, case["id"])
-    before = harness.cli_effect_count(case["id"])
     assert harness.request_implementation(case["id"]).status_code == 201
 
     # 한 번 돌려도 예외가 나지 않고, 다른 배정 처리도 막히지 않는다.
     result = harness.agent.poll_once()
     actions = {a["run_id"]: a["action"] for a in result["assignments"]}
-    assert actions["run-impl-1"] == "refused_no_execution_path"
+    assert actions["run-impl-1"] == "executed"
 
     run = harness.client.get("/api/runs/run-impl-1").json()
     assert run["status"] == "finished"
-    # **완료가 아니다.** 실행 경로가 없다는 사실이 실패로 남는다(FR-28).
+    # **완료가 아니다.** 무엇이 바뀌었는지 확인할 수단이 없었다.
     assert run["outcome"] == "failed"
-    # **CLI를 부르지 않았다.** 실행 경로가 없다는 것을 알고 나서 실행하지 않는다.
-    assert harness.cli_effect_count(case["id"]) == before
+    assert run["workspace_effect"] is None
 
 
 def test_raising_the_level_makes_an_existing_artifact_insufficient(harness):

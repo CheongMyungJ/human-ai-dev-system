@@ -1,0 +1,13 @@
+diff --git a/reader.py b/reader.py
+index 170da71..112bbc7 100644
+--- a/reader.py
++++ b/reader.py
+@@ -4,3 +4,8 @@
+ def read_lines(path):
+     with open(path, encoding="utf-8") as fh:
+         return [line.rstrip("\n") for line in fh]
++
++
++def read_error_lines(path):
++    """ERROR 로 시작하는 줄만 돌려준다."""
++    return [line for line in read_lines(path) if line.startswith("ERROR")]

@@ -151,3 +151,25 @@ def test_the_controller_never_sees_the_ai_draft_body(harness):
         checked += 1
         assert marker.encode("utf-8") not in path.read_bytes(), f"본문이 {path} 에 남았다"
     assert checked > 0, "검사한 제어부 파일이 없다"
+
+
+def test_the_run_level_constraint_is_marked_as_not_part_of_the_intent():
+    """라이브에서 찾은 결함: **실행의 제약이 의도의 제약으로 새어 나갔다.**
+
+    지시문은 "지금 이 실행에서는 코드를 바꾸지 마라"고 말하는데, 라이브에서 codex
+    가 그것을 의도 문서의 `constraints` 에 `user_requirement` 로 적었고 QG-01 이
+    "함수를 추가한다는 목표와 정면으로 충돌한다"고 막았다. 지시문이 그 둘을
+    구별해 주지 않으면 같은 일이 반복된다.
+
+    **지시문의 문장 자체를 시험한다.** 이것은 AI의 출력이 아니라 우리가 보내는
+    입력이고, 입력은 결정적으로 확인할 수 있다.
+    """
+    from runner import prompts
+
+    for template in (
+        prompts.INTENT_AUTHORING_PROMPT,
+        prompts.DESIGN_AUTHORING_PROMPT,
+        prompts.PLAN_AUTHORING_PROMPT,
+    ):
+        assert "지금 이 실행" in template
+        assert "이 실행의 규칙" in template or "의도가 아니다" in template

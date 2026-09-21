@@ -380,6 +380,10 @@ class RunPurpose(str, Enum):
     DESIGN_AUTHORING = "design_authoring"
     PLAN_AUTHORING = "plan_authoring"
     FEATURE_IMPLEMENTATION = "feature_implementation"
+    #: P3-03. 빌드·테스트를 작업공간에서 실행하고 명령·종료 코드를 증거로 남긴다.
+    #: 구현과 **별도 목적**인 이유는 완료 판정이 다르기 때문이다 — 구현은 작업공간
+    #: 변화가 있어야 완료이고, 검증은 실제로 실행된 명령이 있어야 완료다.
+    VERIFICATION_RUN = "verification_run"
 
 
 class AdmissionOutcome(str, Enum):
@@ -454,6 +458,15 @@ class AdmissionRefusal(str, Enum):
     WORK_GRAPH_STALE = "work_graph_stale"
     TASK_NOT_IN_WORK_GRAPH = "task_not_in_work_graph"
     TASK_DEPENDENCIES_UNMET = "task_dependencies_unmet"
+
+    # --- P3-03 작업공간·쓰기 경합 ---------------------------------------
+    #
+    # `permission_not_allowed_in_stage` 는 **없어지지 않는다.** 의도·설계·계획
+    # 목적의 쓰기 요청과 `explicit_escalated` 는 계속 그 사유로 거부된다.
+    # 아래 넷은 "쓰기를 열 수 있는 목적인데 작업공간·경합 조건이 아니다" 이다.
+    WORKSPACE_NOT_READY = "workspace_not_ready"
+    WORKSPACE_FAILED = "workspace_failed"
+    CASE_WRITE_IN_PROGRESS = "case_write_in_progress"
 
 
 class GateId(str, Enum):
@@ -808,3 +821,50 @@ class WorkGraphSource(str, Enum):
 class WorkGraphState(str, Enum):
     CURRENT = "current"
     SUPERSEDED = "superseded"
+
+
+# --------------------------------------------------------------------- P3-03
+
+
+class WorkspaceState(str, Enum):
+    """Case 작업공간의 준비 상태.
+
+    `REQUESTED` 제어부가 필요하다고 기록했다. **아직 아무 것도 만들어지지 않았다**
+    `READY`     Runner 가 브랜치·worktree 를 실제로 만들었고 기준 커밋이 확정됐다
+    `FAILED`    만들 수 없었다. 사유가 남는다
+
+    **`REQUESTED` 를 준비됨으로 읽지 않는다.** 요청만으로 쓰기를 열면 작업공간이
+    없는 상태에서 CLI 가 사용자의 원래 저장소를 직접 고치게 된다(FR-08·FR-26).
+    """
+
+    REQUESTED = "requested"
+    READY = "ready"
+    FAILED = "failed"
+
+
+class ClaimDeferral(str, Enum):
+    """배정을 **거부가 아니라 미룬** 이유(FR-26 "동일 Runner 쓰기 실행은 기본 1개").
+
+    진입 조건 거부와 구별한다. 거부는 "조건을 갖추기 전에는 실행할 수 없다"이고
+    이것은 "지금은 이 Runner 가 맡지 않는다"이다 — 실행은 `pending` 으로 남아
+    앞의 쓰기가 끝나면 그대로 배정된다. 둘을 합치면 사람이 조건을 고치려 들게
+    되는데 고칠 조건이 없다.
+    """
+
+    RUNNER_WRITE_SLOT_BUSY = "runner_write_slot_busy"
+
+
+class WorkspaceOwnership(str, Enum):
+    """이미 있는 브랜치·경로가 **누구 것인가.**
+
+    이름이 같다고 우리 것으로 간주하지 않는다. 기록된 worktree 경로와 대조해
+    확인된 것만 재사용하고, 확인할 수 없으면 덮어쓰지 않고 거부한다
+    (execution-workspace-review 2절 "기존 내용을 덮어쓰지 않고 소유 관계를 대조한다").
+    """
+
+    #: 이 Case 의 기록과 일치한다. 재사용한다
+    SYSTEM_OWNED = "system_owned"
+    #: 있는데 이 Case 의 것이 아니다. 거부한다
+    FOREIGN = "foreign"
+    #: 없다. 새로 만든다
+    ABSENT = "absent"

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -245,6 +246,36 @@ FAKE_PLAN_FULL = fake_preparation_response(
 )
 
 
+#: 구현 실행의 기본 응답. **파일을 실제로 바꾸지는 않는다** — 바꾸는 것은
+#: `write_files` 를 설정한 시험이 한다. 응답과 실제 변경을 따로 두는 이유는
+#: "고쳤다고 적었지만 아무 것도 바뀌지 않은" 경우를 시험할 수 있어야 하기 때문이다.
+FAKE_IMPLEMENTATION_RESPONSE = """구현했습니다.
+
+```json
+{
+  "changed_summary": "ERROR 로 시작하는 줄만 거르는 필터를 넣었다",
+  "detail": "reader.py 에 필터 한 줄을 넣었다",
+  "blocked": false,
+  "blocked_reason": ""
+}
+```
+"""
+
+#: 검증 실행의 기본 응답. 명령 하나가 성공으로 끝난다.
+FAKE_VERIFICATION_RESPONSE = """확인했습니다.
+
+```json
+{
+  "commands": [
+    {"command": "python -m pytest tests/test_reader.py", "summary": "reader 시험", "exit_code": 0}
+  ],
+  "result_summary": "시험 2건이 통과했다",
+  "detail": "ERROR 2줄·INFO 2줄 표본으로 확인했다"
+}
+```
+"""
+
+
 class FakeCliExecutor:
     """시험용 가짜 코딩 CLI 실행기.
 
@@ -264,6 +295,12 @@ class FakeCliExecutor:
         self.analysis_response = "저장소를 읽고 확인했습니다. 변경한 것은 없습니다."
         self.design_response = FAKE_DESIGN_FULL
         self.plan_response = FAKE_PLAN_FULL
+        self.implementation_response = FAKE_IMPLEMENTATION_RESPONSE
+        self.verification_response = FAKE_VERIFICATION_RESPONSE
+        #: 실행할 때 작업공간에 실제로 쓸 파일 {상대경로: 내용}.
+        #: **비어 있으면 아무 것도 바꾸지 않는다** — 그 상태가 "고쳤다고 적었지만
+        #: 바뀐 것이 없는" 실행이며 시스템이 그것을 완료로 올리지 않아야 한다.
+        self.write_files: dict[str, str] = {}
         self.outcome = RunOutcome.COMPLETED
         #: 세션 식별자를 고정하면 "작성과 검토가 같은 세션"을 만들 수 있다.
         self.fixed_session_ref: str | None = None
@@ -283,6 +320,10 @@ class FakeCliExecutor:
             return self.design_response
         if prompt.startswith(prompt_templates.PLAN_AUTHORING_PROMPT[:40]):
             return self.plan_response
+        if prompt.startswith(prompt_templates.FEATURE_IMPLEMENTATION_PROMPT[:40]):
+            return self.implementation_response
+        if prompt.startswith(prompt_templates.VERIFICATION_RUN_PROMPT[:40]):
+            return self.verification_response
         return self.analysis_response
 
     def count_effects(self, case_id: str) -> int:
@@ -317,6 +358,14 @@ class FakeCliExecutor:
                 "prompt": prompt,
             }
         )
+        # 요청받았으면 작업공간에 실제로 쓴다. **가짜 CLI 도 진짜 파일을 만든다** —
+        # 실행 전후 대조가 실제 git 상태를 보기 때문에, 여기서 쓰지 않으면 변경
+        # 감지 경로를 시험할 수 없다.
+        for rel, body in self.write_files.items():
+            target = Path(workspace) / rel
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(body, encoding="utf-8")
+
         final = self._final_message(prompt)
         events = [
             {"seq": 1, "ts": "", "type": "run_started", "native_type": "fake.start", "raw_ref": None},
@@ -379,6 +428,17 @@ def fake_capabilities() -> list[dict[str, Any]]:
     return rows
 
 
+def _git(repo: Path, *args: str) -> str:
+    """시험이 진짜 저장소를 만들 때 쓰는 git 호출.
+
+    제품 코드의 `runner.workspace.git` 과 **따로 두는 이유**는, 시험이 제품
+    함수를 써서 준비하면 그 함수의 결함이 준비 단계에서 가려지기 때문이다.
+    """
+    proc = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, timeout=60)
+    assert proc.returncode == 0, proc.stderr.decode("utf-8", errors="replace")
+    return proc.stdout.decode("utf-8", errors="replace")
+
+
 @dataclass
 class Harness:
     """제어부(TestClient)와 Runner를 한 프로세스에서 연결한 시험 환경."""
@@ -387,6 +447,8 @@ class Harness:
     agent: RunnerAgent
     controller_config: ControllerConfig
     runner_config: RunnerConfig
+    #: 이 시험의 임시 경로. P3-03의 작업공간 시험이 진짜 저장소를 여기에 만든다.
+    tmp_path: Path
 
     # ------------------------------------------------------------ 준비 도우미
 
@@ -891,6 +953,62 @@ class Harness:
         )
 
 
+    # ------------------------------------------------------ P3-03 도우미
+
+    def create_git_project(
+        self, name: str = "demo", dirty: bool = False
+    ) -> tuple[dict[str, Any], Path]:
+        """**실제 git 저장소**를 만들고 그것을 가리키는 프로젝트를 만든다.
+
+        진짜 저장소를 쓰는 이유는 작업공간 시험이 확인하려는 것이 git 의 실제
+        동작이기 때문이다 — worktree 가 사용자의 원래 트리를 건드리지 않는다는
+        것은 흉내로는 확인할 수 없다.
+
+        `dirty=True` 면 **사용자의 미커밋 변경**을 남긴다. 시스템이 그것을 정리하지
+        않는다는 것이 P3-03의 핵심 기준이다(FR-08·FR-26).
+        """
+        repo = self.tmp_path / f"repo-{name}"
+        repo.mkdir(parents=True, exist_ok=True)
+        _git(repo, "init", "-b", "main")
+        _git(repo, "config", "user.email", "test@example.invalid")
+        _git(repo, "config", "user.name", "test")
+        (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "base")
+        if dirty:
+            # 사용자가 손대던 것. 커밋하지도 지우지도 않는다.
+            (repo / "reader.py").write_text(
+                "def read(path):\n    return open(path).read()  # 사용자가 쓰던 중\n",
+                encoding="utf-8",
+            )
+            (repo / "scratch.txt").write_text("사용자의 미추적 메모\n", encoding="utf-8")
+        response = self.client.post(
+            "/api/projects",
+            json={"name": name, "repo_path": str(repo), "default_tool_id": "codex"},
+        )
+        assert response.status_code == 201, response.text
+        return response.json(), repo
+
+    def request_workspace(self, case_id: str, base_ref: str = "HEAD"):
+        return self.client.post(
+            f"/api/cases/{case_id}/workspace", json={"base_ref": base_ref}
+        )
+
+    def prepare_workspace(self, case_id: str, base_ref: str = "HEAD") -> dict[str, Any]:
+        """작업공간을 요청하고 Runner 가 실제로 만들게 한다."""
+        assert self.request_workspace(case_id, base_ref).status_code == 201
+        self.agent.prepare_workspaces()
+        return self.workspace(case_id)
+
+    def workspace(self, case_id: str) -> dict[str, Any] | None:
+        response = self.client.get(f"/api/cases/{case_id}/workspace")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def run_commands(self, run_id: str) -> list[dict[str, Any]]:
+        return self.client.get(f"/api/runs/{run_id}").json()["commands"]
+
+
 @pytest.fixture
 def harness(tmp_path: Path):
     controller_config = ControllerConfig(data_root=tmp_path / "controller", web_dist=None)
@@ -911,4 +1029,4 @@ def harness(tmp_path: Path):
             capabilities=fake_capabilities(),
         )
         agent.register()
-        yield Harness(client, agent, controller_config, runner_config)
+        yield Harness(client, agent, controller_config, runner_config, tmp_path)

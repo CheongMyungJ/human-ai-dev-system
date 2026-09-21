@@ -625,3 +625,80 @@ def test_new_p3_02_tables_have_no_body_columns(harness):
     # 넣지 못하게 한다.
     assert "length(raw_ref) <= 200" in limits["task_block_unresolved"]
     conn.close()
+
+
+def test_diff_and_command_bodies_stay_on_the_runner(harness):
+    """P3-03 AC-13: **바뀐 코드와 실행한 명령의 원문이 제어부에 없다.**
+
+    제어부에 오는 것은 수(파일 수·삽입·삭제)와 SHA, 그리고 작성자가 따로 쓴
+    짧은 요약뿐이다. 파일 경로조차 올리지 않는다 — 경로는 코드 구조를 그대로
+    드러내고, 상세는 원문 조회로 보면 된다(D-43·NFR-12).
+    """
+    from tests.test_workspace import _impl, _ready_case
+
+    marker = "DIFF-BODY-3a91c-원문본문"
+    case, _repo = _ready_case(harness)
+    harness.agent.cli_executor.write_files = {
+        f"{marker}.py": f"# {marker}\nvalue = 1\n"
+    }
+    harness.agent.cli_executor.implementation_response = (
+        '{"changed_summary": "표식 파일을 하나 넣었다",'
+        f' "detail": "{marker} 를 만들었다", "blocked": false}}'
+    )
+    assert _impl(harness, case).status_code == 201
+    harness.agent.poll_once()
+
+    encoded = marker.encode("utf-8")
+    assert encoded not in _controller_bytes(harness), "변경 내용·파일 경로가 제어부에 남았다"
+    assert encoded not in Path(harness.controller_config.log_path).read_bytes()
+    # 없으면 애초에 저장되지 않은 것이므로 경계 확인이 무의미하다.
+    assert encoded in _runner_bytes(harness), "변경 내용이 Runner에도 없다"
+
+    # 대신 **수와 SHA** 는 올라온다. 그래야 사람이 무엇을 볼지 정할 수 있다.
+    effect = harness.client.get("/api/runs/run-impl-w").json()["workspace_effect"]
+    assert effect["files_changed"] == 1
+    assert effect["base_commit"]
+
+
+def test_command_originals_stay_on_the_runner(harness):
+    """P3-03 AC-13: 실행한 명령의 원문과 빌드 로그도 마찬가지다."""
+    from tests.test_workspace import _ready_case, _verification
+
+    marker = "COMMAND-BODY-5c2f7-원문본문"
+    case, _repo = _ready_case(harness)
+    harness.agent.cli_executor.verification_response = (
+        '{"commands": [{"command": "python -m pytest ' + marker + '",'
+        ' "summary": "표본 시험", "exit_code": 0}],'
+        ' "result_summary": "통과", "detail": "' + marker + ' 로그"}'
+    )
+    _verification(harness, case)
+    harness.agent.poll_once()
+
+    encoded = marker.encode("utf-8")
+    assert encoded not in _controller_bytes(harness), "명령 원문이 제어부에 남았다"
+    assert encoded in _runner_bytes(harness), "명령 원문이 Runner에도 없다"
+
+    commands = harness.client.get("/api/runs/run-verify-1").json()["commands"]
+    assert [c["command_summary"] for c in commands] == ["표본 시험"]
+
+
+def test_new_p3_03_tables_have_no_body_columns(harness):
+    """P3-03 AC-13: 새 표에도 본문 컬럼이 없다. 요약 길이 제한도 함께 본다."""
+    import sqlite3
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    body_like = {"content", "body", "text", "raw", "payload", "diff", "log",
+                 "output", "command", "stdout", "stderr", "files", "paths"}
+    for table in ("case_workspace", "run_command"):
+        columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        assert columns, f"{table} 이 없다"
+        assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"
+
+    rows = conn.execute(
+        "SELECT name, sql FROM sqlite_master WHERE name IN ('case_workspace','run_command')"
+    ).fetchall()
+    limits = {r["name"]: r["sql"] for r in rows}
+    assert "length(failure_reason) <= 200" in limits["case_workspace"]
+    assert "length(command_summary) <= 200" in limits["run_command"]
+    conn.close()

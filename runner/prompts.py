@@ -36,7 +36,12 @@ REVIEW_CRITERIA = (
 _FIELD_LIST = "\n".join(f"  - {f.value}" for f in FIELD_ORDER)
 
 INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 초안**을 작성한다.
-코드를 바꾸지 말고 파일도 만들지 마라. 읽기만 하고 답을 JSON으로 출력한다.
+지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라. 읽기만 하고 답을 JSON으로
+출력한다.
+
+**이 문단의 제약은 지금 이 실행에만 적용되는 규칙이며 의도가 아니다.** "코드를 바꾸지
+않는다"를 의도 문서의 constraints 나 exclusions 에 적지 마라 — 개발하려는 기능은
+코드를 바꾸는 일이고, 그렇게 적으면 목표와 정면으로 충돌하는 문서가 된다.
 
 다음 여섯 항목을 모두 포함한다.
 {_FIELD_LIST}
@@ -191,7 +196,9 @@ def _stage_sections(stage: PreparationStage, level: WorkLevel) -> str:
 
 
 DESIGN_AUTHORING_PROMPT = """당신은 사람이 동의한 의도를 읽고 **설계안**을 작성한다.
-코드를 바꾸지 말고 파일도 만들지 마라. 저장소를 읽고 답을 JSON으로 출력한다.
+지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라. 저장소를 읽고 답을 JSON으로
+출력한다. **이 제약은 이 실행의 규칙이며 설계의 내용이 아니다** — 설계안에 "코드를
+바꾸지 않는다"고 적지 마라.
 
 설계안이 답해야 하는 질문: 그 의도를 **어떤 구조와 동작으로** 실현할 것인가.
 
@@ -227,8 +234,9 @@ DESIGN_AUTHORING_PROMPT = """당신은 사람이 동의한 의도를 읽고 **�
 """
 
 PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설계안**을 읽고
-**개발계획**을 작성한다. 코드를 바꾸지 말고 파일도 만들지 마라.
-저장소를 읽고 답을 JSON으로 출력한다.
+**개발계획**을 작성한다. 지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라.
+저장소를 읽고 답을 JSON으로 출력한다. **이 제약은 이 실행의 규칙이며 계획의 내용이
+아니다** — 계획의 작업은 당연히 코드를 바꾼다.
 
 개발계획이 답해야 하는 질문: 무엇을 **어떤 순서로** 만들고 확인할 것인가.
 
@@ -278,10 +286,74 @@ PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설�
 --- 지시 원문 ---
 """
 
+# --------------------------------------------------------------------- P3-03
+
+#: 제어부로 올라가는 요약의 길이 상한. `controller/schema.sql` 의 CHECK 와 같다.
+MAX_SUMMARY = 200
+
+FEATURE_IMPLEMENTATION_PROMPT = """당신은 검토를 마친 개발계획의 **작업 하나를 구현한다.**
+지금 열려 있는 디렉터리는 이 업무 전용 작업공간(git worktree)이며 쓰기 권한이 있다.
+
+규칙:
+1. **이 작업의 범위만 고친다.** 계획에 없는 개선을 끼워 넣지 마라.
+2. **커밋하지 마라.** 변경은 작업 트리에 남긴다. 무엇이 바뀌었는지는 시스템이
+   기준 커밋과 대조해 확인한다.
+3. 브랜치를 바꾸거나 만들지 마라. reset·checkout·stash 를 쓰지 마라.
+4. **이 작업공간 밖의 파일을 고치지 마라.** 시스템은 경계 밖 변경을 감지해
+   드러내며, 그것은 결함으로 보고된다.
+5. 실제로 고친 것만 changed_summary 에 적는다. **하지 않은 일을 했다고 적지 마라** —
+   시스템이 실제 변경을 따로 확인하고, 변경이 없으면 이 실행은 실패로 기록된다.
+6. 막혀서 고칠 수 없으면 blocked 를 true 로 두고 이유를 적는다. 억지로 무언가를
+   바꿔 완료로 보이게 만들지 마라. **막혔다고 적는 것이 지어낸 변경보다 낫다.**
+
+출력은 이 형태의 JSON **하나만** 낸다. 설명 문장을 앞뒤에 붙이지 않는다.
+
+{
+  "changed_summary": "무엇을 고쳤는가 (짧은 한 줄)",
+  "detail": "변경의 서술",
+  "blocked": false,
+  "blocked_reason": ""
+}
+
+--- 지시 원문 ---
+"""
+
+VERIFICATION_RUN_PROMPT = """당신은 이 업무의 **검증 작업**을 수행한다.
+지금 열려 있는 디렉터리는 이 업무 전용 작업공간(git worktree)이며 빌드·테스트를
+실행할 수 있다.
+
+규칙:
+1. **계획이 정한 확인 방법을 그대로 실행한다.** 통과시키려고 시험을 고치지 마라.
+2. 실행한 명령을 commands 에 **실제로 실행한 그대로** 적고 종료 코드를 함께 적는다.
+   **실행하지 않은 명령을 적지 마라** — 미실행을 실행으로 표시하는 것이다.
+3. **테스트가 실패해도 그대로 보고한다.** 실패는 이 실행의 실패가 아니라 검증의
+   결과다. 숨기거나 건너뛰지 마라.
+4. 제품 코드를 고치지 마라. 수정은 별도 구현 작업이다.
+5. 명령을 하나도 실행하지 못했으면 commands 를 빈 목록으로 두고 result_summary 에
+   이유를 적는다. 시스템은 명령 기록이 없는 검증을 완료로 인정하지 않는다.
+
+출력은 이 형태의 JSON **하나만** 낸다.
+
+{
+  "commands": [
+    {"command": "실행한 명령", "summary": "짧은 한 줄", "exit_code": 0}
+  ],
+  "result_summary": "무엇을 확인했고 어떻게 끝났는가 (짧은 한 줄)",
+  "detail": "결과의 서술"
+}
+
+--- 지시 원문 ---
+"""
+
+
 PROMPT_BY_PURPOSE = {
     "intent_authoring": INTENT_AUTHORING_PROMPT,
     "intent_gate_review": GATE_REVIEW_PROMPT,
     "limited_analysis": LIMITED_ANALYSIS_PROMPT,
+    # P3-03. 이 둘이 생기면서 `has_prompt` 가 `feature_implementation` 에 True 를
+    # 돌려준다 — P3-02까지 배정만 열리고 실행은 `failed` 로 끝나던 경로가 닫힌다.
+    "feature_implementation": FEATURE_IMPLEMENTATION_PROMPT,
+    "verification_run": VERIFICATION_RUN_PROMPT,
 }
 
 #: 수준에 따라 지시문이 달라지는 목적. 위 표에 넣지 않는 이유는 템플릿을 채워야
@@ -615,3 +687,64 @@ def parse_gate_review(text: str) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def parse_implementation(text: str) -> dict[str, Any]:
+    """구현 실행의 응답을 읽는다.
+
+    **`changed_summary` 를 변경의 증거로 쓰지 않는다.** 그것은 작성자의 주장이고,
+    실제로 무엇이 바뀌었는지는 작업공간을 기준 커밋과 대조해 따로 확인한다
+    (FR-09 "실제 실행 증거를 작성자의 완료 주장으로 대체하지 않는다").
+    여기서 하는 일은 형식을 맞췄는지 보고 짧은 요약을 꺼내는 것뿐이다.
+
+    **질문을 받지 않는 이유**는, 받아 두고 어디에도 연결하지 않으면 사람이
+    물어본 적 없는 결정을 한 것이 되기 때문이다. 구현 중에 막히면 `blocked` 로
+    보고하고 그 실행은 실패로 남는다 — 무엇이 막혔는지가 사람에게 보인다.
+    """
+    data = extract_json(text)
+    summary = " ".join(str(data.get("changed_summary") or "").split())
+    blocked = bool(data.get("blocked"))
+    if not summary and not blocked:
+        raise ValueError("구현 응답에 changed_summary 가 없다")
+    return {
+        "changed_summary": summary[:MAX_SUMMARY],
+        "blocked": blocked,
+        "blocked_reason": " ".join(str(data.get("blocked_reason") or "").split())[:MAX_SUMMARY],
+    }
+
+
+def parse_verification(text: str) -> dict[str, Any]:
+    """검증 실행의 응답을 읽는다.
+
+    **종료 코드가 0이 아닌 명령을 걸러내지 않는다.** "테스트가 실패했다"와
+    "검증을 수행하지 못했다"는 다른 것이고, 전자는 기준 판정의 입력이다.
+    걸러 내면 실패한 시험이 없었던 일이 된다.
+
+    명령이 0건이면 0건으로 돌려준다 — 여기서 만들어 채우지 않는다. 그 경우
+    호출자가 이 실행을 완료로 올리지 않는다.
+    """
+    data = extract_json(text)
+    commands: list[dict[str, Any]] = []
+    for raw in data.get("commands") or []:
+        if not isinstance(raw, dict):
+            continue
+        summary = " ".join(str(raw.get("summary") or raw.get("command") or "").split())
+        if not summary:
+            continue
+        exit_code = raw.get("exit_code")
+        commands.append(
+            {
+                "seq": len(commands) + 1,
+                "command_summary": summary[:MAX_SUMMARY],
+                # **정수가 아니면 `None` 이다.** 모르는 종료 코드를 0으로 적으면
+                # 실행하지 못한 명령이 성공한 것처럼 보인다.
+                "exit_code": exit_code if isinstance(exit_code, int) else None,
+                "duration_ms": raw.get("duration_ms")
+                if isinstance(raw.get("duration_ms"), int)
+                else None,
+            }
+        )
+    return {
+        "commands": commands,
+        "result_summary": " ".join(str(data.get("result_summary") or "").split())[:MAX_SUMMARY],
+    }

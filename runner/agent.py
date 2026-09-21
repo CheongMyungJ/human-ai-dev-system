@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import base64
+import subprocess
 import time
 from typing import Any
 
@@ -49,12 +50,24 @@ from domain.models import (
     RunPurpose,
     WorkLevel,
 )
-from runner import cli_adapter, prompts
+from runner import cli_adapter, prompts, workspace
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
 from runner.ledger import STATE_FINISHED, ExecutionLedger
 from runner.store import ArtifactStore, content_hash
+
+
+#: 작업공간을 바꿀 수 있는 권한. `controller/admission.py` 의 같은 이름과 맞춘다.
+WRITE_PERMISSIONS = frozenset({Permission.WORKSPACE_WRITE, Permission.EXPLICIT_ESCALATED})
+
+
+class WorkspaceBusy(RuntimeError):
+    """같은 worktree 에 다른 쓰기 실행의 권고 잠금이 있다.
+
+    **실행하지 않고 올라간다.** 실행한 뒤에 겹침을 발견하면 두 실행의 변경이
+    이미 섞여 있고, 그러면 실행 전후 대조가 무엇도 답하지 못한다.
+    """
 
 
 def local_executor_capabilities() -> list[dict[str, Any]]:
@@ -242,6 +255,31 @@ class RunnerAgent:
                 "purpose": purpose,
             }
 
+        # **같은 worktree 에 다른 쓰기 실행의 잠금이 있는가.** 원장을 잡기 전에
+        # 본다 — 실행하지 않았으므로 중복 실행을 막을 대상이 없고, 여기서 사유와
+        # 함께 끝내야 실행이 `assigned` 로 멈춘 채 남지 않는다. 제어부는 같은 Case
+        # 의 쓰기를 직렬화하지만 **같은 호스트의 다른 Runner 프로세스는 모른다.**
+        space = assignment.get("workspace")
+        if space is not None and Permission(assignment["permission"]) in WRITE_PERMISSIONS:
+            work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
+            holder = workspace.lock_holder(workspace.lock_path_for(work_dir))
+            if holder is not None:
+                self.client.send_result(
+                    run_id,
+                    {
+                        "runner_id": self.config.runner_id,
+                        "generation": generation,
+                        "outcome": RunOutcome.FAILED.value,
+                        "residual_activity": "none",
+                        "observed_tool_version": None,
+                    },
+                )
+                return {
+                    "run_id": run_id,
+                    "action": "refused_workspace_busy",
+                    "holder": holder,
+                }
+
         should_execute, existing = self.ledger.claim(run_id, generation)
 
         if not should_execute:
@@ -293,12 +331,24 @@ class RunnerAgent:
 
         self.client.send_events(run_id, self.config.runner_id, generation, output.events)
 
+        # **명령 기록은 결과보다 먼저 올린다.** 검증 실행의 완료 판정이 이 기록의
+        # 존재를 보기 때문이고, 결과가 먼저 들어가면 "명령 없는 완료"가 잠깐이라도
+        # 보이게 된다(P3-03).
+        if produced.get("commands"):
+            self.client.send_commands(
+                run_id, self.config.runner_id, generation, produced["commands"]
+            )
+
         result_payload = {
             "outcome": output.outcome.value,
             "exit_code": output.exit_code,
             "output_artifact_id": output_artifact_id,
             "output_artifact_rev": 1,
             "usage": output.usage,
+            # 실행 전후 대조의 결과. **수와 SHA 뿐이다** — 어느 파일이 어떻게
+            # 바뀌었는지는 이 Runner 에 남는다(D-43). 관측하지 않았으면 `None` 이고
+            # 그것은 "변경 없음"이 아니라 **모른다**이다.
+            "workspace_effect": getattr(output, "workspace_effect", None),
             "residual_activity": output.residual_activity,
             "session_ref": getattr(output, "session_ref", None),
             "observed_tool_version": getattr(output, "observed_tool_version", None)
@@ -338,6 +388,11 @@ class RunnerAgent:
 
         지시문 조립이 여기 있는 이유는 지시문이 **본문**이기 때문이다. 제어부는
         목적과 원문 참조만 내려보내고, 원문을 가진 쪽이 둘을 합친다.
+
+        **P3-03: 쓰기 실행은 관측 안에서 돈다.** 실행 전후의 작업공간과 원래
+        저장소를 대조해 무엇이 실제로 바뀌었는지를 남기고, 같은 worktree 에 두
+        실행이 겹치지 않도록 권고 잠금을 잡는다. 그 대조가 "완료라고 보고됐는데
+        아무 것도 바뀌지 않은" 실행을 걸러내는 유일한 증거다.
         """
         context = self.load_context(assignment)
         prompt = prompts.build(
@@ -346,16 +401,58 @@ class RunnerAgent:
             context=context,
             level=assignment.get("work_level"),
         )
-        output = self.cli_executor.execute(
-            run_id=assignment["run_id"],
-            case_id=assignment["case_id"],
-            prompt=prompt,
-            tool_id=assignment["tool_id"],
-            mode=assignment["mode"],
-            permission=Permission(assignment["permission"]),
-            workspace=Path(assignment["repo_path"]),
-            raw_dir=self.config.raw_dir,
-        )
+        permission = Permission(assignment["permission"])
+        work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
+        space = assignment.get("workspace")
+        watching = space is not None and permission in WRITE_PERMISSIONS
+
+        lock: workspace.AdvisoryLock | None = None
+        before = after = None
+        repo_before = repo_after = None
+        repo_dir = Path(space["repo_path"]) if space else None
+        if watching:
+            # 권고 잠금. **OS 잠금이 아니다** — 이 규약을 지키는 Runner 에만
+            # 효과가 있다. 제어부의 배정 직렬화와 함께 두는 이유는 각각 다른
+            # 경우를 놓치기 때문이다(제어부는 같은 호스트의 두 프로세스를 모르고
+            # 이 파일은 다른 호스트를 모른다).
+            lock = workspace.AdvisoryLock(workspace.lock_path_for(work_dir))
+            if not lock.acquire(f"{self.config.runner_id}:{assignment['run_id']}"):
+                raise WorkspaceBusy(
+                    f"{work_dir} 에 다른 쓰기 실행의 잠금이 있다: {lock.holder}"
+                )
+            before = workspace.observe(work_dir)
+            if repo_dir is not None:
+                # 원래 저장소도 본다. 경계 밖 변경은 **막지 못하고 감지만 한다**(D-44).
+                repo_before = workspace.observe(repo_dir)
+
+        try:
+            output = self.cli_executor.execute(
+                run_id=assignment["run_id"],
+                case_id=assignment["case_id"],
+                prompt=prompt,
+                tool_id=assignment["tool_id"],
+                mode=assignment["mode"],
+                permission=permission,
+                workspace=work_dir,
+                raw_dir=self.config.raw_dir,
+            )
+        finally:
+            if lock is not None:
+                lock.release()
+
+        if watching:
+            after = workspace.observe(work_dir)
+            if repo_dir is not None:
+                repo_after = workspace.observe(repo_dir)
+            output.workspace_effect = workspace.compose_effect(
+                before=before,
+                after=after,
+                base_commit=space["base_commit"],
+                numbers=workspace.diff_numbers(work_dir, space["base_commit"]),
+                repo_before=repo_before,
+                repo_after=repo_after,
+            )
+
         produced = self._produce_for_purpose(assignment, purpose, output, context)
         return output, produced
 
@@ -415,6 +512,10 @@ class RunnerAgent:
                 produced.update(
                     self._produce_preparation(assignment, output, stage, context or [])
                 )
+            elif purpose == RunPurpose.FEATURE_IMPLEMENTATION.value:
+                produced.update(self._produce_implementation(output))
+            elif purpose == RunPurpose.VERIFICATION_RUN.value:
+                produced.update(self._produce_verification(output))
             elif purpose == RunPurpose.INTENT_GATE_REVIEW.value:
                 target = assignment.get("target_intent_version_id")
                 if not target:
@@ -427,6 +528,64 @@ class RunnerAgent:
             produced["produced"] = "none"
             produced["failure"] = f"{type(exc).__name__}: {exc}"
             produced.pop("gate_findings", None)
+        return produced
+
+    def _produce_implementation(self, output: Any) -> dict[str, Any]:
+        """구현 실행의 산출물은 **작업공간의 실제 변화**다.
+
+        CLI 가 정상 종료하고 "고쳤다"고 적어도, 기준 커밋과 대조해 바뀐 것이
+        없으면 완료가 아니다(FR-09 "실제 실행 증거를 작성자의 완료 주장으로
+        대체하지 않는다"). 이 규칙이 없으면 P3-02가 연 의존 해제가 위험해진다 —
+        아무 것도 바뀌지 않은 실행 하나로 후속 Task 가 전부 열린다.
+
+        **관측하지 못한 경우를 변경 없음으로 읽지 않는다.** 작업공간 없이 돈
+        구현 실행은 `workspace_effect` 가 없고, 그것은 "안 바뀌었다"가 아니라
+        **모른다**이므로 완료로 올리지 않는다.
+        """
+        parsed = prompts.parse_implementation(output.final_message)
+        effect = getattr(output, "workspace_effect", None)
+        produced: dict[str, Any] = {
+            "produced": "implementation",
+            "changed_summary": parsed["changed_summary"],
+            "workspace_effect": effect,
+        }
+        if parsed["blocked"]:
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = "blocked: " + (parsed["blocked_reason"] or "이유 없음")
+            return produced
+        if effect is None:
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = "no_workspace_observation"
+            return produced
+        if not effect.get("changed"):
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = "no_workspace_change"
+        return produced
+
+    def _produce_verification(self, output: Any) -> dict[str, Any]:
+        """검증 실행의 산출물은 **실제로 실행된 명령**이다.
+
+        파일 변경을 요구하지 않는 이유는 빌드·테스트가 코드를 바꾸지 않기
+        때문이고, 대신 명령 기록을 요구한다. 명령이 하나도 없으면 무엇을
+        확인했는지 말할 수 없으므로 완료가 아니다.
+
+        **종료 코드가 0이 아니어도 실행은 완료다.** "테스트가 실패했다"와
+        "검증을 수행하지 못했다"는 다른 것이고, 전자는 기준 판정의 입력이다.
+        """
+        parsed = prompts.parse_verification(output.final_message)
+        produced: dict[str, Any] = {
+            "produced": "verification",
+            "commands": parsed["commands"],
+            "result_summary": parsed["result_summary"],
+            "workspace_effect": getattr(output, "workspace_effect", None),
+        }
+        if not parsed["commands"]:
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = "no_command_executed"
         return produced
 
     def _produce_intent_draft(
@@ -592,12 +751,77 @@ class RunnerAgent:
             }
         )
 
+    # ------------------------------------------------------------ 작업공간
+
+    def worktree_for(self, case_id: str) -> Path:
+        """이 Runner 가 이 Case 의 worktree 를 두는 자리.
+
+        **저장소 안이 아니다.** 저장소 안에 두면 그 파일들이 원래 작업 트리의
+        미추적 파일로 보이고, 사용자가 자기 변경과 구별할 수 없게 된다.
+        """
+        safe = case_id.replace("/", "_").replace("\\", "_")
+        return self.config.worktrees_dir / safe
+
+    def prepare_workspaces(self) -> list[dict[str, Any]]:
+        """맡은 작업공간 준비 요청을 처리한다.
+
+        **실패를 준비됨으로 바꾸지 않는다.** 저장소가 이 호스트에 없거나 브랜치·
+        경로가 남의 것이면 그대로 실패를 보고한다 — 빈 디렉터리를 만들어 주면
+        "코드가 여기 없다"는 사실이 가려진다.
+        """
+        results: list[dict[str, Any]] = []
+        for request in self.client.pending_workspace_requests(self.config.runner_id):
+            case_id = request["case_id"]
+            try:
+                prepared = workspace.prepare(
+                    repo_path=Path(request["repo_path"]),
+                    worktree_path=self.worktree_for(case_id),
+                    branch=request["branch"],
+                    base_ref=request.get("base_ref") or "HEAD",
+                    known_base_commit=request.get("base_commit") or "",
+                )
+            except (workspace.WorkspaceError, OSError, subprocess.SubprocessError) as exc:
+                self.client.report_workspace_failed(
+                    case_id,
+                    {"runner_id": self.config.runner_id, "reason": f"{type(exc).__name__}: {exc}"[:200]},
+                )
+                results.append({"case_id": case_id, "action": "failed", "reason": str(exc)})
+                continue
+            user_tree = prepared.user_tree
+            self.client.report_workspace_ready(
+                case_id,
+                {
+                    "runner_id": self.config.runner_id,
+                    "repo_path": prepared.repo_path,
+                    "worktree_path": prepared.worktree_path,
+                    "branch": prepared.branch,
+                    "base_commit": prepared.base_commit,
+                    "base_ref": prepared.base_ref,
+                    # **사용자의 원래 작업 트리를 건드리지 않았다는 기록이다.**
+                    # 경로는 올라가지 않고 수만 올라간다(D-43).
+                    "user_tree_dirty": bool(user_tree and user_tree.dirty),
+                    "user_tree_entries": len(user_tree.entries) if user_tree else 0,
+                },
+            )
+            results.append(
+                {
+                    "case_id": case_id,
+                    "action": "reused" if prepared.reused else "created",
+                    "branch": prepared.branch,
+                    "base_commit": prepared.base_commit,
+                }
+            )
+        return results
+
     # -------------------------------------------------------------- 루프 한 회
 
     def poll_once(self) -> dict[str, Any]:
         self.client.heartbeat(self.config.runner_id)
         stored = self.persist_pending_intakes()
         served = self.serve_read_requests()
+        # **배정보다 먼저 작업공간을 준비한다.** 같은 회차에 준비되면 그 다음
+        # 회차의 쓰기 배정이 곧바로 열린다. 반대 순서면 항상 한 회차씩 늦는다.
+        workspaces = self.prepare_workspaces()
         actions = []
         for assignment in self.client.claim_assignments(self.config.runner_id):
             # **한 배정의 실패가 다른 배정을 건너뛰게 만들지 않는다.** 이 루프가
@@ -616,7 +840,12 @@ class RunnerAgent:
                     f"[runner] assignment {assignment.get('run_id')} failed: {exc!r}",
                     flush=True,
                 )
-        return {"stored_intakes": stored, "served_reads": served, "assignments": actions}
+        return {
+            "stored_intakes": stored,
+            "served_reads": served,
+            "workspaces": workspaces,
+            "assignments": actions,
+        }
 
     def run_forever(self, interval: float = 1.0) -> None:
         self.register()

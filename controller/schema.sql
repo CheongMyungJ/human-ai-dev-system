@@ -822,3 +822,55 @@ CREATE TABLE IF NOT EXISTS question_block_ref (
 CREATE INDEX IF NOT EXISTS idx_work_graph_case ON work_graph_revision(case_id, state);
 CREATE INDEX IF NOT EXISTS idx_task_graph ON task(graph_revision_id, order_index);
 CREATE INDEX IF NOT EXISTS idx_task_case_key ON task(case_id, task_key);
+
+-- =========================================================== P3-03 작업공간·실행
+--
+-- **본문 컬럼이 없다.** 코드·diff·명령 원문·빌드 로그는 Runner 의 산출물에 있고
+-- 여기에는 식별자(SHA·경로·브랜치)와 수, 짧은 요약만 온다(D-43·NFR-12).
+--
+-- 경로와 브랜치 이름은 **식별자**다. 어느 파일이 어떻게 바뀌었는지는 여기 없다 —
+-- 변경은 수(파일 수·삽입·삭제)와 HEAD SHA 로만 남고 상세는 원문 조회로 본다.
+
+-- Case 하나의 전용 작업공간(FR-08·FR-26, D-39).
+--
+-- 실제 git 작업은 **저장소를 가진 Runner** 가 한다. 제어부가 직접 git 을 부르면
+-- 단일 호스트에서만 동작하고 서버+PC 배치(FR-27)에서 무너진다. 그래서 이 표는
+-- "요청"과 "Runner 가 보고한 결과"를 함께 담는다.
+CREATE TABLE IF NOT EXISTS case_workspace (
+    case_id           TEXT PRIMARY KEY REFERENCES "case"(id),
+    project_id        TEXT NOT NULL REFERENCES project(id),
+    state             TEXT NOT NULL,          -- requested | ready | failed
+    branch            TEXT NOT NULL,          -- 전용 브랜치 이름(제어부가 정한다)
+    -- 아래는 Runner 가 실제로 만든 뒤 보고하는 값. 요청 시점에는 비어 있다.
+    runner_id         TEXT REFERENCES runner(id),
+    repo_path         TEXT NOT NULL DEFAULT '',  -- Runner 호스트에서 해석된 저장소
+    worktree_path     TEXT NOT NULL DEFAULT '',  -- 이 Case 의 작업 파일이 있는 곳
+    base_commit       TEXT NOT NULL DEFAULT '',  -- **기준 커밋 SHA.** 커밋된 상태다
+    base_ref          TEXT NOT NULL DEFAULT '',  -- 그 커밋을 고른 근거 ref
+    -- 준비 시점에 관측한 **사용자의 원래 작업 트리**. 건드리지 않았다는 사실을
+    -- 남기기 위한 관측값이며 파일 경로는 넣지 않는다(수만 센다).
+    user_tree_dirty   INTEGER NOT NULL DEFAULT 0,
+    user_tree_entries INTEGER NOT NULL DEFAULT 0,
+    failure_reason    TEXT NOT NULL DEFAULT '',
+    requested_at      TEXT NOT NULL,
+    ready_at          TEXT,
+    CHECK (length(failure_reason) <= 200)
+);
+
+-- 그 실행이 **무엇을 실제로 실행했는가**(FR-08 "명령·결과를 실행에 연결한다").
+--
+-- 명령 원문과 출력은 Runner 에 있다. 여기에는 짧은 요약과 종료 코드·소요만 온다.
+-- 종료 코드가 0이 아니어도 그것은 "검증을 수행했고 실패했다"이며 실행 실패와
+-- 다르다 — 기준 판정의 입력이다.
+CREATE TABLE IF NOT EXISTS run_command (
+    run_id          TEXT NOT NULL REFERENCES run(run_id),
+    seq             INTEGER NOT NULL,
+    command_summary TEXT NOT NULL,           -- 짧은 요약. 원문 대체 아님
+    exit_code       INTEGER,                 -- NULL 은 "끝을 확인하지 못함"
+    duration_ms     INTEGER,
+    started_at      TEXT NOT NULL,
+    PRIMARY KEY (run_id, seq),
+    CHECK (length(command_summary) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_workspace_project ON case_workspace(project_id, state);

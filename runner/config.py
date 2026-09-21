@@ -50,8 +50,24 @@ class RunnerConfig:
         """
         return self.data_root / "raw"
 
+    @property
+    def worktrees_dir(self) -> Path:
+        """Case 전용 worktree 를 두는 자리(P3-03).
+
+        **대상 저장소 안이 아니다.** 저장소 안에 두면 그 파일들이 사용자의 원래
+        작업 트리에 미추적 파일로 나타나 자기 변경과 구별할 수 없게 된다
+        (FR-08 "기존 사용자 변경을 확인한다", execution-workspace-review 2절).
+        """
+        return self.data_root / "worktrees"
+
     def ensure_dirs(self) -> None:
-        for path in (self.artifacts_dir, self.ledger_dir, self.effects_dir, self.raw_dir):
+        for path in (
+            self.artifacts_dir,
+            self.ledger_dir,
+            self.effects_dir,
+            self.raw_dir,
+            self.worktrees_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
 

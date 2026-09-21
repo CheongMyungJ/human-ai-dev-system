@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 def utc_now() -> str:
@@ -97,6 +97,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     #
     #     `run.task_id` 의 의미도 바뀌지 않는다. 그래프가 생기면 그 값이
     #     `task_key` 로 해석될 뿐이고, 옛 행의 "task-1" 은 그대로 남는다.
+
+    # v7: 작업공간·명령 기록도 **새 표만** 더한다. 기존 표의 컬럼을 바꾸지 않으므로
+    #     위 executescript 의 `CREATE TABLE IF NOT EXISTS` 로 이행이 끝난다.
+    #     기존 Case 에는 `case_workspace` 행이 없고, 그것은 "작업공간이 필요 없다"가
+    #     아니라 **아직 준비되지 않았다**는 뜻이다 — 그 Case 의 쓰기 요청은
+    #     `workspace_not_ready` 로 거부된다. 없음을 통과로 읽지 않는 것이 중요하다.
+    #
+    #     `run.workspace_effect_json` 은 v1부터 있던 컬럼이며 이번에 처음 채운다.
+    #     옛 행은 NULL 로 남고 그것은 "변경이 없었다"가 아니라 **관측하지 않았다**는
+    #     뜻이다. 지금 와서 값을 지어내지 않는다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

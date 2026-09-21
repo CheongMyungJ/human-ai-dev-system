@@ -686,9 +686,10 @@ def test_replanning_does_not_reset_the_run_history(harness):
 
 
 def test_a_complete_graph_does_not_create_write_permission(harness):
-    """AC-14: **그래프를 갖춰도 쓰기 권한은 생기지 않는다.**
+    """AC-14 → P3-03 AC-4: **그래프를 갖춰도 작업공간 없이 쓰기는 열리지 않는다.**
 
-    작업공간·브랜치 준비는 P3-03이며, 거부되는 것이 이번 단계의 올바른 동작이다.
+    그래프는 "무엇을 어떤 순서로 만드는가"이고 작업공간은 "어디에 만드는가"다.
+    둘은 서로를 대신하지 않는다(FR-08·FR-26).
     """
     case = _graph_case(harness)
     harness.complete_task(case["id"], "T1")
@@ -699,7 +700,7 @@ def test_a_complete_graph_does_not_create_write_permission(harness):
             case["id"], run_id="run-impl-w", permission="workspace_write", task_id="T2"
         )
     )
-    assert "permission_not_allowed_in_stage" in refusals
+    assert "workspace_not_ready" in refusals
 
 
 def test_a_rewritten_plan_replaces_the_block_links(harness):

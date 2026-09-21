@@ -117,3 +117,24 @@ class ControllerClient:
 
     def send_preparation_structure(self, payload: dict) -> Any:
         return self._post("/api/runner/preparation-structure", payload)
+
+    # ----------------------------------------------------------- P3-03
+
+    def pending_workspace_requests(self, runner_id: str) -> list[dict]:
+        """맡을 작업공간 준비 요청. **받았다고 준비된 것은 아니다.**"""
+        return self._post(f"/api/runner/{runner_id}/workspace-requests")
+
+    def report_workspace_ready(self, case_id: str, payload: dict) -> Any:
+        return self._post(f"/api/runner/workspaces/{case_id}/ready", payload)
+
+    def report_workspace_failed(self, case_id: str, payload: dict) -> Any:
+        """만들지 못했다. **실패를 준비됨으로 바꾸지 않는다.**"""
+        return self._post(f"/api/runner/workspaces/{case_id}/failed", payload)
+
+    def send_commands(self, run_id: str, runner_id: str, generation: int, commands: list[dict]) -> Any:
+        """그 실행이 실제로 실행한 명령. 결과 보고 **전에** 올린다 —
+        검증 실행의 완료 판정이 이 기록의 존재를 보기 때문이다."""
+        return self._post(
+            f"/api/runner/runs/{run_id}/commands",
+            {"runner_id": runner_id, "generation": generation, "commands": commands},
+        )

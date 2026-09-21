@@ -28,6 +28,7 @@ import { IntentPanel } from './IntentPanel'
 import { PreparationPanel } from './PreparationPanel'
 import { ResultPanel } from './ResultPanel'
 import { WorkGraphPanel } from './WorkGraphPanel'
+import { WorkspacePanel } from './WorkspacePanel'
 
 //: 화면에서 고를 수 있는 목적. `feature_implementation` 도 **일부러 남겨 둔다** —
 //: 조건을 갖추지 못했으면 서버가 무엇이 빠졌는지 사유 코드로 거부하는 것을 볼 수
@@ -40,7 +41,8 @@ const PURPOSE_OPTIONS: { value: RunPurpose; label: string }[] = [
   { value: 'intent_gate_review', label: 'QG-01 의미 검토 (별도 세션)' },
   { value: 'design_authoring', label: '설계안 작성 (동의된 의도 위에)' },
   { value: 'plan_authoring', label: '개발계획 작성 (검토된 설계 위에)' },
-  { value: 'feature_implementation', label: '기능 구현 (준비가 갖춰지면 열린다)' },
+  { value: 'feature_implementation', label: '기능 구현 (작업공간이 준비되면 쓰기가 열린다)' },
+  { value: 'verification_run', label: '검증 실행 (빌드·테스트와 명령 증거)' },
 ]
 
 function describeAdmission(detail: unknown): AdmissionView | null {
@@ -440,6 +442,11 @@ function CaseDetailPanel(props: {
       <PreparationPanel detail={detail} onChanged={props.onChanged} />
       <WorkGraphPanel detail={detail} onChanged={props.onChanged} />
 
+      {/* 어떤 코드 위에서 어디에 만드는가. 그래프(무엇을 어떤 순서로)와 **다른
+          기록**이므로 패널을 나눈다 — 그래프를 갖췄다고 작업공간이 생기지 않고,
+          작업공간이 있다고 계획이 선 것도 아니다(FR-08·FR-26). */}
+      <WorkspacePanel detail={detail} onChanged={props.onChanged} />
+
       {/* 결과·근거와 최종 확인. 게이트 판정과 **다른 기록**이므로 패널을 나눈다 —
           게이트 통과가 결과 인수가 아니고, 인수가 게이트를 통과시키지도 않는다. */}
       <ResultPanel detail={detail} onChanged={props.onChanged} />
@@ -522,7 +529,10 @@ function CaseDetailPanel(props: {
           onChange={(e) => setPermission(e.target.value as 'read_only' | 'workspace_write')}
         >
           <option value="read_only">read_only</option>
-          <option value="workspace_write">workspace_write (이 단계에서 거부됨)</option>
+          {/* P3-03에서 열렸다 — **준비된 작업공간이 있는 구현·검증 실행에만**.
+              목록에서 지우지 않는 이유는 P3-01과 같다: 조건을 갖추지 못했을 때
+              서버가 무엇이 빠졌는지 사유 코드로 거부하는 것을 볼 수 있어야 한다. */}
+          <option value="workspace_write">workspace_write (작업공간이 준비된 구현·검증만)</option>
         </select>
         <input
           value={runId}

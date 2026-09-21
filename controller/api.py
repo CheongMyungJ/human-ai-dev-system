@@ -314,6 +314,9 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 결과·완료 상태도 같은 응답에 담는다. "현재 무엇을 기다리는가"를 알기 위해
     # 다른 화면을 찾아다니게 하지 않는다(FR-14).
     case["result"] = repo.result_view(case_id)
+    # 작업공간 상태도 같은 응답에 담는다(P3-03). "어떤 코드 위에서 어디에 만들고
+    # 있는가"와 "왜 쓰기가 아직 열리지 않는가"를 한 화면에서 본다(FR-14).
+    case["workspace"] = repo.workspace_view(case_id)
     return case
 
 
@@ -479,6 +482,8 @@ def get_run(request: Request, run_id: str) -> dict[str, Any]:
     except NotFoundError as exc:
         raise _handle(exc)
     run["events"] = repo.list_events(run_id)
+    # 무엇을 실제로 실행했는가(P3-03). 원문은 Runner 의 산출물에 있다.
+    run["commands"] = repo.list_run_commands(run_id)
     return run
 
 
@@ -1924,4 +1929,170 @@ def set_question_blocks(
             case_id, question_id, payload.task_keys, payload.reason, payload.actor
         )
     except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== P3-03
+#
+# 작업공간과 실행 효과.
+#
+# **실제 git 작업은 여기에 없다.** 저장소와 파일은 Runner 호스트에 있고(D-43·FR-27)
+# 제어부가 직접 git 을 부르면 단일 호스트에서만 동작한다. 이 절의 경로는 "필요하다"를
+# 기록하고 Runner 가 보고한 결과를 받는 것뿐이다.
+#
+# 올라오는 값은 전부 **식별자와 수**다 — 브랜치 이름, 경로, 커밋 SHA, 변경 파일 수,
+# 삽입·삭제 줄 수, 명령의 짧은 요약과 종료 코드. diff·파일 경로·명령 원문·빌드
+# 로그는 Runner 의 산출물에 있다.
+
+
+class WorkspaceRequestIn(BaseModel):
+    """작업공간 준비 요청.
+
+    `base_ref` 는 **기준 커밋을 고르는 근거**다. 기본값 `HEAD` 는 저장소의 현재
+    커밋을 뜻하며 사용자의 미커밋 변경은 포함하지 않는다 — 포함 여부는 별도
+    입력이고 기본값을 "포함"으로 두면 선택되지 않은 변경을 조용히 복사하게 된다
+    (execution-workspace-review 2절).
+    """
+
+    base_ref: str = Field(default="HEAD", min_length=1, max_length=200)
+
+
+class WorkspaceReadyIn(BaseModel):
+    runner_id: str
+    repo_path: str = Field(min_length=1)
+    worktree_path: str = Field(min_length=1)
+    branch: str = Field(min_length=1)
+    #: **기준 커밋 SHA.** 비어 있으면 받지 않는다 — 어떤 코드 위에서 시작했는지
+    #: 모르면 나중에 무엇이 바뀌었는지도 말할 수 없다.
+    base_commit: str = Field(min_length=7)
+    base_ref: str = ""
+    #: 준비 시점에 관측한 사용자의 원래 작업 트리. 파일 경로는 올라오지 않는다.
+    user_tree_dirty: bool = False
+    user_tree_entries: int = 0
+
+
+class WorkspaceFailedIn(BaseModel):
+    runner_id: str
+    reason: str = Field(min_length=1, max_length=200)
+
+
+class RunCommandIn(BaseModel):
+    """그 실행이 실제로 실행한 명령 하나.
+
+    `command_summary` 는 짧은 요약이며 원문 대체가 아니다. `exit_code` 가 `None`
+    인 것은 **끝을 확인하지 못했다**이며 실패가 아니다.
+    """
+
+    seq: int = Field(ge=1)
+    command_summary: str = Field(min_length=1, max_length=200)
+    exit_code: int | None = None
+    duration_ms: int | None = None
+    started_at: str | None = None
+
+
+class RunCommandsIn(BaseModel):
+    generation: int
+    commands: list[RunCommandIn]
+
+
+@router.post("/api/cases/{case_id}/workspace", status_code=201)
+def request_workspace(
+    request: Request, case_id: str, payload: WorkspaceRequestIn
+) -> dict[str, Any]:
+    """이 업무에 전용 브랜치·worktree 가 필요하다고 기록한다.
+
+    **이 응답은 준비 완료가 아니다.** 상태는 `requested` 이고, Runner 가 실제로
+    만든 뒤에야 `ready` 가 된다. 그 전까지 쓰기 요청은 `workspace_not_ready` 로
+    거부된다 — 요청을 준비됨으로 읽으면 CLI 가 사용자의 원래 저장소를 직접
+    고치게 된다(FR-08·FR-26).
+    """
+    try:
+        return _repo(request).request_workspace(case_id, payload.base_ref)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/workspace")
+def get_workspace(request: Request, case_id: str) -> dict[str, Any] | None:
+    """작업공간과 그 위에서 일어난 실행 효과.
+
+    **격리 한계를 값으로 함께 보낸다.** 화면이 그 문장을 지어내면 언젠가
+    "격리됨"으로 바뀐다(D-44).
+    """
+    return _repo(request).workspace_view(case_id)
+
+
+@router.post("/api/runner/{runner_id}/workspace-requests")
+def runner_workspace_requests(request: Request, runner_id: str) -> list[dict[str, Any]]:
+    """Runner 가 맡을 작업공간 준비 요청을 가져간다.
+
+    **내려보내는 것이 준비 완료로 표시하는 것은 아니다.** 상태는 결과 보고로만
+    바뀐다 — 그렇지 않으면 "요청을 받았다"가 "만들었다"가 된다.
+    """
+    try:
+        return _repo(request).claim_workspace_requests(runner_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/workspaces/{case_id}/ready")
+def runner_workspace_ready(
+    request: Request, case_id: str, payload: WorkspaceReadyIn
+) -> dict[str, Any]:
+    try:
+        return _repo(request).report_workspace_ready(
+            case_id=case_id,
+            runner_id=payload.runner_id,
+            repo_path=payload.repo_path,
+            worktree_path=payload.worktree_path,
+            branch=payload.branch,
+            base_commit=payload.base_commit,
+            base_ref=payload.base_ref,
+            user_tree_dirty=payload.user_tree_dirty,
+            user_tree_entries=payload.user_tree_entries,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/workspaces/{case_id}/failed")
+def runner_workspace_failed(
+    request: Request, case_id: str, payload: WorkspaceFailedIn
+) -> dict[str, Any]:
+    """만들지 못했다. **실패를 준비됨으로 바꾸지 않는다.**"""
+    try:
+        return _repo(request).report_workspace_failed(
+            case_id, payload.runner_id, payload.reason
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/runs/{run_id}/commands")
+def runner_commands(request: Request, run_id: str, payload: RunCommandsIn) -> dict[str, int]:
+    """그 실행이 실제로 실행한 명령을 기록한다(FR-08).
+
+    결과 보고 **전에** 올린다. 검증 실행의 완료 판정이 이 기록의 존재를 보기
+    때문이다 — 명령이 하나도 없는 검증은 완료가 아니다.
+    """
+    try:
+        stored = _repo(request).record_run_commands(
+            run_id, payload.generation, [c.model_dump() for c in payload.commands]
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"stored": stored}
+
+
+@router.get("/api/runners/{runner_id}/write-slot")
+def write_slot(request: Request, runner_id: str) -> dict[str, Any]:
+    """그 Runner 가 지금 쓰기를 맡을 수 있는가(FR-26 "동일 Runner 쓰기 기본 1개").
+
+    **거부가 아니라 미룸이다.** 자리가 없으면 그 실행은 `pending` 으로 남았다가
+    앞의 쓰기가 끝나면 그대로 배정된다. 화면이 "왜 아직 시작되지 않는가"를
+    답할 수 있도록 상태로 내보낸다.
+    """
+    try:
+        return _repo(request).write_slot_state(runner_id)
+    except NotFoundError as exc:
         raise _handle(exc)

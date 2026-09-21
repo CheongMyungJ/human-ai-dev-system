@@ -51,15 +51,40 @@ from domain.models import (
     RunPurpose,
     RunRole,
     StageReviewState,
+    WorkspaceState,
 )
 
-#: 이번 단계에서 배정할 수 있는 권한.
+#: 목적마다 배정할 수 있는 권한(P3-03).
 #:
-#: 쓰기 권한은 **제품이 지원하지 않는 것이 아니라 이 단계에서 열지 않은 것이다.**
-#: P3-01이 설계·계획 선행 조건을 만들었지만 쓰기는 아직 열지 않는다 —
-#: Case별 branch/worktree 와 기준 커밋 없이 쓰기를 열면 사용자의 미커밋 변경을
-#: 보호할 수단이 없다(FR-08·FR-26). P3-03에서 작업공간과 함께 연다.
-STAGE_ALLOWED_PERMISSIONS: frozenset[Permission] = frozenset({Permission.READ_ONLY})
+#: **전역 목록 하나가 아니라 목적별 표인 이유**는, 하나를 넓히면 의도 초안 작성과
+#: 의미 검토에도 쓰기가 열리기 때문이다. 초안을 쓰는 실행이 코드를 바꿀 이유는
+#: 없고, 그 조합을 막는 자리는 여기다.
+#:
+#: 쓰기가 열린 목적이라고 **바로 쓸 수 있는 것은 아니다.** `_check_workspace` 가
+#: 준비된 Case 작업공간과 쓰기 경합을 따로 본다 — 권한과 작업공간은 함께 열리며
+#: 그것이 P3-02까지 쓰기를 미룬 이유 그대로다(FR-08·FR-26).
+#:
+#: `explicit_escalated` 는 **어느 목적에도 없다.** 어댑터에 매핑이 없고(P1-02),
+#: 무엇을 어디까지 올리는지 사람이 확인하는 경로도 아직 없다.
+ALLOWED_PERMISSIONS: dict[RunPurpose, frozenset[Permission]] = {
+    RunPurpose.INTENT_AUTHORING: frozenset({Permission.READ_ONLY}),
+    RunPurpose.INTENT_GATE_REVIEW: frozenset({Permission.READ_ONLY}),
+    RunPurpose.LIMITED_ANALYSIS: frozenset({Permission.READ_ONLY}),
+    RunPurpose.DESIGN_AUTHORING: frozenset({Permission.READ_ONLY}),
+    RunPurpose.PLAN_AUTHORING: frozenset({Permission.READ_ONLY}),
+    RunPurpose.FEATURE_IMPLEMENTATION: frozenset(
+        {Permission.READ_ONLY, Permission.WORKSPACE_WRITE}
+    ),
+    RunPurpose.VERIFICATION_RUN: frozenset(
+        {Permission.READ_ONLY, Permission.WORKSPACE_WRITE}
+    ),
+}
+
+#: 작업공간을 바꿀 수 있는 권한. 이 권한의 실행은 준비된 작업공간을 요구하고
+#: 같은 Case 안에서 직렬화한다.
+WRITE_PERMISSIONS: frozenset[Permission] = frozenset(
+    {Permission.WORKSPACE_WRITE, Permission.EXPLICIT_ESCALATED}
+)
 
 #: 목적별로 기대하는 역할. 의미 검토는 작성과 분리해야 한다(FR-29 검토 방식).
 EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
@@ -69,6 +94,7 @@ EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
     RunPurpose.DESIGN_AUTHORING: RunRole.AUTHOR,
     RunPurpose.PLAN_AUTHORING: RunRole.AUTHOR,
     RunPurpose.FEATURE_IMPLEMENTATION: RunRole.AUTHOR,
+    RunPurpose.VERIFICATION_RUN: RunRole.AUTHOR,
 }
 
 #: 동의된 의도를 선행 조건으로 받는 목적들. 기능 개발 조건표를 적용한다.
@@ -78,6 +104,7 @@ NEEDS_AGREED_INTENT: frozenset[RunPurpose] = frozenset(
         RunPurpose.DESIGN_AUTHORING,
         RunPurpose.PLAN_AUTHORING,
         RunPurpose.FEATURE_IMPLEMENTATION,
+        RunPurpose.VERIFICATION_RUN,
     }
 )
 
@@ -89,6 +116,11 @@ NEEDS_CODING_CLI: frozenset[RunPurpose] = frozenset(
         RunPurpose.INTENT_GATE_REVIEW,
         RunPurpose.DESIGN_AUTHORING,
         RunPurpose.PLAN_AUTHORING,
+        # P3-03. 구현·검증도 마찬가지다. 골격 실행기는 코드를 고치지도 명령을
+        # 실행하지도 않으면서 **정상 종료한다** — 그 실행이 완료로 기록되면
+        # 아무 것도 하지 않은 실행 하나로 후속 Task 가 전부 열린다.
+        RunPurpose.FEATURE_IMPLEMENTATION,
+        RunPurpose.VERIFICATION_RUN,
     }
 )
 
@@ -122,6 +154,13 @@ class AdmissionRequest:
     tool_is_coding_cli: bool = False
     author_session_refs: list[str] = field(default_factory=list)
     requested_session_ref: str | None = None
+    #: `Repository.workspace_state()` 의 결과(P3-03). 빈 dict 는 **작업공간 없음**이며
+    #: 준비됨으로 읽지 않는다 — 없음을 통과로 읽으면 CLI 가 사용자의 원래 저장소를
+    #: 직접 고치게 된다(FR-08·FR-26).
+    workspace_state: dict[str, Any] = field(default_factory=dict)
+    #: 이 Case 에서 아직 끝나지 않은 **다른** 쓰기 실행. 같은 Case 의 쓰기는
+    #: 직렬화한다(FR-26 "동일 Runner 쓰기 실행은 기본 1개", D-39).
+    case_write_runs: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -244,13 +283,68 @@ def _check_stage_ready(request: AdmissionRequest, stage: PreparationStage, refus
         refuse(codes["review"], f"{label} 검토 상태가 {review.get('state')} 다")
 
 
+#: 수준·설계·계획의 선행 조건을 받는 목적.
+#:
+#: **검증 실행도 여기 있다.** 무엇을 확인할지는 계획이 정하므로, 계획 없이 도는
+#: 빌드·테스트는 "무엇을 검증했는가"를 답할 수 없다(FR-09).
+NEEDS_PREPARATION: frozenset[RunPurpose] = frozenset(
+    {RunPurpose.FEATURE_IMPLEMENTATION, RunPurpose.VERIFICATION_RUN}
+)
+
+
+def _check_workspace(request: AdmissionRequest, refuse: Any) -> None:
+    """쓰기를 열기 전의 작업공간 조건(P3-03).
+
+    **왜 권한만으로 열지 않는가.** Case 전용 branch/worktree 와 기준 커밋이 없으면
+    CLI 는 사용자의 원래 저장소를 직접 고치게 되고, 그 순간 미커밋 변경을 보호할
+    수단이 없다(FR-08·FR-26). 그래서 권한과 작업공간은 **함께** 열린다.
+
+    그리고 같은 Case 의 쓰기는 **직렬화한다.** 두 실행이 같은 worktree 에 동시에
+    쓰면 어느 쪽이 무엇을 바꿨는지 실행 전후 대조로 나눌 수 없고, 그 대조가 우리가
+    가진 유일한 증거다(execution-workspace-review 2절).
+
+    **이것은 OS 격리가 아니다.** worktree 는 파일 배치의 분리이며 다른 경로·공유
+    자격증명 접근을 막지 못한다(D-44). 여기서 하는 일은 배정을 막는 것뿐이다.
+    """
+    workspace = request.workspace_state or {}
+    if not workspace.get("present"):
+        refuse(
+            AdmissionRefusal.WORKSPACE_NOT_READY,
+            "이 업무의 전용 작업공간이 없다. 브랜치·worktree 와 기준 커밋을 먼저"
+            " 준비한다 — 준비 없이 쓰기를 열면 사용자의 미커밋 변경을 보호할 수 없다",
+        )
+    elif workspace.get("state") == WorkspaceState.FAILED.value:
+        refuse(
+            AdmissionRefusal.WORKSPACE_FAILED,
+            "작업공간 준비가 실패한 상태다: "
+            + (workspace.get("failure_reason") or "사유가 기록되지 않음"),
+        )
+    elif not workspace.get("ready"):
+        refuse(
+            AdmissionRefusal.WORKSPACE_NOT_READY,
+            f"작업공간이 {workspace.get('state')} 상태다. 요청은 준비됨이 아니다",
+        )
+
+    others = [r for r in (request.case_write_runs or []) if r.get("run_id") != request.run_id]
+    if others:
+        refuse(
+            AdmissionRefusal.CASE_WRITE_IN_PROGRESS,
+            "이 업무에 아직 끝나지 않은 쓰기 실행이 있다: "
+            + ", ".join(f"{r['run_id']}({r['status']})" for r in others),
+        )
+
+
 #: 작업 그래프 검사를 받는 목적(P3-02).
 #:
 #: **조사도 실행이다.** "하위 작업 `task_id` 가 다르다고 면제되지 않는다"는 FR-29의
 #: 규칙은 목적이 달라도 같게 적용돼야 한다. 다만 검사는 **그래프가 있는 Case 에서만**
 #: 돈다 — 그래프는 계획에서 태어나므로 계획 이전의 조사까지 막으면 순환이 된다.
 NEEDS_WORK_GRAPH: frozenset[RunPurpose] = frozenset(
-    {RunPurpose.FEATURE_IMPLEMENTATION, RunPurpose.LIMITED_ANALYSIS}
+    {
+        RunPurpose.FEATURE_IMPLEMENTATION,
+        RunPurpose.VERIFICATION_RUN,
+        RunPurpose.LIMITED_ANALYSIS,
+    }
 )
 
 
@@ -358,13 +452,16 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
             f"{request.purpose.value} 는 role={expected_role.value} 로 실행한다",
         )
 
-    if request.permission not in STAGE_ALLOWED_PERMISSIONS:
+    allowed = ALLOWED_PERMISSIONS.get(request.purpose, frozenset({Permission.READ_ONLY}))
+    if request.permission not in allowed:
         refuse(
             AdmissionRefusal.PERMISSION_NOT_ALLOWED_IN_STAGE,
-            f"{request.permission.value} 는 이 단계에서 배정하지 않는다."
-            " 설계·계획 검토를 마쳐도 쓰기 권한은 생기지 않는다 —"
-            " 작업공간·브랜치 준비(P3-03)와 함께 연다",
+            f"{request.purpose.value} 에 {request.permission.value} 는 배정하지 않는다."
+            f" 허용: {', '.join(sorted(p.value for p in allowed))}",
         )
+    elif request.permission in WRITE_PERMISSIONS:
+        # 권한이 열린 목적이어도 **작업공간과 경합 조건을 따로 본다.**
+        _check_workspace(request, refuse)
 
     if not request.tool_installed:
         refuse(
@@ -468,7 +565,7 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     if request.purpose is RunPurpose.PLAN_AUTHORING:
         _check_stage_ready(request, PreparationStage.DESIGN, refuse)
 
-    if request.purpose is RunPurpose.FEATURE_IMPLEMENTATION:
+    if request.purpose in NEEDS_PREPARATION:
         # **여기가 P3-01이 여는 문이다.** P2까지는 선행 조건의 구현이 없어 한 줄로
         # 거부했다. 이제 실제로 검사하고, 갖춰졌으면 허용한다.
         #

@@ -90,6 +90,11 @@ export interface Run {
   created_at: string
   finished_at: string | null
   events?: RunEvent[]
+  // P3-03: 실행 전후 작업공간 대조의 결과. **`null` 은 "변경 없음"이 아니라
+  // 관측하지 않았다는 뜻이다** — 화면이 둘을 같게 보이면 안 된다.
+  workspace_effect?: WorkspaceEffect | null
+  // 그 실행이 **실제로 실행한 명령**. 원문은 Runner 에 있다.
+  commands?: RunCommand[]
 }
 
 export interface CaseDetail extends Case {
@@ -105,6 +110,9 @@ export interface CaseDetail extends Case {
   // P3-01: 수준·설계·계획·검토 상태. 화면과 서버가 **같은 값**을 본다 —
   // 화면이 따로 계산하면 버튼은 눌리는데 서버가 거부하는 상태가 생긴다.
   preparation: PreparationState
+  // P3-03: 어떤 코드 위에서 어디에 만들고 있는가. `null` 은 **아직 준비되지
+  // 않았다**는 뜻이며 그 Case 의 쓰기는 `workspace_not_ready` 로 막힌다.
+  workspace: WorkspaceView | null
 }
 
 export interface RunnerCapability {
@@ -519,6 +527,9 @@ export type RunPurpose =
   | 'design_authoring'
   | 'plan_authoring'
   | 'feature_implementation'
+  // P3-03. 검증은 구현과 **다른 목적**이다 — 완료 판정이 다르다. 구현은 작업공간
+  // 변화가 있어야 완료이고, 검증은 실제로 실행된 명령이 있어야 완료다.
+  | 'verification_run'
 
 export type GateVerdict =
   | 'pass'
@@ -1305,5 +1316,94 @@ export const workGraphApi = {
     request<WorkGraphRevision>(`/api/cases/${caseId}/questions/${questionId}/blocks`, {
       method: 'PUT',
       body: JSON.stringify({ task_keys: taskKeys, reason, actor: 'owner' }),
+    }),
+}
+
+
+// ===================================================================== P3-03
+//
+// 작업공간과 실행 효과. **수와 SHA 만 온다** — diff·파일 경로·명령 원문·빌드
+// 로그는 Runner 에 있고 상세는 원문 조회로 본다(D-43).
+
+export interface WorkspaceEffect {
+  base_commit: string
+  head_before: string
+  head_after: string
+  entries_before: number
+  entries_after: number
+  // **이 실행이 무엇인가 바꿨는가.** 아래 수와 다르다.
+  changed: boolean
+  // 기준 커밋 대비 **누적** 변경. 이 실행만의 것이 아니다.
+  files_changed: number
+  insertions: number
+  deletions: number
+  numbers_are_cumulative?: boolean
+  // **"격리했다"가 아니라 "이만큼 봤다"이다**(D-44).
+  isolation: string
+  outside_workspace_observed: boolean
+  // `null` 은 관측하지 않았다는 뜻이다. `false` 와 다르다.
+  outside_workspace_changed: boolean | null
+}
+
+export interface RunCommand {
+  run_id: string
+  seq: number
+  command_summary: string
+  // `null` 은 **끝을 확인하지 못했다**이며 실패가 아니다.
+  exit_code: number | null
+  duration_ms: number | null
+  started_at: string
+}
+
+export interface RunEffectRow {
+  run_id: string
+  task_id: string
+  purpose: string | null
+  permission: string
+  outcome: string | null
+  finished_at: string | null
+  effect: WorkspaceEffect
+  // 직전 실행이 남긴 상태와 다른 자리에서 시작했다. **드러내되 되돌리지 않는다**(FR-26).
+  unexpected_external_change: boolean
+}
+
+export type WorkspaceState = 'requested' | 'ready' | 'failed'
+
+export interface WorkspaceView {
+  case_id: string
+  state: WorkspaceState
+  branch: string
+  repo_path: string
+  worktree_path: string
+  base_commit: string
+  base_ref: string
+  // 준비 시점에 관측한 **사용자의 원래 작업 트리**. 시스템이 정리하지 않았다.
+  user_tree_dirty: boolean
+  user_tree_entries: number
+  failure_reason: string
+  requested_at: string
+  ready_at: string | null
+  run_effects: RunEffectRow[]
+  outside_workspace_changed: boolean
+  isolation: string
+  // 한계 문구는 **서버가 준다.** 화면이 지어내면 언젠가 "격리됨"으로 바뀐다.
+  isolation_note: string
+}
+
+export const WORKSPACE_STATE_LABEL: Record<WorkspaceState, string> = {
+  requested: '요청됨 (아직 만들어지지 않음)',
+  ready: '준비됨',
+  failed: '준비 실패',
+}
+
+export const workspaceApi = {
+  state: (caseId: string) => request<WorkspaceView | null>(`/api/cases/${caseId}/workspace`),
+
+  // 작업공간을 준비해 달라고 기록한다. **응답은 준비 완료가 아니다** —
+  // Runner 가 실제로 만든 뒤에야 `ready` 가 된다.
+  prepare: (caseId: string, baseRef = 'HEAD') =>
+    request<WorkspaceView>(`/api/cases/${caseId}/workspace`, {
+      method: 'POST',
+      body: JSON.stringify({ base_ref: baseRef }),
     }),
 }

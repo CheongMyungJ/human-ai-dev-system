@@ -206,6 +206,9 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
         "task_question_block",
         "task_block_unresolved",
         "question_block_ref",
+        # v7 의 작업공간·명령 표.
+        "case_workspace",
+        "run_command",
     }
     placeholders = ",".join("?" for _ in expected)
     new_tables = {
@@ -237,6 +240,16 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     # 옛 `run.task_id` 도 그대로다. P3-02가 그 값을 `task_key` 로 해석하게 됐을 뿐
     # 옛 행의 값을 바꾸지 않는다.
     assert conn.execute("SELECT task_id FROM run").fetchone()["task_id"] == "t-1"
+
+    # **작업공간 행도 생기지 않는다**(P3-03 AC-14). 행이 없다는 것은 "작업공간이
+    # 필요 없다"가 아니라 아직 준비되지 않았다는 뜻이고, 그 Case 의 쓰기는
+    # `workspace_not_ready` 로 막힌다.
+    assert conn.execute("SELECT COUNT(*) c FROM case_workspace").fetchone()["c"] == 0
+
+    # 옛 실행의 `workspace_effect_json` 은 NULL 로 남는다. 그것은 "변경이 없었다"가
+    # 아니라 **관측하지 않았다**는 뜻이며, 지금 와서 값을 지어내지 않는다(FR-04).
+    assert conn.execute("SELECT workspace_effect_json e FROM run").fetchone()["e"] is None
+    assert conn.execute("SELECT COUNT(*) c FROM run_command").fetchone()["c"] == 0
 
     # 옛 질문 행의 새 컬럼도 NULL 이다. P3-01 전에는 의도 단계 말고 다른 단계가
     # 없었으므로 NULL 은 "의도 단계에서 제기됨"과 일치한다.

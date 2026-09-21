@@ -189,6 +189,20 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
         cap("safe_stop_next_call", CapabilityState.VERIFIED, source_p103 + " (조건부)"),
         cap("session_resume", CapabilityState.DOC_ONLY, "--help 만 확인"),
         cap("cancel_confirmed", CapabilityState.UNKNOWN, source_p103 + ": 프로세스 잔류 관측"),
+        # **P3-03: 지원하지 않는 것을 지원하지 않는다고 보고한다.** Case 전용
+        # worktree 는 파일 배치의 분리이며 다른 경로·공유 자격증명 접근을 막지
+        # 못한다(D-44, execution-workspace-review 2절). 실행 전후 대조로 경계 밖
+        # 변경을 **감지할 수는 있지만** 그것은 격리가 아니다.
+        cap(
+            "os_level_isolation",
+            CapabilityState.UNSUPPORTED,
+            "D-44: worktree 는 파일 배치 분리이며 OS 격리가 아니다",
+        ),
+        cap(
+            "workspace_change_detection",
+            CapabilityState.VERIFIED,
+            "P3-03: 실행 전후 HEAD·작업 트리 대조 (막는 것이 아니라 드러내는 것)",
+        ),
     ]
     rows.append(
         cap(
@@ -217,6 +231,10 @@ class ExecutionOutput:
     observed_tool_version: str | None = None
     final_message: str = ""
     unmapped: list[str] | None = None
+    #: 실행 전후 작업공간 대조의 결과(P3-03). 실행기가 아니라 **Runner 가 채운다** —
+    #: 무엇이 바뀌었는지는 CLI 의 보고가 아니라 git 이 답한다. 관측하지 않았으면
+    #: `None` 이며 그것은 "변경 없음"이 아니라 **모른다**이다.
+    workspace_effect: dict[str, Any] | None = None
 
 
 class CliExecutor:
