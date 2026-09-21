@@ -382,10 +382,44 @@ VERIFICATION_RUN_PROMPT = """당신은 이 업무의 **검증 작업**을 수행
 """
 
 
+LOCAL_EXPERIMENT_PROMPT = """당신은 이 업무의 **허용된 로컬 실험**을 수행한다.
+지금 열려 있는 디렉터리는 이 업무 전용 작업공간(git worktree)이며 재현·계측·테스트를
+위해 임시로 고칠 수 있다.
+
+규칙:
+1. **원래 목적 안에서만 움직인다.** 이 업무는 조사·분석이며 제품 수정 요청이 아니다.
+   재현·계측에 필요하지 않은 제품 변경을 만들지 마라.
+2. **임시 변경과 결론의 근거를 구분해 적는다.** 무엇을 임시로 고쳤는지, 그 변경이
+   결론의 근거인지 관측을 위한 장치인지 밝힌다.
+3. 실행한 명령을 commands 에 **실제로 실행한 그대로** 적고 종료 코드를 함께 적는다.
+   실행하지 않은 명령을 적지 마라.
+4. **관측을 프로젝트 전체 규칙으로 일반화하지 마라.** 이 실험이 보여 준 것과 그것이
+   일반적으로 참인지는 다른 문제다.
+5. 운영 데이터·외부 자원·새 권한이 필요하면 **하지 말고** 그 사실을 적는다.
+
+출력은 이 형태의 JSON **하나만** 낸다.
+
+{
+  "commands": [
+    {"command": "실행한 명령", "summary": "짧은 한 줄", "exit_code": 0}
+  ],
+  "result_summary": "무엇을 관측했는가 (짧은 한 줄)",
+  "temporary_changes": "임시로 고친 것과 되돌릴 방법 (짧은 한 줄)",
+  "detail": "관측과 그 한계의 서술"
+}
+
+--- 지시 원문 ---
+"""
+
+
 PROMPT_BY_PURPOSE = {
     "intent_authoring": INTENT_AUTHORING_PROMPT,
     "intent_gate_review": GATE_REVIEW_PROMPT,
     "limited_analysis": LIMITED_ANALYSIS_PROMPT,
+    # P3-R4. 허용된 로컬 실험(D-66). `verification_run` 과 **다른 지시문**인 이유는
+    # 규칙이 반대 방향이기 때문이다 — 검증은 "제품 코드를 고치지 마라"이고 실험은
+    # "재현에 필요한 만큼 임시로 고쳐도 된다"이다. 하나로 합치면 둘 중 하나가 거짓이 된다.
+    "local_experiment": LOCAL_EXPERIMENT_PROMPT,
     # P3-03. 이 둘이 생기면서 `has_prompt` 가 `feature_implementation` 에 True 를
     # 돌려준다 — P3-02까지 배정만 열리고 실행은 `failed` 로 끝나던 경로가 닫힌다.
     "feature_implementation": FEATURE_IMPLEMENTATION_PROMPT,
@@ -394,9 +428,60 @@ PROMPT_BY_PURPOSE = {
 
 #: 수준에 따라 지시문이 달라지는 목적. 위 표에 넣지 않는 이유는 템플릿을 채워야
 #: 하기 때문이다.
+COMBINED_AUTHORING_PROMPT = """당신은 동의된 의도를 읽고 **하나의 결합 기록**을
+작성한다. 지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라. 저장소를 읽고
+답을 JSON으로 출력한다.
+
+이 업무는 **명확하고 저위험**으로 판정돼 설계안과 개발계획을 따로 쓰지 않는다.
+대신 그 둘의 필요한 내용을 **하나의 최소 논리 기록**으로 합쳐 적는다.
+
+작업 수준은 {level} 이며 이 수준의 항목은 다음과 같다.
+{sections}
+
+규칙:
+1. **줄이는 것은 문서의 개수이지 내용이 아니다.** 변경 위치·동작·영향, 검증 방법,
+   작업과 그 완료 조건은 그대로 있어야 한다.
+2. **필수 항목을 비우지 마라.** 비우면 이 기록으로는 구현 실행이 배정되지 않는다.
+3. 설계 결정으로 보일 만큼 큰 선택이 필요하면 그것을 questions 에 적는다.
+   **결합 기록이라는 이유로 중요한 선택을 조용히 확정하지 마라.**
+4. **tasks 에 작업을 하나씩 정의한다.** 형식과 규칙은 개발계획과 같다.
+5. 각 항목에 origin 을 붙인다.
+
+출력은 이 형태의 JSON **하나만** 낸다. **sections 는 객체이고 키는 위 항목 이름
+그대로다** — 목록으로 내거나 이름을 바꾸면 시스템이 읽지 못해 이 실행은 실패한다.
+
+{{
+  "sections": {{
+    "change_summary": {{"text": "...", "origin": "ai_proposal"}},
+    "verifiability": {{"text": "...", "origin": "ai_proposal"}},
+    "tasks": {{"text": "...", "origin": "ai_proposal"}},
+    "verification": {{"text": "...", "origin": "ai_proposal"}}
+  }},
+  "questions": [
+    {{"key": "q1", "text": "질문 본문", "summary": "짧은 요약",
+     "decide_at": "plan", "blocks": ["T2"]}}
+  ],
+  "tasks": [
+    {{"key": "T1", "kind": "implementation", "purpose": "...",
+     "purpose_summary": "짧은 한 줄", "deliverable": "...",
+     "deliverable_summary": "짧은 한 줄", "completion": "...",
+     "completion_summary": "짧은 한 줄",
+     "depends_on": [], "criteria": [{{"key": "C-01", "relation": "implements"}}]}}
+  ]
+}}
+
+--- 지시 원문 ---
+"""
+
+
 STAGE_PROMPT = {
     "design_authoring": (PreparationStage.DESIGN, DESIGN_AUTHORING_PROMPT),
     "plan_authoring": (PreparationStage.PLAN, PLAN_AUTHORING_PROMPT),
+    # P3-R4. 같은 목적(`plan_authoring`)이 **제어부가 정한 단계**에 따라 다른
+    # 지시문을 받는다. 목적을 하나 더 만들지 않는 이유는 진입 조건표·권한표·역할표가
+    # 전부 목적별이기 때문이다 — 값을 늘리면 그 표들이 함께 늘어나고, 한 곳만 빠지면
+    # 새 목적이 조용히 조건 없는 실행이 된다.
+    "combined": (PreparationStage.COMBINED, COMBINED_AUTHORING_PROMPT),
 }
 
 
@@ -418,15 +503,21 @@ def build(
     level: str | None = None,
     profile: str | None = None,
     profile_version: str | None = None,
+    stage_hint: str | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문.
+
+    `stage_hint` 는 **제어부가 정한** 준비 산출물의 단계다(P3-R4). Fast Lane 의
+    계획 작성 실행은 `combined` 를 받아 결합 기록의 지시문을 쓴다. Runner 가 스스로
+    판단하지 않는 이유는 그것이 진입 조건과 같은 판단이기 때문이다.
 
     고정 컨텍스트가 **지시문 앞에 오지 않고 지시문 다음에 오는** 이유는, 무엇을 할지
     먼저 읽은 뒤 자료를 읽는 편이 요청과 자료를 뒤섞지 않기 때문이다. 자료 안의
     문장은 검토 대상이지 지시가 아니다(review-context-contract 2절).
     """
-    if purpose in STAGE_PROMPT:
-        stage, template = STAGE_PROMPT[purpose]
+    key = stage_hint if stage_hint in STAGE_PROMPT else purpose
+    if key in STAGE_PROMPT:
+        stage, template = STAGE_PROMPT[key]
         if level is None:
             # 수준 없이 준비 산출물을 쓰지 않는다. 기본값을 지어내면 어떤 항목이
             # 필수인지가 달라지고, 진입 조건 검사와 어긋난다.
@@ -670,10 +761,14 @@ def parse_preparation(
             }
         )
 
-    # Task 는 **개발계획에서만** 읽는다. 설계에도 받으면 두 산출물의 역할이
+    # Task 는 **계획 쪽 산출물에서만** 읽는다. 설계에도 받으면 두 산출물의 역할이
     # 섞이고 그래프의 출처가 둘이 된다(intent-artifacts 1절).
+    #
+    # **P3-R4: 결합 기록도 계획 쪽이다.** Fast Lane 에서 그 기록이 계획의 자리를
+    # 대신하므로 Task 를 정의하는 것도 그쪽이다 — 읽지 않으면 그 Case 는 작업
+    # 그래프가 없어 구현이 영원히 `work_graph_missing` 이 된다.
     tasks: list[dict[str, Any]] = []
-    if PreparationStage(stage) is PreparationStage.PLAN:
+    if PreparationStage(stage) in (PreparationStage.PLAN, PreparationStage.COMBINED):
         for index, item in enumerate(doc.get("tasks") or [], start=1):
             if not isinstance(item, dict):
                 continue
@@ -797,4 +892,20 @@ def parse_verification(text: str) -> dict[str, Any]:
     return {
         "commands": commands,
         "result_summary": " ".join(str(data.get("result_summary") or "").split())[:MAX_SUMMARY],
+    }
+
+
+def parse_experiment(text: str) -> dict[str, Any]:
+    """실험 실행의 응답을 읽는다(P3-R4·D-66).
+
+    `parse_verification` 과 같은 명령 목록 위에 **임시 변경 기록** 하나를 더한다.
+    그 한 줄이 "증거와 임시 변경을 구분한다"(D-66)의 자리이며, 비어 있으면 비어
+    있는 채로 둔다 — 여기서 만들어 채우면 무엇이 임시였는지가 지어낸 값이 된다.
+    """
+    parsed = parse_verification(text)
+    data = extract_json(text)
+    temporary = " ".join(str(data.get("temporary_changes") or "").split())
+    return {
+        **parsed,
+        "temporary_changes": temporary[:MAX_SUMMARY] or None,
     }

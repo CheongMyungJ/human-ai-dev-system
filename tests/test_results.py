@@ -281,9 +281,18 @@ def test_a_completed_run_can_prove_a_criterion(harness, agreed_case):
 
 
 def test_a_new_intent_version_does_not_inherit_criteria_or_verdicts(harness, agreed_case):
-    """AC-5: 새 의도 버전은 기준과 판정을 승계하지 않는다.
+    """AC-5: 새 의도 버전은 기준과 **영향받은 판정**을 승계하지 않는다.
 
     게이트와 같은 규칙이다. 승계하면 바뀐 의도에 옛 기준과 옛 판정이 그대로 붙는다.
+
+    **P3-R4에서 "영향받은"이 붙었다.** v0.6 에서는 새 버전이 생기는 순간 모든 판정이
+    `needs_recheck` 였다. 그 규칙은 한 항목을 고친 피드백 하나가 **모든 검증을
+    무효로 만든다** — intent-artifacts 69행은 그 뒤에 "영향이 없는 기록은 유지한다"를
+    함께 요구한다. 그래서 여기서는 **영향을 받는 경우**를 확인하고, 받지 않는 경우는
+    `test_progression.py` 가 짝으로 확인한다.
+
+    이 시험에서 C-02 는 새 버전에 없으므로 승계할 대상 자체가 사라졌고, C-01 은
+    기대 결과 항목이 바뀌어 옛 판정이 다른 것을 확인한 결과가 된다.
     """
     case, _intent = agreed_case
     criterion = harness.criteria(case["id"])[0]
@@ -294,8 +303,14 @@ def test_a_new_intent_version_does_not_inherit_criteria_or_verdicts(harness, agr
         == 200
     )
 
-    # v2 를 제출한다. 기준 한 건만 남긴다.
-    harness.submit_intent_draft(case["id"], GOOD_FIELDS, criteria=[DEFAULT_CRITERIA[0]])
+    # v2 를 제출한다. **기준이 가리키는 의도 항목을 바꾸고** 기준 한 건만 남긴다.
+    changed = dict(GOOD_FIELDS)
+    changed["expected_outcome"] = {
+        "text": "ERROR 와 WARN 을 함께 출력",
+        "origin": "ai_proposal",
+        "change_from_prev": "changed",
+    }
+    harness.submit_intent_draft(case["id"], changed, criteria=[DEFAULT_CRITERIA[0]])
 
     current = harness.criteria(case["id"])
     assert [c["criterion_key"] for c in current] == ["C-01"]

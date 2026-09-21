@@ -1,0 +1,29 @@
+제어부 기동: http://127.0.0.1:53592
+Case: case-2efdc864ea3bffbf
+초안 실행: outcome=completed
+수준: simple (도출 simple)
+Fast Lane: True []
+가벼운 확인: method=light verdict=pass
+확인하지 않은 범위: 원문의 의미 대응을 AI 가 검토하지 않았다. 구조·참조·버전·필수 항목의 결정적 검사만 수행했다
+QG-01: verdict=pass ai=not_run
+원문 열람: 전달됨
+의도 동의: HTTP 201 
+결합 기록 실행 생성: HTTP 201 []
+결합 기록 실행: outcome=completed
+결합 기록: 있음 · 상태=auto_conditions_met
+설계 산출물: 없음
+계획 산출물: 없음
+작업 그래프: present=True tasks=['T1', 'T2']
+
+=== 기본 자동 완료 (사람 인수 없이) ===
+완료 모드: auto_on_conditions (autonomy_derived)
+  C-01: HTTP 200
+  C-02: HTTP 200
+  C-03: HTTP 200
+  C-04: HTTP 200
+Case 상태: closed
+종료 기록: completed
+인수 기록: mode=auto_policy actor=policy:auto_on_conditions
+사람 인수 결정 행: ['policy:auto_on_conditions']
+
+프로세스 정리 완료

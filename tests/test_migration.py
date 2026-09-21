@@ -22,6 +22,8 @@ import pytest
 
 from controller import db
 from controller.db import utc_now
+from controller.repository import Repository
+from domain.models import ConformanceMethod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -674,4 +676,159 @@ def test_a_v9_database_keeps_the_consumption_that_already_happened(tmp_path):
     before = conn.execute("SELECT COUNT(*) c FROM budget_reservation").fetchone()["c"]
     db.migrate(conn)
     assert conn.execute("SELECT COUNT(*) c FROM budget_reservation").fetchone()["c"] == before
+    conn.close()
+
+
+# ===================================================== v10 → v11 (P3-R4)
+
+
+def _v10_schema() -> str:
+    """v11 표가 없는 가장 최근 커밋 스키마를 찾는다(P3-R4).
+
+    `_v9_schema` 와 같은 방식이다 — **커밋된 것을 그대로 꺼내 쓴다.** 시험 안에
+    스키마를 베껴 두면 그 사본이 실제 과거와 달라져도 시험이 통과해 버린다.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "material_delta" not in schema and "budget_reservation" in schema:
+            return schema
+    pytest.skip("v10 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v10_database_keeps_its_completion_and_review_defaults(tmp_path):
+    """v10 → v11 (P3-R4 AC-29·AC-29b).
+
+    **이 시험이 R4의 세 번째 위험을 지킨다.** v0.6 기본값(사람 검토·사람 인수)으로
+    진행하던 Case 에 새 기본값을 얹으면, 사람이 확인하기로 하고 시작한 업무가 조용히
+    자동 완료 대상이 된다. 이행은 그 반대를 보장해야 한다.
+
+    네 가지를 본다.
+
+        명시 설정       `migrated_explicit` 로 남고 도출값이 덮지 않는다
+        단계 검토       Autonomy 미기록 Case 는 v0.6 기본값(사람 검토)을 유지한다
+        Autonomy        `NULL`·`migrated_unknown` 그대로이며 controlled 로 적히지 않는다
+        옛 게이트 통과  실제로 독립 검토를 거쳤으므로 `independent` 로 옮겨진다
+    """
+    schema = _v10_schema()
+    path = tmp_path / "controller.sqlite3"
+
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(schema)
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (10, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old-repo','codex',?)",
+        (now,),
+    )
+    for case_id, title in (("case-1", "명시 설정이 있던 Case"), ("case-2", "설정이 없던 Case")):
+        old.execute(
+            'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+            " VALUES (?, 'prj-1', ?, 'feature','in_progress',?,?)",
+            (case_id, title, now, now),
+        )
+    # **사람이 자동 완료를 명시로 고른 Case.** 도출값이 이 설정을 덮으면 안 된다.
+    old.execute(
+        "INSERT INTO completion_policy (case_id, mode, set_by, set_at)"
+        " VALUES ('case-1','auto_on_conditions','owner',?)",
+        (now,),
+    )
+    # 실제로 AI 의미 검토를 거쳐 통과한 게이트.
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','pc','host-1','registered',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+        " byte_size, owner_runner_id, availability, summary, created_at)"
+        " VALUES ('art-1',1,'case-1','intent','hash-1',100,'runner-1','available','의도',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
+        " status, created_at) VALUES ('iv-1','case-1',1,'art-1',1,'agreed',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+        " instruction_artifact_id, instruction_artifact_rev, status,"
+        " assignment_generation, outcome, created_at)"
+        " VALUES ('run-review','case-1','task-1','reviewer','codex','cli','read_only',"
+        " 'art-1',1,'finished',1,'completed',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO gate_result (id, case_id, gate, intent_version_id,"
+        " subject_content_hash, verdict, rule_verdict, ai_verdict, ai_run_id,"
+        " evaluated_at, reviewed_at)"
+        " VALUES ('gate-1','case-1','QG-01','iv-1','hash-1','pass','pass','pass',"
+        " 'run-review',?,?)",
+        (now, now),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+    repo = Repository(conn)
+
+    # --- 1. 명시 설정은 명시 설정으로 남는다 ------------------------------
+    state = repo.completion_mode_state("case-1")
+    assert state["mode"] == "auto_on_conditions"
+    assert state["source"] == "migrated_explicit"
+
+    # --- 2. Autonomy 는 **미기록** 그대로다 --------------------------------
+    policy = repo.effective_policy("case-2")
+    assert policy["autonomy"] is None
+    assert policy["autonomy_recorded"] is False
+    assert policy["autonomy_source"] == "migrated_unknown"
+    # 취급만 controlled 다. 그 사실이 출처로 구별된다.
+    assert policy["effective_autonomy"] == "controlled"
+    assert policy["effective_source"] == "migrated_unknown_treated_as_controlled"
+    assert policy["is_treatment"] is True
+
+    # --- 3. 단계 검토 기본값은 v0.6 그대로다 -------------------------------
+    prep = repo.preparation_state("case-2")
+    assert prep["design"]["mode"] == "human_review"
+    assert prep["plan"]["mode"] == "human_review"
+    assert prep["design"]["mode_source"] == "migrated_default"
+
+    # --- 4. 설정이 없던 Case 의 완료도 사람 확인이다 -----------------------
+    # controlled 취급이므로 도출값이 사람 인수다. 자동 완료로 바뀌지 않는다.
+    assert repo.completion_mode_state("case-2")["mode"] == "human_acceptance"
+    assert repo.completion_mode_state("case-2")["source"] == "autonomy_derived"
+
+    # --- 5. 옛 게이트 통과는 **독립 검토**로 옮겨진다 ----------------------
+    # 지어내는 것이 아니다. R4 이전의 `pass` 는 AI 검토 없이는 나올 수 없는 값이었다.
+    check = repo.get_conformance_check("iv-1", ConformanceMethod.INDEPENDENT)
+    assert check is not None
+    assert check["method"] == "independent"
+    assert check["run_id"] == "run-review"
+    assert check["verdict"] == "pass"
+    # 가벼운 확인 행은 만들어지지 않는다.
+    assert repo.get_conformance_check("iv-1", ConformanceMethod.LIGHT) is None
+
+    # --- 6. 새 컬럼은 **비어 있다** ----------------------------------------
+    columns = {r["name"] for r in conn.execute('PRAGMA table_info("criterion_result")')}
+    assert {"satisfaction", "recheck_source"} <= columns
+
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
+
+    # 다시 돌려도 정합성 확인 행이 늘지 않는다. `migrate()` 는 연결마다 돈다.
+    before = conn.execute("SELECT COUNT(*) c FROM conformance_check").fetchone()["c"]
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM conformance_check").fetchone()["c"] == before
     conn.close()

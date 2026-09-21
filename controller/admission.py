@@ -37,6 +37,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
+from domain.progression import (
+    NEEDS_CONTROLLED_START,
+    experiment_allowed,
+    purpose_outside_objective,
+    required_stages,
+)
 from domain.models import (
     AdmissionOutcome,
     AdmissionProfile,
@@ -78,6 +84,12 @@ ALLOWED_PERMISSIONS: dict[RunPurpose, frozenset[Permission]] = {
     RunPurpose.VERIFICATION_RUN: frozenset(
         {Permission.READ_ONLY, Permission.WORKSPACE_WRITE}
     ),
+    # P3-R4. 허용된 로컬 실험은 **쓰기를 받는다**(D-66 "복구 가능한 로컬 재현·임시
+    # 계측·테스트"). 무엇이 달라지는지는 권한이 아니라 선행 조건이다 — 설계·계획·
+    # 작업 그래프를 요구하지 않고, 작업공간·대상 저장소·예산·직렬화는 그대로 요구한다.
+    RunPurpose.LOCAL_EXPERIMENT: frozenset(
+        {Permission.READ_ONLY, Permission.WORKSPACE_WRITE}
+    ),
 }
 
 #: 작업공간을 바꿀 수 있는 권한. 이 권한의 실행은 준비된 작업공간을 요구하고
@@ -95,6 +107,7 @@ EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
     RunPurpose.PLAN_AUTHORING: RunRole.AUTHOR,
     RunPurpose.FEATURE_IMPLEMENTATION: RunRole.AUTHOR,
     RunPurpose.VERIFICATION_RUN: RunRole.AUTHOR,
+    RunPurpose.LOCAL_EXPERIMENT: RunRole.AUTHOR,
 }
 
 #: 동의된 의도를 선행 조건으로 받는 목적들. 기능 개발 조건표를 적용한다.
@@ -105,6 +118,10 @@ NEEDS_AGREED_INTENT: frozenset[RunPurpose] = frozenset(
         RunPurpose.PLAN_AUTHORING,
         RunPurpose.FEATURE_IMPLEMENTATION,
         RunPurpose.VERIFICATION_RUN,
+        # P3-R4. 실험도 그 Case 의 합의된 목적 안에서 도는 실행이다. 조건표가
+        # `non_feature_minimal` 인 Case 에서는 이 집합에 있어도 의도 동의를
+        # 요구받지 않는다 — 조사·연구 Case 가 그쪽이다.
+        RunPurpose.LOCAL_EXPERIMENT,
     }
 )
 
@@ -121,6 +138,9 @@ NEEDS_CODING_CLI: frozenset[RunPurpose] = frozenset(
         # 아무 것도 하지 않은 실행 하나로 후속 Task 가 전부 열린다.
         RunPurpose.FEATURE_IMPLEMENTATION,
         RunPurpose.VERIFICATION_RUN,
+        # P3-R4. 실험도 마찬가지다. 골격 실행기는 계측 코드를 쓰지도 명령을 돌리지도
+        # 않으면서 정상 종료하고, 그 실행이 "실험했다"로 기록된다.
+        RunPurpose.LOCAL_EXPERIMENT,
     }
 )
 
@@ -169,6 +189,21 @@ class AdmissionRequest:
     #: 한 칸의 경쟁을 막는 층이다. 두 층이 필요한 이유는 `Repository.create_run()`
     #: 주석에 있다.
     budget_breaches: list[dict[str, Any]] = field(default_factory=list)
+    #: `Repository.checkpoint_state()` 의 결과(P3-R4). 빈 dict 는 **확인 지점을
+    #: 모른다**이며 controlled 가 아님으로 읽지 않는다 — 없음을 통과로 읽지 않는
+    #: 규칙이 여기에도 적용된다. 그래서 기본값에 `required: False` 를 두지 않고
+    #: `_check_autonomy` 가 키의 부재를 확인 안 됨으로 해석한다.
+    checkpoint_state: dict[str, Any] = field(default_factory=dict)
+    #: 이 Case 의 Profile(P3-R4·D-66). `None` 은 R1 이전 Case 이며 **유도하지 않는다**.
+    case_profile: str | None = None
+    #: 사용자의 명시 결정으로 목적이 넓어졌는가. AI 판단이나 Profile 변경이 아니다.
+    objective_widened: bool = False
+    #: `Repository.material_delta_state()` 의 결과(P3-R4). 확인되지 않은 누적 변경이
+    #: 어떤 Task 를 막는지가 들어 있다. 연결을 모르면 **전부 막는다**.
+    material_delta_state: dict[str, Any] = field(default_factory=dict)
+    #: `Repository.fast_lane_state()` 의 결과(P3-R4). 결합 기록 하나로 충분한지를
+    #: 정한다. 빈 dict 는 `eligible = False` 로 읽힌다 — 판정이 없으면 일반 경로다.
+    fast_lane: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -226,9 +261,21 @@ _STAGE_REFUSALS: dict[PreparationStage, dict[str, AdmissionRefusal]] = {
         "incomplete": AdmissionRefusal.PLAN_INCOMPLETE_FOR_LEVEL,
         "review": AdmissionRefusal.PLAN_REVIEW_MISSING,
     },
+    # P3-R4. 결합 기록의 사유를 설계·계획과 **나눠 둔다.** 같은 코드를 쓰면 화면이
+    # "설계가 없다"고 말하는데 사람이 만들어야 하는 것은 결합 기록인 상태가 된다.
+    PreparationStage.COMBINED: {
+        "missing": AdmissionRefusal.COMBINED_RECORD_MISSING,
+        "stale": AdmissionRefusal.COMBINED_RECORD_STALE,
+        "incomplete": AdmissionRefusal.COMBINED_RECORD_INCOMPLETE_FOR_LEVEL,
+        "review": AdmissionRefusal.COMBINED_RECORD_REVIEW_MISSING,
+    },
 }
 
-_STAGE_LABEL = {PreparationStage.DESIGN: "설계", PreparationStage.PLAN: "개발계획"}
+_STAGE_LABEL = {
+    PreparationStage.DESIGN: "설계",
+    PreparationStage.PLAN: "개발계획",
+    PreparationStage.COMBINED: "결합 기록",
+}
 
 
 def _check_stage_ready(request: AdmissionRequest, stage: PreparationStage, refuse: Any) -> None:
@@ -295,9 +342,68 @@ def _check_stage_ready(request: AdmissionRequest, stage: PreparationStage, refus
 #:
 #: **검증 실행도 여기 있다.** 무엇을 확인할지는 계획이 정하므로, 계획 없이 도는
 #: 빌드·테스트는 "무엇을 검증했는가"를 답할 수 없다(FR-09).
+#:
+#: **로컬 실험은 여기 없다**(P3-R4·D-66). "임시 코드가 있다는 이유만으로 기능 개발
+#: 전체 절차를 요구하지 않는다" — 대신 작업공간·대상 저장소·예산·쓰기 직렬화는
+#: 전부 지난다. 무엇을 면제하고 무엇을 면제하지 않는지가 이 차이에 있다.
 NEEDS_PREPARATION: frozenset[RunPurpose] = frozenset(
     {RunPurpose.FEATURE_IMPLEMENTATION, RunPurpose.VERIFICATION_RUN}
 )
+
+
+def _check_preparation(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """구현·검증의 준비 조건. **Fast Lane 이면 결합 기록 하나로 충분하다**(P3-R4).
+
+    요구는 "이 중 **하나**를 갖추라"는 대안 집합이다. 일반 경로는 설계+계획 두 건,
+    Fast Lane 에서는 결합 기록 한 건이 그 자리를 대신한다
+    (`domain.progression.required_stages`).
+
+    **Fast Lane 이어도 설계·계획 경로가 사라지지 않는다.** 이미 두 산출물이 있으면
+    그대로 통과한다 — 결합 기록은 대체하는 선택지이지 강제가 아니다.
+
+    거부 사유를 고를 때 **가장 가까운 대안의 것을 쓴다.** 두 대안의 사유를 모두
+    쏟아 내면 사람이 "설계도 계획도 결합 기록도 없다"는 세 줄을 받고 무엇을 만들어야
+    하는지 알 수 없게 된다. 결합 기록이 있으면 그쪽을, 없으면 설계·계획 쪽을 말한다.
+    """
+    prep = request.preparation_state or {}
+    fast_lane = bool((request.fast_lane or {}).get("eligible"))
+    alternatives = required_stages(fast_lane)
+
+    def satisfied(stages: frozenset[PreparationStage]) -> bool:
+        probe: list[AdmissionRefusal] = []
+        for stage in stages:
+            _check_stage_ready(request, stage, lambda r, m: probe.append(r))
+        return not probe
+
+    for stages in alternatives:
+        if satisfied(stages):
+            return
+
+    combined = (prep.get(PreparationStage.COMBINED.value) or {}).get("artifact")
+    if combined is not None and not fast_lane:
+        # 결합 기록은 있는데 Fast Lane 조건이 깨졌다. **사람 확인 요구가 아니다** —
+        # 필요한 준비를 추가한 일반 자동 진행으로 전환하는 것이다
+        # (autonomy-budget-policy 4절 마지막 문단).
+        blockers = ", ".join(
+            b["detail"] for b in (request.fast_lane or {}).get("blockers") or []
+        )
+        refuse(
+            AdmissionRefusal.FAST_LANE_LEFT_NEEDS_PREPARATION,
+            f"결합 기록이 있으나 Fast Lane 조건이 깨졌다: {blockers}."
+            " 설계·개발계획을 갖춘 일반 진행으로 전환한다 — 이것은 사람 확인 요구가"
+            " 아니라 준비 추가다",
+        )
+        _check_stage_ready(request, PreparationStage.DESIGN, refuse)
+        _check_stage_ready(request, PreparationStage.PLAN, refuse)
+        return
+
+    if fast_lane and combined is not None:
+        # 결합 기록이 있고 Fast Lane 인데 통과하지 못했다 = 그 기록 자체의 문제다.
+        _check_stage_ready(request, PreparationStage.COMBINED, refuse)
+        return
+
+    _check_stage_ready(request, PreparationStage.DESIGN, refuse)
+    _check_stage_ready(request, PreparationStage.PLAN, refuse)
 
 
 def _check_workspace_target(request: AdmissionRequest, refuse: Any) -> None:
@@ -381,6 +487,13 @@ NEEDS_WORK_GRAPH: frozenset[RunPurpose] = frozenset(
     }
 )
 
+#: **로컬 실험은 작업 그래프를 요구하지 않는다**(P3-R4·D-66).
+#:
+#: 위 집합에 `LOCAL_EXPERIMENT` 를 넣지 않은 것은 실수가 아니다. 실험은 계획이 정의한
+#: Task 가 아니라 조사 목적 안의 활동이며, 그래프를 요구하면 "임시 코드가 있다는
+#: 이유만으로 기능 개발 전체 절차를 요구하지 않는다"가 깨진다. 대신 **목적 검사**가
+#: 그 실행이 조사 Profile 안인지를 본다(`_check_objective`).
+
 
 def _check_work_graph(request: AdmissionRequest, refuse: Any) -> None:
     """작업 그래프 조건을 검사한다(P3-02).
@@ -451,6 +564,100 @@ def _check_work_graph(request: AdmissionRequest, refuse: Any) -> None:
     # 같은 함수를 보게 하기 위해서다 — 두 벌로 쓰면 한쪽만 고치는 실수가 생긴다.
     for block in readiness.get("blocked_by") or []:
         refuse(AdmissionRefusal(block["reason"]), block["detail"])
+
+
+def _check_autonomy(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """controlled 의 시작 확인이 있는가(P3-R4·D-65).
+
+    **초안 작성·의미 검토·조사는 막지 않는다.** 시작 확인의 대상이 "목표·범위·기준·
+    허용 행동"인데 사람이 그것을 확인하려면 초안이 먼저 있어야 하고, 조사까지 막으면
+    확인에 필요한 사실을 모을 수 없다. 어느 목적이 막히는지는
+    `domain.progression.NEEDS_CONTROLLED_START` 가 갖는다 — 진입 검사·화면·시험이
+    같은 집합을 본다.
+
+    **확인 지점 상태를 모르면 막는다.** `checkpoint_state` 가 비어 있다는 것은
+    "controlled 가 아니다"가 아니라 판단 근거가 없다는 뜻이다. 다만 그 경우 이
+    함수를 부르는 쪽이 이미 상태를 읽어 넣으므로, 빈 dict 는 P2 시절 호출(시험)에서만
+    나타나고 그때는 `required` 키가 없어 아무 것도 막지 않는다.
+    """
+    state = request.checkpoint_state or {}
+    if not state.get("required"):
+        return
+    if request.purpose not in NEEDS_CONTROLLED_START:
+        return
+    if state.get("start_confirmed"):
+        return
+    treated = state.get("is_treatment")
+    detail = (
+        "이 업무는 controlled 이며 시작 목표·범위·기준·허용 행동의 확인이 아직 없다."
+        f" {request.purpose.value} 는 그 확인 뒤에 배정한다"
+    )
+    if treated:
+        detail += (
+            ". 이 Case 는 Autonomy 가 기록되지 않아 controlled 로 취급되고 있다"
+            " — Autonomy 를 기록하면 그 설정을 따른다"
+        )
+    refuse(AdmissionRefusal.CONTROLLED_START_NOT_CONFIRMED, detail)
+
+
+def _check_objective(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """이 목적이 Case 의 합의된 목적 안인가(P3-R4·D-66·FR-20).
+
+    "원인 분석만 요청한 Case 는 허용된 조사·임시 실험을 수행할 수 있지만 **제품
+    수정으로 목적을 확대하지 않는다**"의 구현이다. 실험은 열려 있고 기능 구현이
+    닫혀 있는 것이 그 문장의 내용이며, 넓히는 방법은 사용자의 명시 결정 하나다.
+
+    **로컬 실험은 Profile 이 기록된 Case 에서만 연다.** R1 이전 Case 의 목적을
+    `kind` 에서 유도해 채우지 않는다는 규칙(D-62)이 여기에도 적용된다 — 유도한
+    목적으로 쓰기를 여는 것은 그 규칙을 가장 비싼 방식으로 어기는 일이다.
+    """
+    if purpose_outside_objective(
+        request.purpose, request.case_profile, request.objective_widened
+    ):
+        refuse(
+            AdmissionRefusal.PURPOSE_OUTSIDE_CASE_OBJECTIVE,
+            f"이 업무의 Profile 은 {request.case_profile} 이며 조사·분석이 목적이다."
+            f" {request.purpose.value} 는 제품 수정이므로 목적 확대에 해당한다 —"
+            " 사용자의 명시 결정으로 목적을 넓힌 뒤에 배정한다. 허용된 로컬 실험은"
+            " 그대로 수행할 수 있다",
+        )
+    if request.purpose is RunPurpose.LOCAL_EXPERIMENT and not experiment_allowed(
+        request.case_profile
+    ):
+        refuse(
+            AdmissionRefusal.PROFILE_NOT_RECORDED,
+            "이 업무에 Profile 이 기록되지 않아 어떤 목적의 실험인지 알 수 없다."
+            " 유형에서 유도해 쓰기를 열지 않는다",
+        )
+
+
+def _check_material_delta(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """확인되지 않은 누적 변경이 이 Task 를 막는가(P3-R4·D-60).
+
+    차단 범위는 **그 변경이 가리키는 기준에 붙은 Task** 다. 의도 항목·저장소 허용의
+    변경은 특정 Task 에 대응시킬 수 없으므로 **전부 막는다** — 그것들은 Case 의 범위
+    자체를 바꾼다.
+
+    연결을 모르는 변경도 전부 막는다. "아무 것도 막지 않는다"가 아니라 **무엇을
+    막는지 모른다**는 뜻이고, 모르는 것을 안전한 쪽으로 읽으면 연결하지 않는 것만으로
+    차단이 사라진다(`controller/work_graph.py` 의 같은 규칙).
+    """
+    state = request.material_delta_state or {}
+    pending = state.get("pending") or []
+    if not pending:
+        return
+    blocks_all = state.get("blocks_all_tasks")
+    blocked = set(state.get("blocked_task_keys") or [])
+    if not blocks_all and request.task_id not in blocked:
+        return
+    keys = ", ".join(d["target_key"] for d in pending)
+    detail = (
+        f"마지막 유효 위임 기준과 대조해 확인하지 않은 변경이 {len(pending)}건 쌓여"
+        f" 있다: {keys}. 그 변경에 의존하는 작업은 확인 뒤에 배정한다"
+    )
+    if blocks_all:
+        detail += ". 어떤 작업을 막는지 연결되지 않은 변경이 있어 전부 막는다"
+    refuse(AdmissionRefusal.MATERIAL_DELTA_UNCONFIRMED, detail)
 
 
 def budget_refusal_reason(breaches: list[dict[str, Any]]) -> str:
@@ -635,7 +842,20 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     # `의도 → 설계 → 개발계획` 이므로(intent-artifacts 2절) 설계가 없거나 아직
     # 검토되지 않았으면 무엇을 구현할 계획인지 말할 수 없다.
     if request.purpose is RunPurpose.PLAN_AUTHORING:
-        _check_stage_ready(request, PreparationStage.DESIGN, refuse)
+        # **Fast Lane 에서는 설계를 선행 조건으로 받지 않는다**(P3-R4·D-60).
+        #
+        # 그 실행이 쓰는 것은 계획이 아니라 **결합 기록**이며, 결합 기록은 설계 위에
+        # 세우는 것이 아니라 설계의 자리를 함께 대신한다. 설계를 요구하면 "별도
+        # 설계·계획 파일 없이 진행한다"가 성립할 수 없다.
+        #
+        # **설계가 이미 있으면 Fast Lane 이어도 그대로 요구한다.** 있는 설계를
+        # 건너뛰고 결합 기록을 쓰면 그 설계가 버려진다 — 같은 판단이
+        # `Repository._authoring_stage` 에 있고 두 곳이 같은 값을 본다.
+        prep = request.preparation_state or {}
+        has_design = (prep.get(PreparationStage.DESIGN.value) or {}).get("artifact")
+        fast_lane = bool((request.fast_lane or {}).get("eligible"))
+        if has_design is not None or not fast_lane:
+            _check_stage_ready(request, PreparationStage.DESIGN, refuse)
 
     if request.purpose in NEEDS_PREPARATION:
         # **여기가 P3-01이 여는 문이다.** P2까지는 선행 조건의 구현이 없어 한 줄로
@@ -652,8 +872,10 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
                 AdmissionRefusal.SIZING_NOT_DECIDED,
                 "작업 수준이 결정되지 않았다. 축별 판단이 있는 의도 초안이 필요하다",
             )
-        _check_stage_ready(request, PreparationStage.DESIGN, refuse)
-        _check_stage_ready(request, PreparationStage.PLAN, refuse)
+        # **P3-R4에서 산출물의 개수가 조건에 따라 달라진다.** Fast Lane 이면 결합
+        # 기록 하나로 충분하고, 아니면 설계+계획 두 건이다. 어느 쪽이든 **없어지는
+        # 것은 없다** — 필수 항목이 미정이면 그대로 거부된다.
+        _check_preparation(request, refuse)
 
         # **계획이 옛 설계의 것인지는 여기서 보지 않는다.** 설계를 새로 만들면
         # 그 위에 세웠던 계획이 곧바로 대체되므로(repository.create_preparation_artifact)
@@ -663,6 +885,14 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
 
     if request.purpose in NEEDS_WORK_GRAPH:
         _check_work_graph(request, refuse)
+
+    # --- P3-R4: Autonomy·목적·누적 변경 ------------------------------------
+    #
+    # 예산보다 **앞에** 둔다. 앞의 조건들과 같은 종류이기 때문이다 — "이 실행을 열 수
+    # 있는가"를 묻는다. 예산만 마지막에 남는다(그것은 "살 수 있는가"다).
+    _check_autonomy(request, refuse)
+    _check_objective(request, refuse)
+    _check_material_delta(request, refuse)
 
     # **예산은 마지막에 본다.** 앞의 조건들은 "이 실행을 열 수 있는가"이고 이것은
     # "열어도 되는데 살 수 있는가"이다. 순서를 바꾸면 조건을 갖추지 못한 요청이 예산

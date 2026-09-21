@@ -1,0 +1,33 @@
+{
+  "intent_version_id": "intent-acfc3845f3009b2f",
+  "method": "independent",
+  "verdict": "pass",
+  "unverified_scope": null,
+  "checks": [
+    {
+      "id": "conf-59fc553824b1840b",
+      "case_id": "case-e97641cdf01bbac6",
+      "intent_version_id": "intent-acfc3845f3009b2f",
+      "method": "independent",
+      "required_method": "independent",
+      "verdict": "pass",
+      "run_id": "run-live-review",
+      "subject_content_hash": "sha256:b25e619021afaaa6f3577ca337b10cc81fd32dd6002550eca8f718d82977e0ec",
+      "unverified_scope": null,
+      "reasons_json": "[]",
+      "recorded_at": "2026-09-21T21:31:12.369479+00:00"
+    }
+  ],
+  "required_method": "independent",
+  "independent_review_required": true,
+  "reasons": [
+    {
+      "reason": "level_above_simple",
+      "detail": "효과 수준이 간소를 넘어선다"
+    },
+    {
+      "reason": "evidence_gap",
+      "detail": "수준 판단에 근거가 부족한 축이 있다"
+    }
+  ]
+}

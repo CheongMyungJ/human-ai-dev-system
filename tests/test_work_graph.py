@@ -526,8 +526,16 @@ def test_an_answered_question_is_not_asked_again_across_revisions(harness):
 
 
 def test_rewriting_the_plan_does_not_ask_for_the_design_review_again(harness):
-    """AC-10: 계획만 다시 써도 설계 검토를 다시 요구하지 않는다."""
+    """AC-10: 계획만 다시 써도 설계 검토를 다시 요구하지 않는다.
+
+    **P3-R4: 두 단계를 사람 검토로 고른 Case 다.** 도출 기본값(자동 진행)에서는 새
+    계획의 조건이 갖춰지는 순간 기록이 생겨 검토 사유 자체가 나타나지 않는다.
+    확인하려는 성질은 그대로다 — 새 계획은 자기 검토가 필요하고 **설계 검토는
+    다시 요구되지 않는다.** 그 구별은 검토가 사람의 것일 때 가장 분명하다.
+    """
     case = _graph_case(harness)
+    harness.set_stage_mode(case["id"], "design", "human_review", reason="사람이 본다")
+    harness.set_stage_mode(case["id"], "plan", "human_review", reason="사람이 본다")
     assert harness.ai_prepare(case["id"], "plan", run_id="run-plan-2").status_code == 201
 
     refusals = _refusals(harness.request_implementation(case["id"], task_id="T1"))
@@ -535,6 +543,25 @@ def test_rewriting_the_plan_does_not_ask_for_the_design_review_again(harness):
     assert "design_stale" not in refusals
     # 새 계획은 자기 검토가 필요하다 — 그것은 **다른 대상**이라 반복 요구가 아니다.
     assert "plan_review_missing" in refusals
+
+
+def test_rewriting_the_plan_under_auto_proceed_is_admitted_without_a_person(harness):
+    """R4: 자동 진행 기본값에서는 다시 쓴 계획이 **사람 없이** 조건을 갖춘다.
+
+    "명확·저위험 요청이 추가 승인이나 별도 문서 없이 구현·검증된다"(P3-R4 성공
+    기준)의 구체적인 모습이다. 설계 검토가 다시 요구되지 않는다는 성질은 위 시험과
+    같고, 달라지는 것은 새 계획의 검토를 사람이 하지 않는다는 점이다.
+    """
+    case = _graph_case(harness)
+    assert harness.ai_prepare(case["id"], "plan", run_id="run-plan-2").status_code == 201
+
+    response = harness.request_implementation(case["id"], task_id="T1")
+    assert response.status_code in (200, 201), response.text
+    # 새 계획의 검토는 **자동 조건 충족**이며 사람 승인이 아니다.
+    plan = harness.preparation(case["id"])["plan"]
+    assert plan["state"] == "auto_conditions_met"
+    assert plan["review"]["decision_id"] is None
+    assert plan["review"]["actor"] == "stage-auto-proceed-policy"
 
 
 # ------------------------------------------------------------------ AC-11

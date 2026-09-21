@@ -297,26 +297,35 @@ def test_policy_changes_do_not_touch_existing_human_records(harness):
     intent = harness.ready_for_acceptance(case["id"], project["id"])
     before = harness.client.get(f"/api/cases/{case['id']}").json()
     before_decisions = before["decisions"]
-    before_completion = before["result"]["completion_mode"]
+    # **P3-R4: 완료 모드는 이제 Autonomy 에서 도출된다.** 기본은 자동 완료이고
+    # controlled 로 바꾸면 사람 확인이 된다 — 그것이 이 설정의 뜻이다(D-31).
+    assert before["result"]["completion_mode"] == "auto_on_conditions"
 
     assert _set_autonomy(harness, case["id"], "controlled").status_code == 200
 
     after = harness.client.get(f"/api/cases/{case['id']}").json()
     assert after["decisions"] == before_decisions
-    assert after["result"]["completion_mode"] == before_completion
     assert after["intent_state"]["agreement_state"] == "agreed_current"
     assert after["intent_state"]["agreed_version"]["subject_id"] == intent["id"]
+    # 도출값은 바뀌지만 **기록된 설정 행은 만들어지지 않는다.** 사람이 완료 정책을
+    # 고른 것으로 적으면 고르지 않은 설정이 사용자의 설정처럼 읽힌다.
+    assert after["result"]["completion_mode"] == "human_acceptance"
+    assert after["result"]["completion_mode_source"] == "autonomy_derived"
 
 
 def test_policy_cannot_be_changed_after_closure(harness):
-    """AC-12 — 종료된 Case 의 정책·예산·저장소 설정은 거부한다(D-33)."""
+    """AC-12 — 종료된 Case 의 정책·예산·저장소 설정은 거부한다(D-33).
+
+    **P3-R4: 종료에 이르는 경로가 달라졌다.** 기본 ask-on-decision 은 기준이 모두
+    충족되는 순간 **스스로** 완료하므로 사람 인수 호출이 없다. 확인하는 성질은
+    그대로다 — 종료 뒤에는 정책을 바꾸지 못한다.
+    """
     project = harness.create_project()
     case = harness.create_case(project["id"])
     harness.submit_intent_draft(case["id"], _draft_for(harness, case["id"]))
     harness.ready_for_acceptance(case["id"], project["id"])
     harness.mark_all_criteria_met(case["id"])
-    candidate = harness.build_candidate(case["id"])
-    assert harness.accept(case["id"], candidate["id"]).status_code == 201
+    assert harness.client.get(f"/api/cases/{case['id']}").json()["status"] == "closed"
 
     refused = _set_autonomy(harness, case["id"], "controlled")
     assert refused.status_code == 409
@@ -729,20 +738,27 @@ def test_an_unselected_case_shows_the_implicit_single_repository(harness):
 def test_the_policy_view_says_who_enforces_each_axis(harness):
     """AC-10 — 각 축을 **지금 누가 강제하는가**를 담당 작업과 함께 표시한다.
 
-    **P3-R2에서 갱신했다.** `repository_selection` 이 `recorded_not_enforced` 에서
-    `enforced` 로 바뀌었다 — R2 가 선택·쓰기 허용으로 실제 작업공간을 막기 때문이다.
-    바뀌지 않은 채 이 시험이 통과했다면 강제를 붙이지 않은 것이고, 그것이 이 시험을
-    남겨 두는 이유다(DEVELOPMENT.md 9절).
+    **P3-R4에서 갱신했다.** `autonomy` 와 `controlled_checkpoint` 가
+    `recorded_not_enforced` 에서 `enforced` 로 바뀌었다 — R4 가 진입과 종료를 실제로
+    정하기 때문이다. 바뀌지 않은 채 이 시험이 통과했다면 강제를 붙이지 않은 것이고,
+    그것이 이 시험을 남겨 두는 이유다(DEVELOPMENT.md 9절).
 
-    나머지 셋은 아직 기록뿐이다. R3·R4 가 붙일 때 이 시험이 다시 갱신돼야 한다.
+    **이제 `publish` 만 남는다.** 게시는 P5 이며 쓰기 허용이 게시 허용으로 번지지
+    않는다(D-64). 네 축이 강제로 바뀌었다고 다섯째까지 강제되는 것으로 적지 않는다.
     """
     project = harness.create_project()
     case = harness.create_case(project["id"])
     enforcement = _policy(harness, case["id"])["enforcement"]
-    assert enforcement["autonomy"]["state"] == "recorded_not_enforced"
+    # **P3-R4에서 바뀐 두 축.** 방향이 둘이라는 사실이 문구에 남는다 —
+    # controlled 는 막고 기본 ask-on-decision 은 연다.
+    assert enforcement["autonomy"]["state"] == "enforced"
     assert enforcement["autonomy"]["enforced_by"] == "P3-R4"
-    assert enforcement["controlled_checkpoint"]["state"] == "recorded_not_enforced"
+    assert "controlled" in enforcement["autonomy"]["detail"]
+    assert "자동 완료" in enforcement["autonomy"]["detail"]
+    assert enforcement["controlled_checkpoint"]["state"] == "enforced"
     assert enforcement["controlled_checkpoint"]["enforced_by"] == "P3-R4"
+    # 확인이 게시 권한을 만들지 않는다는 경계가 같은 문구에 남는다.
+    assert "P5" in enforcement["controlled_checkpoint"]["detail"]
     # **P3-R3에서 바뀐 축.** 예약·집계·정지가 실제로 배정을 정한다.
     assert enforcement["budget"]["state"] == "enforced"
     assert enforcement["budget"]["enforced_by"] == "P3-R3"
@@ -835,9 +851,14 @@ def test_new_profiles_do_not_loosen_the_existing_admission_rules(harness):
         assert response.status_code == 409, response.text
         refusals[case["id"]] = set(response.json()["detail"]["admission"]["refusals"])
 
-    assert refusals[new_kind["id"]] == refusals[old_kind["id"]]
+    # **P3-R4에서 한쪽이 더 엄격해졌다.** `analysis` 는 `root_cause_analysis` Profile 로
+    # 유도되고, 그 Case 에서 기능 구현은 목적 확대다(D-66). 느슨해진 것이 아니라
+    # 반대이므로 "같다" 대신 "새 Profile 쪽이 더 느슨하지 않다"를 확인한다.
+    assert refusals[new_kind["id"]] <= refusals[old_kind["id"]]
     assert "sizing_not_decided" in refusals[new_kind["id"]]
     assert "workspace_not_ready" in refusals[new_kind["id"]]
+    assert "purpose_outside_case_objective" not in refusals[new_kind["id"]]
+    assert "purpose_outside_case_objective" in refusals[old_kind["id"]]
 
 
 def test_a_profile_change_does_not_reset_history(harness):
@@ -1091,8 +1112,17 @@ def test_a_successor_case_does_not_inherit_the_profile_or_the_policy(harness):
     harness.submit_intent_draft(case["id"], _draft_for(harness, case["id"]))
     harness.ready_for_acceptance(case["id"], project["id"])
     harness.mark_all_criteria_met(case["id"])
+    # **P3-R4: controlled 는 시작·결과 후보 확인을 지나야 종료된다**(D-65).
+    harness.confirm_checkpoint(case["id"], "start_scope", subject_id=case["id"])
     candidate = harness.build_candidate(case["id"])
-    assert harness.accept(case["id"], candidate["id"]).status_code == 201
+    harness.confirm_checkpoint(
+        case["id"],
+        "result_candidate",
+        subject_type="completion_candidate",
+        subject_id=candidate["id"],
+        subject_hash=candidate["snapshot_hash"],
+    )
+    assert harness.client.get(f"/api/cases/{case['id']}").json()["status"] == "closed"
 
     successor = harness.client.post(
         f"/api/cases/{case['id']}/successor",

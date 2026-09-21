@@ -16,7 +16,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 def utc_now() -> str:
@@ -153,6 +153,27 @@ def migrate(conn: sqlite3.Connection) -> None:
     #      실제로 돈 실행에 행이 없으면 스키마를 올리는 것만으로 그 Case 의 소비가
     #      0 이 된다 — "세션·Task 분할로 초기화하지 않는다"(D-61)가 이행에서 깨진다.
     _migrate_v10_budget_reservations(conn)
+
+    # v11: 자동 실행·진입·완료. **새 표 둘과 새 컬럼 다섯**이며 기존 컬럼의 뜻은
+    #      바뀌지 않는다.
+    #
+    #      `run.is_experiment`   이 실행이 허용된 로컬 실험인가(D-66). 옛 행은 0 이고
+    #                            그것은 정확하다 — R4 이전에는 실험 목적이 없었다.
+    #      `criterion_result.satisfaction`  **어떻게** 충족했는가. 옛 행은 NULL 이며
+    #                            그것은 "바꾸고 확인했다"가 아니라 **그때는 묻지
+    #                            않았다**는 뜻이다. `changed_and_verified` 로 채우지
+    #                            않는다 — 없는 관측을 지어내는 일이다.
+    #      `criterion_result.recheck_source` 어떤 피드백이 재검토를 만들었는가.
+    #      `completion_policy.source`  그 행이 사람의 명시 설정인가. R4 이전 행은
+    #                            **전부 명시 설정이었다**(도출 경로가 없었다). 그래서
+    #                            이행이 `migrated_explicit` 로 적고, 도출값이 그 행을
+    #                            덮지 않는다.
+    _add_column_if_missing(conn, "run", "is_experiment", "INTEGER NOT NULL DEFAULT 0")
+    _add_column_if_missing(conn, "criterion_result", "satisfaction", "TEXT")
+    _add_column_if_missing(conn, "criterion_result", "recheck_source", "TEXT")
+    _add_column_if_missing(conn, "completion_policy", "source", "TEXT")
+
+    _migrate_v11_progression(conn)
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
@@ -572,3 +593,62 @@ def _migrate_v10_budget_reservations(conn: sqlite3.Connection) -> None:
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
     )
+
+
+def _migrate_v11_progression(conn: sqlite3.Connection) -> None:
+    """R4 이전에 만들어진 기록의 뜻을 **고정한다.**
+
+    두 가지뿐이다. 둘 다 "지금 와서 값을 지어내지 않는다"의 구현이다.
+
+    1. **기존 `completion_policy` 행은 전부 명시 설정이었다.** R4 이전에는 Autonomy
+       에서 완료 모드를 도출하는 경로가 없었으므로, 행이 있다는 것은 누군가
+       `set_completion_mode()` 를 불렀다는 뜻이다. `source = migrated_explicit` 로
+       적어 두면 도출값이 그 행을 덮지 않는다 — "사용자 명시 설정을 조용히
+       덮어쓰지 않는다"(autonomy-budget-policy 5절).
+
+    2. **기존 게이트 통과는 독립 검토를 실제로 거쳤다.** R4 이전의 `pass` 는
+       `combine_verdicts` 가 AI 판정 없이는 내주지 않는 값이었다(`not_run` 을
+       `pass` 로 올리지 않는다). 그래서 `conformance_check` 행을
+       `method = independent` 로 만든다. 지어내는 것이 아니라 **이미 있었던 사실을
+       새 표에 옮기는 것**이다. AI 검토가 없었던 행에는 만들지 않는다.
+
+    `criterion_result.satisfaction` 은 **비워 둔다.** 옛 판정이 어떻게 충족됐는지는
+    그때 묻지 않았고, `changed_and_verified` 로 채우면 없는 관측을 지어내는 일이다.
+    미재현으로 `met` 이 된 행이 섞여 있어도 지금은 알 수 없다 — 모르는 것을 모른다고
+    두는 편이 정확하다.
+    """
+    from domain import ids
+    from domain.models import ConformanceMethod, GateVerdict
+
+    now = utc_now()
+
+    conn.execute(
+        "UPDATE completion_policy SET source = 'migrated_explicit' WHERE source IS NULL"
+    )
+
+    rows = conn.execute(
+        "SELECT g.* FROM gate_result g"
+        " WHERE g.ai_run_id IS NOT NULL"
+        "   AND NOT EXISTS (SELECT 1 FROM conformance_check c"
+        "                   WHERE c.intent_version_id = g.intent_version_id"
+        "                     AND c.method = ?)",
+        (ConformanceMethod.INDEPENDENT.value,),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "INSERT INTO conformance_check"
+            " (id, case_id, intent_version_id, method, required_method, verdict,"
+            "  run_id, subject_content_hash, unverified_scope, reasons_json, recorded_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, '[]', ?)",
+            (
+                ids.new_id("conf"),
+                row["case_id"],
+                row["intent_version_id"],
+                ConformanceMethod.INDEPENDENT.value,
+                ConformanceMethod.INDEPENDENT.value,
+                row["ai_verdict"] or GateVerdict.NOT_RUN.value,
+                row["ai_run_id"],
+                row["subject_content_hash"],
+                row["reviewed_at"] or now,
+            ),
+        )

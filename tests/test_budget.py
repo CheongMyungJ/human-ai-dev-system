@@ -748,20 +748,24 @@ def test_the_budget_model_is_not_a_repair_counter(harness):
 
 
 def test_budget_enforcement_did_not_spread_to_the_other_axes(harness):
-    """AC-20 — R3 가 바꾼 축은 예산 하나다.
+    """AC-20 — 한 축을 강제로 바꿨다고 옆 축까지 강제되는 것으로 표시하지 않는다.
 
-    Autonomy·확인 지점은 R4, 게시는 P5다. 한 축을 강제로 바꿨다고 옆 축까지 강제되는
-    것으로 표시하지 않는다(DEVELOPMENT.md 3절).
+    **P3-R4에서 갱신했다.** R3 시점에 남아 있던 세 축 중 둘(`autonomy`·
+    `controlled_checkpoint`)이 R4 에서 강제로 바뀌었다. 지키는 성질은 그대로다 —
+    **게시는 여전히 P5 이며 네 축이 강제된다고 다섯째까지 번지지 않는다**(D-64).
     """
     project = harness.create_project()
     case = harness.create_case(project["id"])
     enforcement = harness.client.get(f"/api/cases/{case['id']}/policy").json()["enforcement"]
     assert enforcement["budget"]["state"] == "enforced"
-    assert enforcement["autonomy"]["state"] == "recorded_not_enforced"
+    assert enforcement["budget"]["enforced_by"] == "P3-R3"
+    assert enforcement["autonomy"]["state"] == "enforced"
     assert enforcement["autonomy"]["enforced_by"] == "P3-R4"
-    assert enforcement["controlled_checkpoint"]["state"] == "recorded_not_enforced"
-    assert enforcement["publish"]["state"] == "not_implemented"
+    assert enforcement["controlled_checkpoint"]["state"] == "enforced"
     assert enforcement["repository_selection"]["state"] == "enforced"
+    # **번지지 않은 축.** 예산도 Autonomy 도 게시 권한을 만들지 않는다.
+    assert enforcement["publish"]["state"] == "not_implemented"
+    assert enforcement["publish"]["enforced_by"] == "P5"
 
 
 def test_every_budget_metric_has_a_reservation_contract():

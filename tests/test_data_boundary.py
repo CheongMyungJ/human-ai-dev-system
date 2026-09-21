@@ -361,6 +361,9 @@ def test_success_criteria_and_acceptance_bodies_stay_on_the_runner(harness):
 
     project = harness.create_project()
     case = harness.create_case(project["id"])
+    # **P3-R4: 인수 문구가 있는 경로를 보려면 사람 인수 정책이어야 한다.** v0.7 의
+    # 기본은 자동 완료이고 그 경로에는 사람이 쓴 문구 자체가 없다(D-31).
+    assert harness.set_completion_mode(case["id"], "human_acceptance").status_code == 200
     harness.submit_intent_draft(
         case["id"],
         {
@@ -435,6 +438,10 @@ def test_the_result_view_carries_references_not_bodies(harness):
         "state",
         "created_at",
         "verdict",
+        # P3-R4. 둘 다 본문이 아니다 — **어떻게 충족했는가**(세 값 중 하나)와
+        # **그 판정이 이어진 것인가**(이전 기준의 id 참조)다.
+        "satisfaction",
+        "recheck_source",
         "evidence_kind",
         "evidence_run_id",
         "evidence_artifact_id",

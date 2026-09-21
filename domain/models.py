@@ -72,6 +72,12 @@ class DecisionKind(str, Enum):
     EXCEPTION_CLOSURE = "exception_closure"
     PUSH_APPROVAL = "push_approval"
     PUBLICATION_GRANT = "publication_grant"
+    #: P3-R4. 사람이 누적 변경 한 건을 확인했다(D-60).
+    #:
+    #: **의도 동의와 다른 기록이다.** 동의는 그 버전 전체에 대한 것이고 이쪽은
+    #: 변경 한 건에 대한 것이다. 합치면 한 번의 확인이 누적 전체의 승인이 되어
+    #: 누적을 세는 의미가 사라진다.
+    MATERIAL_DELTA_CONFIRMATION = "material_delta_confirmation"
 
 
 class RunStatus(str, Enum):
@@ -393,6 +399,17 @@ class RunPurpose(str, Enum):
     #: 구현과 **별도 목적**인 이유는 완료 판정이 다르기 때문이다 — 구현은 작업공간
     #: 변화가 있어야 완료이고, 검증은 실제로 실행된 명령이 있어야 완료다.
     VERIFICATION_RUN = "verification_run"
+    #: P3-R4. 허용된 로컬 재현·계측·테스트(D-66·FR-20).
+    #:
+    #: **쓰기를 받지만 기능 개발 pipeline 을 받지 않는다.** "임시 코드가 있다는
+    #: 이유만으로 기능 개발 전체 절차를 요구하지 않는다"가 D-66 이고, 그래서 설계·
+    #: 계획·작업 그래프를 요구하지 않는다. 대신 작업공간·대상 저장소·예산·쓰기
+    #: 직렬화는 **전부 지난다** — 사용자의 미커밋 변경을 보호하는 것은 실험이라고
+    #: 면제되지 않는다(FR-08·FR-26).
+    #:
+    #: 이 목적의 실행 효과는 `run.is_experiment` 로 표시되어 결과 후보에서 제품
+    #: 변경과 구별된다. "증거와 임시 변경을 구분한다"(D-66).
+    LOCAL_EXPERIMENT = "local_experiment"
 
 
 class AdmissionOutcome(str, Enum):
@@ -492,6 +509,31 @@ class AdmissionRefusal(str, Enum):
     # (autonomy-budget-policy 8절). 한도를 바꾸면 그 순간 다시 배정된다 —
     # `continue` 류의 예외 경로는 만들지 않는다(D-61).
     BUDGET_HARD_LIMIT_REACHED = "budget_hard_limit_reached"
+
+    # --- P3-R4 Autonomy·목적·누적 변경 ------------------------------------
+    #
+    # R1 이 기록만 하던 축이 여기서 실제 배정을 정한다. 넷의 뜻이 서로 다르므로
+    # 한 사유로 합치지 않는다 — 사람이 해야 할 일이 각각 다르다.
+    #
+    #   시작 확인이 없다        사람이 목표·범위·기준·허용 행동을 확인해야 한다
+    #   목적 밖이다             사람이 명시 결정으로 목적을 넓혀야 한다
+    #   미확인 변경이 있다      사람이 그 변경을 확인해야 한다
+    #   Fast Lane 을 벗어났다   **사람이 아니라 준비가 더 필요하다**
+    #
+    # 넷째가 특히 중요하다. Fast Lane 이탈은 사람 확인 요구가 아니라 "필요한 준비를
+    # 추가한 일반 자동 진행으로 전환"이다(autonomy-budget-policy 4절 마지막).
+    CONTROLLED_START_NOT_CONFIRMED = "controlled_start_not_confirmed"
+    PURPOSE_OUTSIDE_CASE_OBJECTIVE = "purpose_outside_case_objective"
+    MATERIAL_DELTA_UNCONFIRMED = "material_delta_unconfirmed"
+    FAST_LANE_LEFT_NEEDS_PREPARATION = "fast_lane_left_needs_preparation"
+    #: 결합 준비 기록(Fast Lane)의 상태. 설계·계획의 사유와 나누는 이유는 사람이
+    #: 만들어야 하는 것이 **다른 산출물**이기 때문이다.
+    COMBINED_RECORD_MISSING = "combined_record_missing"
+    COMBINED_RECORD_STALE = "combined_record_stale"
+    COMBINED_RECORD_INCOMPLETE_FOR_LEVEL = "combined_record_incomplete_for_level"
+    COMBINED_RECORD_REVIEW_MISSING = "combined_record_review_missing"
+    #: Profile 이 기록되지 않은 Case 의 로컬 실험. **유도해서 열지 않는다**(D-62).
+    PROFILE_NOT_RECORDED = "profile_not_recorded"
 
 
 class GateId(str, Enum):
@@ -646,6 +688,20 @@ class AcceptanceRefusal(str, Enum):
     AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION = "auto_policy_cannot_accept_exception"
     EXCEPTION_TARGET_NOT_FAILING = "exception_target_not_failing"
 
+    # --- P3-R4 controlled 확인 순서 ---------------------------------------
+    #
+    # D-65 의 순서(`초기 확인 → 작업·로컬 검증 → 변경 결과 확인 → 게시 → 완료`)에서
+    # **종료 직전의 두 선행 조건**이다. 셋으로 나누는 이유는 사람이 해야 할 일이
+    # 다르기 때문이다 — 확인을 하거나, 바뀐 후보를 다시 보거나, 시작을 확인한다.
+    #
+    # `STALE` 은 "같은 내용의 재전송"과 구별된다. 후보 해시가 같으면 이전 확인이
+    # 그대로 유효하며 재확인을 요구하지 않는다(D-65 마지막 문장).
+    CONTROLLED_RESULT_NOT_CONFIRMED = "controlled_result_not_confirmed"
+    CONTROLLED_CONFIRMATION_STALE = "controlled_confirmation_stale"
+    CONTROLLED_START_NOT_CONFIRMED = "controlled_start_not_confirmed"
+    #: 미확인 누적 변경이 남은 채로 종료하지 않는다(D-60).
+    MATERIAL_DELTA_UNCONFIRMED = "material_delta_unconfirmed"
+
 
 class CaseRelationKind(str, Enum):
     """Case 사이의 연결. 완료 후 수정은 재개가 아니라 연결된 새 Case 다(D-33)."""
@@ -728,17 +784,35 @@ class SizingState(str, Enum):
 
 
 class PreparationStage(str, Enum):
-    """준비 산출물의 단계. **두 단계는 각각 조회·검토된다**(intent-artifacts 2절)."""
+    """준비 산출물의 단계. **각 단계는 따로 조회·검토된다**(intent-artifacts 2절)."""
 
     DESIGN = "design"
     PLAN = "plan"
+    #: P3-R4. Fast Lane 의 결합 기록 — "별도 설계·계획 파일이나 실행 없이 요청·핵심
+    #: 변경 이유·작업·검증의 최소 논리 기록"(intent-artifacts 48행, D-60).
+    #:
+    #: **설계·계획을 없애는 값이 아니라 대체하는 선택지다.** Fast Lane 조건이
+    #: 깨지면 이 기록만으로는 통과하지 않는다. 그리고 필수 항목이 미정이면 거부된다 —
+    #: 기록을 줄이는 것이지 내용을 비우는 것이 아니다.
+    COMBINED = "combined"
+
+
+#: 준비 산출물이 대체할 수 있는 관계. 결합 기록은 설계·계획 **둘 다**를 대신한다.
+COMBINED_COVERS: frozenset[PreparationStage] = frozenset(
+    {PreparationStage.DESIGN, PreparationStage.PLAN}
+)
 
 
 class ReviewMode(str, Enum):
-    """단계별 검토 방식. **프로젝트 기본값은 두 단계 모두 사람 검토다**(D-14).
+    """단계별 검토 방식.
 
-    설정 행이 없는 상태는 `HUMAN_REVIEW` 다. 없음을 자동 진행으로 읽으면 기본값이
-    조용히 뒤집힌다.
+    **v0.6 의 기본값은 사람 검토였고 P3-R4 에서 Autonomy 에서 도출한다**(D-16·D-21·
+    D-65 "설계·계획의 사람 검토는 별도 선택 사항"). 도출은 `domain.progression`
+    한 곳에 있고, Case 명시 설정은 그대로 이긴다.
+
+    **기존 Case 에는 소급하지 않는다.** Autonomy 가 기록되지 않은 Case 는 v0.6
+    기본값(`HUMAN_REVIEW`)을 유지한다 — 사람이 검토하기로 하고 진행하던 업무가
+    조용히 통과하는 일을 만들지 않는다.
     """
 
     HUMAN_REVIEW = "human_review"
@@ -974,6 +1048,98 @@ class AutonomySource(str, Enum):
     SYSTEM_DEFAULT = "system_default"
     CASE_EXPLICIT = "case_explicit"
     MIGRATED_UNKNOWN = "migrated_unknown"
+
+
+class EffectiveAutonomySource(str, Enum):
+    """**적용된** Autonomy 가 어디서 왔는가(P3-R4).
+
+    `AutonomySource` 와 **다른 질문이다.** 저쪽은 "저장된 값의 출처"이고 이쪽은
+    "R4 가 실제로 적용한 값의 출처"다. 둘이 갈리는 경우가 하나 있다 —
+    `autonomy = NULL` 인 R1 이전 Case 다.
+
+    사용자 결정(2026-09-22)에 따라 그 Case 는 **controlled 로 취급한다.** 그러나
+    저장된 `autonomy` 는 여전히 `NULL`·`migrated_unknown` 이다. `controlled` 를
+    적어 넣으면 **있지도 않은 사람의 선택을 기록하는 일**이 된다(D-14·FR-23). 그래서
+    취급만 바꾸고 기록은 그대로 둔다.
+    """
+
+    RECORDED = "recorded"
+    MIGRATED_UNKNOWN_TREATED_AS_CONTROLLED = "migrated_unknown_treated_as_controlled"
+
+
+class ConformanceMethod(str, Enum):
+    """요청 정합성을 **어떤 방식으로** 확인했는가(D-25, intent-artifacts 9행).
+
+    `LIGHT`        제어부의 결정적 규칙 검사와 위험 조건 없음의 기록. 원문의 의미
+                   대응은 **확인하지 않았다** — 그 사실이 `unverified_scope` 에 값으로
+                   남는다
+    `INDEPENDENT`  작성과 별도 세션의 AI 의미 검토(D-28)
+
+    **둘을 같은 모양으로 적지 않는 것이 이 값의 존재 이유다.** 가벼운 확인을 독립
+    검토 완료로 표시하면 "미실행을 통과로 표시하지 않는다"(D-25)가 깨진다.
+    """
+
+    LIGHT = "light"
+    INDEPENDENT = "independent"
+
+
+class DeltaChangeClass(str, Enum):
+    """무엇이 바뀌었는가(D-60, autonomy-budget-policy.md 3절)."""
+
+    INTENT_FIELD = "intent_field"
+    SUCCESS_CRITERION = "success_criterion"
+    REPOSITORY_ALLOWANCE = "repository_allowance"
+
+
+class Materiality(str, Enum):
+    """그 변경이 **사람의 확인을 요구하는가.**
+
+    `MATERIAL`      동의된 내용이 AI 출처로 바뀌었거나 성공 기준이 삭제·완화됐다.
+                    그 기준에 의존하는 작업을 막는다
+    `USER_DIRECTED` 사용자의 답변·수정 요청에서 왔다. **위임 기준을 갱신**하고
+                    막지 않는다(D-60 "실제 답한 항목과 명시한 범위의 위임 기준만 갱신")
+    `DRAFT_WORK`    아직 동의되지 않은 항목의 변경. 초안 작업이며 막지 않는다
+
+    **제어부는 본문을 읽지 않는다.** 그래서 "문구만 정리"와 "의미 변경"을 스스로
+    구별할 수 없고, 동의된 항목의 AI 출처 변경을 **전부** `MATERIAL` 로 본다.
+    과다 차단이지만 방향이 안전한 쪽이고, 사용자 지시 경로가 정상 흐름을 연다.
+    AI 의 "의미가 같다"는 평가만으로는 풀리지 않는다(같은 절).
+    """
+
+    MATERIAL = "material"
+    USER_DIRECTED = "user_directed"
+    DRAFT_WORK = "draft_work"
+
+
+class DeltaState(str, Enum):
+    """누적 변경 한 건의 상태.
+
+    `PENDING` 이 쌓인다는 것이 "누적"의 구현이다. 하나씩 조용히 채택되면 작은 변경을
+    연속 채택해 원래 요청과 다른 결과로 이동하게 된다(D-60).
+    """
+
+    PENDING = "pending"
+    CONFIRMED = "confirmed"
+    ADOPTED = "adopted"
+    SUPERSEDED = "superseded"
+
+
+class Satisfaction(str, Enum):
+    """기준이 **어떻게** 충족됐는가(case-profiles.md 4절).
+
+    `CHANGED_AND_VERIFIED` 바꾸고 확인했다
+    `ALREADY_SATISFIED`    바꾸지 않았고 이미 목표 상태임을 **검증 실행이 관측**했다.
+                           코드 변경을 만들기 위해 불필요한 수정을 강제하지 않는다
+    `NOT_REPRODUCED`       재현하지 못했다. **`MET` 이 될 수 없다** — "미재현만으로
+                           버그 해결을 선언하지 않는다"
+
+    셋째가 이 값의 존재 이유다. 화면 문구로만 구별하면 API 직접 호출로 우회되므로
+    **쓰기 경로에서** 막는다.
+    """
+
+    CHANGED_AND_VERIFIED = "changed_and_verified"
+    ALREADY_SATISFIED = "already_satisfied"
+    NOT_REPRODUCED = "not_reproduced"
 
 
 class PolicyState(str, Enum):

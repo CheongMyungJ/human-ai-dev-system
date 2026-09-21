@@ -70,6 +70,20 @@ SECTION_ORDER: dict[PreparationStage, tuple[str, ...]] = {
         "failure_response",
         "open_questions",
     ),
+    # P3-R4. Fast Lane 의 결합 기록 — "요청·핵심 변경 이유·작업·검증의 최소 논리
+    # 기록"(intent-artifacts 48행). 설계에서 둘, 계획에서 둘을 가져온 **합집합의
+    # 부분집합**이며 새 항목을 만들지 않는다.
+    #
+    # 새 이름을 만들지 않는 이유는 결합 기록이 두 산출물의 자리를 대신하기 때문이다.
+    # 항목 이름이 다르면 "무엇을 적었는가"를 설계·계획과 대조할 수 없고, 나중에
+    # Fast Lane 을 벗어나 일반 진행으로 전환할 때 옮겨 적을 대상이 사라진다.
+    PreparationStage.COMBINED: (
+        "change_summary",
+        "verifiability",
+        "tasks",
+        "verification",
+        "open_questions",
+    ),
 }
 
 #: 수준별 필수 항목. plan/P3-PLAN-01.md "수준별 필수 항목" 표와 같아야 한다.
@@ -123,6 +137,22 @@ REQUIRED_SECTIONS: dict[PreparationStage, dict[WorkLevel, frozenset[str]]] = {
                 "experiments",
                 "failure_response",
             }
+        ),
+    },
+    # P3-R4. **간소 수준에서만 쓰인다.** Fast Lane 조건 자체가 간소를 요구하므로
+    # (`domain.progression.assess_fast_lane`) 표준·심층 항목은 도달할 수 없는 분기가
+    # 된다. 그래도 세 수준을 모두 적어 두는 이유는, 수준이 올라간 Case 가 결합
+    # 기록을 들고 있을 때 `missing_required_sections` 가 **무엇이 모자란지** 말할 수
+    # 있어야 하기 때문이다 — 그 답이 "설계·계획으로 전환하라"가 된다.
+    PreparationStage.COMBINED: {
+        WorkLevel.SIMPLE: frozenset(
+            {"change_summary", "verifiability", "tasks", "verification"}
+        ),
+        WorkLevel.STANDARD: frozenset(
+            {"change_summary", "verifiability", "tasks", "verification"}
+        ),
+        WorkLevel.DEEP: frozenset(
+            {"change_summary", "verifiability", "tasks", "verification"}
         ),
     },
 }
@@ -295,7 +325,11 @@ def compose(
         # 계획이 "무엇을 어떤 순서로"를 답한다(intent-artifacts 1절). 설계에도
         # 받아 두면 두 산출물의 역할이 섞이고 그래프의 출처가 둘이 된다.
         "tasks": (
-            _compose_tasks(tasks or []) if stage is PreparationStage.PLAN else []
+            _compose_tasks(tasks or [])
+            # **결합 기록도 계획 쪽이다**(P3-R4). Fast Lane 에서 그 기록이 계획의
+            # 자리를 대신하므로 Task 를 담는 것도 그쪽이다.
+            if stage in (PreparationStage.PLAN, PreparationStage.COMBINED)
+            else []
         ),
     }
 

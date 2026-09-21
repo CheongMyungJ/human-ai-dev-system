@@ -29,9 +29,22 @@ def _refusals(response) -> set[str]:
 
 @pytest.fixture
 def agreed_case(harness):
-    """초안 → QG-01 검토 → 열람 → 동의까지 마친 Case."""
+    """초안 → QG-01 검토 → 열람 → 동의까지 마친 Case. **완료는 사람 인수로 고정한다.**
+
+    **P3-R4에서 고정이 필요해졌다.** v0.6 의 기본 완료 정책은 사람 최종 확인이었고
+    이 파일의 시험들은 그 기본값 위에서 사람 인수 경로를 확인한다. v0.7 의 기본은
+    반대다 — ask-on-decision 은 조건을 충족하면 자동 완료한다(D-31).
+
+    기본값이 바뀌었다고 사람 인수 경로의 시험을 지우지 않는다. 그 경로는 여전히
+    controlled 와 명시 설정에서 쓰이며 계약도 그대로다. 대신 **무엇을 시험하는지
+    명시한다** — 기본값에 기대는 대신 정책을 직접 고정한다.
+
+    v0.7 의 새 기본값(자동 완료) 자체는 아래 `test_the_default_policy_now_completes_*`
+    가 따로 확인한다.
+    """
     project = harness.create_project()
     case = harness.create_case(project["id"])
+    assert harness.set_completion_mode(case["id"], "human_acceptance").status_code == 200
     harness.submit_intent_draft(case["id"], GOOD_FIELDS)
     intent = harness.latest_intent(case["id"])
     assert harness.ai_gate_review(case["id"], intent).status_code == 201
@@ -266,7 +279,40 @@ def test_both_modes_agree_on_the_criteria_even_though_one_waits_for_a_person(
 
 
 def test_auto_mode_does_not_accept_its_own_exceptions(harness, agreed_case):
-    """AC-8: 자동 모드는 미충족·미검증을 **스스로 수용하지 않는다.**"""
+    """AC-8: 자동 모드는 미충족·미검증을 **스스로 수용하지 않는다.**
+
+    **P3-R4에서 범위가 좁아졌다.** 이 시험은 원래 자동 모드에서 **사람의** 예외
+    수용까지 거부되는 것을 함께 고정했다. v0.7 에서 자동이 기본이 되면 그 규칙은
+    "기본 Case 에서는 사람이 예외를 수용할 수 없다"가 되어 D-32 와 어긋난다.
+
+    막아야 하는 것은 **자동 정책이 스스로 수용하는 것** 하나이며 여기서는 그것만
+    확인한다. 사람 경로가 열려 있다는 사실은 짝이 되는
+    `test_a_person_can_still_accept_an_exception_under_the_auto_policy` 가 확인한다.
+    """
+    case, _intent = agreed_case
+    criteria = harness.criteria(case["id"])
+    harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
+    harness.record_result(
+        case["id"], criteria[1]["id"], "not_met", evidence_kind="human_judgement"
+    )
+    harness.build_candidate(case["id"])
+    assert harness.set_completion_mode(case["id"], "auto_on_conditions").status_code == 200
+
+    auto = harness.client.post(f"/api/cases/{case['id']}/auto-complete").json()
+    assert auto["applied"] is False
+    assert "unresolved_criteria" in auto["refusals"]
+    # 자동 정책이 예외를 수용해 닫는 경로도 없다.
+    assert auto["closure"] is None
+
+
+def test_a_person_can_still_accept_an_exception_under_the_auto_policy(harness, agreed_case):
+    """P3-R4: 자동 완료 정책이어도 **사람은** 예외를 수용할 수 있다(D-32).
+
+    "어느 Autonomy 에서도 미충족·미검증을 AI 가 예외 수용하지 않는다. 예외가
+    필요하면 대상과 영향을 제시하여 **사람의 명시적인 결정**을 받는다"
+    (completion-lifecycle 3절). 정책이 자동이라는 사실이 사람의 결정 경로를 닫지
+    않는다 — 원래 판정도 그대로 남는다.
+    """
     case, _intent = agreed_case
     criteria = harness.criteria(case["id"])
     harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
@@ -276,14 +322,11 @@ def test_auto_mode_does_not_accept_its_own_exceptions(harness, agreed_case):
     candidate = harness.build_candidate(case["id"])
     assert harness.set_completion_mode(case["id"], "auto_on_conditions").status_code == 200
 
-    # 정책 경로로도 예외 경로로도 스스로 수용하지 않는다.
-    auto = harness.client.post(f"/api/cases/{case['id']}/auto-complete").json()
-    assert auto["applied"] is False
-    assert "unresolved_criteria" in auto["refusals"]
-
-    attempted = harness.accept_exception(case["id"], candidate["id"], criteria[1]["id"])
-    assert attempted.status_code == 409
-    assert "auto_policy_cannot_accept_exception" in attempted.json()["detail"]
+    accepted = harness.accept_exception(case["id"], candidate["id"], criteria[1]["id"])
+    assert accepted.status_code == 201, accepted.text
+    assert accepted.json()["original_verdict"] == "not_met"
+    # **원래 판정은 바뀌지 않는다.**
+    assert harness.criteria(case["id"])[1]["verdict"] == "not_met"
 
 
 def test_a_human_acceptance_policy_never_auto_completes(harness, agreed_case):

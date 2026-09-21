@@ -1,0 +1,402 @@
+{
+  "case_id": "case-ba409356bf38f5b1",
+  "revision": 2,
+  "autonomy": "controlled",
+  "autonomy_source": "case_explicit",
+  "autonomy_recorded": true,
+  "policy_version": "0.7",
+  "default_autonomy": "ask_on_decision",
+  "work_depth": null,
+  "work_depth_source": "sizing_assessment",
+  "completion_mode": "human_acceptance",
+  "completion_mode_source": "autonomy_derived",
+  "effective_autonomy": "controlled",
+  "effective_source": "recorded",
+  "is_treatment": false,
+  "fast_lane": {
+    "eligible": false,
+    "blockers": [
+      {
+        "reason": "level_not_simple",
+        "detail": "효과 수준이 간소가 아니다"
+      }
+    ]
+  },
+  "conformance": {
+    "intent_version_id": null,
+    "method": null,
+    "verdict": "not_applicable",
+    "unverified_scope": null,
+    "checks": [],
+    "required_method": "independent",
+    "independent_review_required": true,
+    "reasons": [
+      {
+        "reason": "level_above_simple",
+        "detail": "효과 수준이 간소를 넘어선다"
+      }
+    ]
+  },
+  "material_delta": {
+    "basis": null,
+    "pending": [],
+    "all": [],
+    "blocked_task_keys": [],
+    "blocks_all_tasks": false,
+    "detail": "비교 대상은 마지막 유효 위임 기준이다. AI 초안이 아니다(D-60). AI 의 의미 평가만으로는 해소되지 않는다"
+  },
+  "profile": {
+    "profile": "feature",
+    "version": "1",
+    "source": "explicit",
+    "definition": {
+      "profile": "feature",
+      "version": "1",
+      "purpose": "새 기능·동작을 만든다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "need",
+          "label": "해결할 필요·문제"
+        },
+        {
+          "field": "usage_context",
+          "label": "대상 사용자 또는 사용 상황"
+        },
+        {
+          "field": "desired_behavior",
+          "label": "원하는 동작·결과"
+        },
+        {
+          "field": "acceptance_cases",
+          "label": "주요 수용 사례"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "need",
+        "usage_context",
+        "desired_behavior",
+        "acceptance_cases"
+      ],
+      "minimum_evidence": "합의한 사용자 동작·결과와 실제 확인의 연결",
+      "conditional_evidence": "영향받는 회귀·권한·성능·다중 Repo 통합",
+      "completion_meaning": "합의한 기능·수용 기준을 충족한다",
+      "not_fixed_in_draft": "구현 구조·세부 알고리즘. UI 가 없는 기능에 화면 설계를 요구하지 않는다"
+    },
+    "required_fields": [
+      "goal",
+      "expected_outcome",
+      "scope",
+      "exclusions",
+      "constraints",
+      "open_questions",
+      "need",
+      "usage_context",
+      "desired_behavior",
+      "acceptance_cases"
+    ],
+    "kind": "feature",
+    "detail": null
+  },
+  "checkpoints": [
+    {
+      "id": "chk-018b666870ec89fc",
+      "case_id": "case-ba409356bf38f5b1",
+      "policy_id": "pol-0a385aa8ce10fba8",
+      "checkpoint": "start_scope",
+      "state": "confirmed",
+      "subject_type": "case",
+      "subject_id": "case-ba409356bf38f5b1",
+      "subject_hash": null,
+      "decision_id": null,
+      "confirmed_by": "owner",
+      "confirmed_at": "2026-09-21T21:29:23.032788+00:00",
+      "note_summary": "목표·범위·허용 행동을 확인했다",
+      "created_at": "2026-09-21T21:29:20.776108+00:00",
+      "superseded_at": null
+    },
+    {
+      "id": "chk-a660042f25a65afd",
+      "case_id": "case-ba409356bf38f5b1",
+      "policy_id": "pol-0a385aa8ce10fba8",
+      "checkpoint": "result_candidate",
+      "state": "required",
+      "subject_type": null,
+      "subject_id": null,
+      "subject_hash": null,
+      "decision_id": null,
+      "confirmed_by": null,
+      "confirmed_at": null,
+      "note_summary": null,
+      "created_at": "2026-09-21T21:29:20.776108+00:00",
+      "superseded_at": null
+    }
+  ],
+  "budget": {
+    "unlimited": true,
+    "limits": [],
+    "history": [],
+    "usage": {
+      "run_count": {
+        "metric": "run_count",
+        "unit": "runs",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "exact_per_run",
+        "measurement": "exact",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "review_run_count": {
+        "metric": "review_run_count",
+        "unit": "runs",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "exact_per_run",
+        "measurement": "exact",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "input_tokens": {
+        "metric": "input_tokens",
+        "unit": "tokens",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "post_hoc_reported",
+        "measurement": "estimated",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "output_tokens": {
+        "metric": "output_tokens",
+        "unit": "tokens",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "post_hoc_reported",
+        "measurement": "estimated",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "context_bytes": {
+        "metric": "context_bytes",
+        "unit": "bytes",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "exact_per_run",
+        "measurement": "exact",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "execution_seconds": {
+        "metric": "execution_seconds",
+        "unit": "seconds",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "open_ended_per_run",
+        "measurement": "exact",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      },
+      "elapsed_seconds": {
+        "metric": "elapsed_seconds",
+        "unit": "seconds",
+        "settled": 115.162295,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 115.162295,
+        "reservation": "case_clock",
+        "measurement": "exact",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true,
+        "source": "case_created_at"
+      },
+      "estimated_cost": {
+        "metric": "estimated_cost",
+        "unit": "currency_units",
+        "settled": 0.0,
+        "held": 0.0,
+        "unresolved": 0.0,
+        "exposure": 0.0,
+        "reservation": "post_hoc_reported",
+        "measurement": "estimated",
+        "runs_counted": 0,
+        "runs_unknown": 0,
+        "runs_in_flight": 0,
+        "complete": true
+      }
+    },
+    "usage_detail": "`exposure = settled + held + unresolved` 가 한도 판정값이다. 모르는 값을 0 으로 채우지 않으며 `complete = false` 로 드러낸다",
+    "by_role": {},
+    "by_purpose": {},
+    "warnings": [],
+    "stop": {
+      "stopped": false,
+      "metrics": [],
+      "detail": "설정된 hard 한도가 없다. 기본 무제한이다(D-56)",
+      "resume": null
+    },
+    "reservations": [],
+    "measurement_contract": {
+      "run_count": "exact",
+      "review_run_count": "exact",
+      "input_tokens": "estimated",
+      "output_tokens": "estimated",
+      "context_bytes": "exact",
+      "execution_seconds": "exact",
+      "elapsed_seconds": "exact",
+      "estimated_cost": "estimated"
+    },
+    "reservation_contract": {
+      "run_count": {
+        "measurement": "exact",
+        "reservation": "exact_per_run",
+        "hard_guarantee": "absolute",
+        "reason": "시스템이 시작한 호출을 센다. 배정 전에 정확히 1 이다"
+      },
+      "review_run_count": {
+        "measurement": "exact",
+        "reservation": "exact_per_run",
+        "hard_guarantee": "absolute",
+        "reason": "검토 역할의 실행만 센다. 전체 실행 수에서 중복 차감하지 않는다"
+      },
+      "input_tokens": {
+        "measurement": "estimated",
+        "reservation": "post_hoc_reported",
+        "hard_guarantee": "not_enforceable",
+        "reason": "어댑터가 주면 알고 주지 않으면 모른다. 미제공을 0 으로 적지 않는다"
+      },
+      "output_tokens": {
+        "measurement": "estimated",
+        "reservation": "post_hoc_reported",
+        "hard_guarantee": "not_enforceable",
+        "reason": "같음"
+      },
+      "context_bytes": {
+        "measurement": "exact",
+        "reservation": "exact_per_run",
+        "hard_guarantee": "absolute",
+        "reason": "제어부가 만들어 전달한 입력 패키지의 크기다. CLI 가 내부에서 더 읽은 자료는 관측 범위 밖이다"
+      },
+      "execution_seconds": {
+        "measurement": "exact",
+        "reservation": "open_ended_per_run",
+        "hard_guarantee": "no_absolute_cap",
+        "reason": "끝나야 실제 시간을 안다. 진행 중에는 지금까지의 노출만 보이고, 돌고 있는 실행을 초 단위로 끊을 수 없다(P1-03)"
+      },
+      "elapsed_seconds": {
+        "measurement": "exact",
+        "reservation": "case_clock",
+        "hard_guarantee": "no_absolute_cap",
+        "reason": "Case 시작부터의 벽시계다. 배정을 멈춰도 줄지 않는다"
+      },
+      "estimated_cost": {
+        "measurement": "estimated",
+        "reservation": "post_hoc_reported",
+        "hard_guarantee": "not_enforceable",
+        "reason": "가격·모델·측정 범위에 따른 추정이며 실제 청구액의 상한이 아니다"
+      }
+    },
+    "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며 아직 모델이 없다(P4-01). 이 집계를 repair 횟수로 쓰지 않는다",
+    "enforcement": {
+      "state": "enforced",
+      "enforced_by": "P3-R3",
+      "detail": "예약·누적·정산이 동작하고 hard 도달은 그 한도를 소비하는 새 실행·재배정을 막는다. 보장 범위는 지표마다 다르다 — 실행 수·검토 수·컨텍스트 크기는 절대 상한이고, 시간 지표는 새 배정만 막으며 진행 중 실행의 초과 노출이 있을 수 있다. 토큰·비용의 hard 한도는 여전히 설정을 받지 않는다"
+    }
+  },
+  "delegation_basis": {
+    "current": null,
+    "history": [],
+    "detail": "AI 초안은 근거가 아니다. 누적 material delta 판단은 P3-R4 다"
+  },
+  "repositories": {
+    "case_id": "case-ba409356bf38f5b1",
+    "selected": [],
+    "excluded": [],
+    "implicit_single_repository": {
+      "repository_id": "repo-b6c7a3ec0f0d0063",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r4-live\\workrepo",
+      "detail": "선택이 기록되지 않았다. 이 Case 는 Project 의 단일 저장소에서 동작하며 그것은 이행된 가정이지 기록된 선택이 아니다"
+    },
+    "journal_repository_id": null,
+    "write_allowance_implies_publish": false,
+    "enforcement": {
+      "selection": {
+        "state": "enforced",
+        "enforced_by": "P3-R2",
+        "detail": "선택·쓰기 허용이 Case×Repo 작업공간을 정한다. 미선택·명시 제외·쓰기 미허용·기록 저장소는 작업공간이 만들어지지 않는다. 허용 내 자동 추가는 기록되고 허용 밖은 사람 확인으로 되돌린다"
+      },
+      "publish": {
+        "state": "not_implemented",
+        "enforced_by": "P5",
+        "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+      }
+    }
+  },
+  "enforcement": {
+    "autonomy": {
+      "state": "enforced",
+      "enforced_by": "P3-R4",
+      "detail": "controlled 는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않는다. ask-on-decision 은 명확한 요청을 그 범위의 실행 위임으로 인정해 추가 승인 없이 진행하고 조건 충족 시 자동 완료한다. 단계 검토 기본값도 여기서 도출된다. 기록되지 않은 Autonomy(R1 이전)는 controlled 로 **취급**하되 값은 여전히 미기록이다"
+    },
+    "controlled_checkpoint": {
+      "state": "enforced",
+      "enforced_by": "P3-R4",
+      "detail": "시작 확인은 작업 실행을, 결과 후보 확인은 종료를 막는다. 확인한 후보의 내용이 바뀌면 이전 확인을 새 후보에 쓰지 않으며, 같은 내용의 재전송에는 재확인을 요구하지 않는다. 확인이 push·게시 권한을 만들지는 않는다 — 실제 게시는 P5 다"
+    },
+    "budget": {
+      "state": "enforced",
+      "enforced_by": "P3-R3",
+      "detail": "예약·누적·정산이 동작하고 hard 도달은 그 한도를 소비하는 새 실행·재배정을 막는다. 보장 범위는 지표마다 다르다 — 실행 수·검토 수·컨텍스트 크기는 절대 상한이고, 시간 지표는 새 배정만 막으며 진행 중 실행의 초과 노출이 있을 수 있다. 토큰·비용의 hard 한도는 여전히 설정을 받지 않는다"
+    },
+    "repository_selection": {
+      "state": "enforced",
+      "enforced_by": "P3-R2",
+      "detail": "선택·쓰기 허용이 Case×Repo 작업공간을 정한다. 미선택·명시 제외·쓰기 미허용·기록 저장소는 작업공간이 만들어지지 않는다. 허용 내 자동 추가는 기록되고 허용 밖은 사람 확인으로 되돌린다"
+    },
+    "publish": {
+      "state": "not_implemented",
+      "enforced_by": "P5",
+      "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+    }
+  },
+  "case_status": "received"
+}

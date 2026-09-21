@@ -17,6 +17,19 @@
 //
 //   **선택·쓰기 허용·게시 허용을 따로 보인다.** 쓰기 허용이 게시 허용으로 보이면
 //   D-64가 화면에서 깨진다.
+//
+// P3-R4가 더한 것 셋. 전부 **같은 규칙의 다른 얼굴**이다 — 방식과 결과를 구별한다.
+//
+//   **가벼운 확인과 독립 의미 검토를 같은 `통과` 로 보이지 않는다.** 방식과 보지
+//   않은 범위를 함께 적는다. 합치면 "미실행을 통과로 표시하지 않는다"(D-25)가
+//   화면에서 깨진다.
+//
+//   **도출된 값과 사람이 정한 값을 구별한다.** 완료 모드와 유효 Autonomy 는
+//   Autonomy 에서 도출될 수 있고, 그 사실이 보이지 않으면 고르지 않은 자동 완료가
+//   사용자의 설정처럼 읽힌다.
+//
+//   **누적 변경이 무엇을 막는지 보인다.** 사람이 확인해야 할 것과 이미 위임된 것을
+//   같은 목록에 섞지 않는다(D-60).
 
 import { useState } from 'react'
 
@@ -25,7 +38,11 @@ import {
   AUTONOMY_LABEL,
   AUTONOMY_SOURCE_LABEL,
   CHECKPOINT_LABEL,
+  COMPLETION_SOURCE_LABEL,
+  CONFORMANCE_METHOD_LABEL,
+  MATERIALITY_LABEL,
   policyApi,
+  progressionApi,
   type Autonomy,
   type CaseDetail,
   type CasePolicy,
@@ -182,6 +199,22 @@ export function PolicyPanel(props: {
             값은 아니다.</strong>
           </p>
         )}
+        {/* **적용되는 값과 기록된 값을 구별한다**(P3-R4). 미기록 Case 는
+            controlled 로 취급되지만 그 값이 기록된 것은 아니다. */}
+        {policy.is_treatment && (
+          <p className="muted small">
+            지금 적용되는 확인 경계는{' '}
+            <strong>{AUTONOMY_LABEL[policy.effective_autonomy]}</strong> 이다 —
+            Autonomy 가 기록되지 않아 <strong>이행 정책으로 그렇게 취급</strong>하고
+            있으며, 사람이 고른 설정이 아니다. 값을 기록하면 그때부터 그 설정을
+            따른다.
+          </p>
+        )}
+        <p className="muted small">
+          완료: <strong>{policy.completion_mode}</strong> ·{' '}
+          {COMPLETION_SOURCE_LABEL[policy.completion_mode_source] ??
+            policy.completion_mode_source}
+        </p>
         <div className="row">
           <input
             placeholder="바꾸는 이유 (짧은 요약)"
@@ -211,6 +244,106 @@ export function PolicyPanel(props: {
         </div>
       </div>
 
+      {/* --- 요청 정합성 확인 방식 (P3-R4) --------------------------- */}
+      <div className="task">
+        <div className="task-head">
+          <strong>요청 정합성 확인</strong>
+          {policy.conformance.method ? (
+            <span className="tag ok">
+              {policy.conformance.verdict === 'pass' ? '통과' : policy.conformance.verdict}
+            </span>
+          ) : (
+            // **아직 하지 않은 것을 통과로 칠하지 않는다.**
+            <span className="tag">아직 확인하지 않음</span>
+          )}
+        </div>
+        {/* **방식을 반드시 함께 적는다.** 두 방식이 같은 `통과` 로 보이면
+            "미실행을 통과로 표시하지 않는다"(D-25)가 화면에서 깨진다. */}
+        {policy.conformance.method && (
+          <p className="small">
+            방식:{' '}
+            <strong>
+              {CONFORMANCE_METHOD_LABEL[policy.conformance.method] ??
+                policy.conformance.method}
+            </strong>
+          </p>
+        )}
+        {policy.conformance.unverified_scope && (
+          <p className="muted small">
+            확인하지 않은 범위: {policy.conformance.unverified_scope}
+          </p>
+        )}
+        <p className="muted small">
+          이 업무가 요구하는 방식:{' '}
+          {CONFORMANCE_METHOD_LABEL[policy.conformance.required_method] ??
+            policy.conformance.required_method}
+          {policy.conformance.reasons.length > 0 && (
+            <> — {policy.conformance.reasons.map((r) => r.detail).join(', ')}</>
+          )}
+        </p>
+        {/* Fast Lane 여부와 그렇지 않은 이유. **이탈은 사람 확인 요구가 아니라
+            준비 추가다**(autonomy-budget-policy 4절). */}
+        <p className="muted small">
+          Fast Lane:{' '}
+          {policy.fast_lane.eligible ? (
+            <strong>적용 (결합 기록 하나로 진행)</strong>
+          ) : (
+            <>
+              <strong>해당 없음</strong> — 설계·개발계획을 갖춘 일반 진행으로
+              전환한다 ({policy.fast_lane.blockers.map((b) => b.detail).join(', ')})
+            </>
+          )}
+        </p>
+      </div>
+
+      {/* --- 누적 변경 (P3-R4) --------------------------------------- */}
+      {policy.material_delta.all.length > 0 && (
+        <div className="task">
+          <div className="task-head">
+            <strong>마지막 위임 기준 대비 변경</strong>
+            {policy.material_delta.pending.length > 0 ? (
+              <span className="tag">{policy.material_delta.pending.length}건 확인 필요</span>
+            ) : (
+              <span className="tag ok">확인할 변경 없음</span>
+            )}
+          </div>
+          <ul className="list">
+            {policy.material_delta.all.map((row) => (
+              <li key={row.id} className="small">
+                {row.target_key} ·{' '}
+                <span className={`tag ${row.state === 'pending' ? '' : 'ok'}`}>
+                  {MATERIALITY_LABEL[row.materiality] ?? row.materiality}
+                </span>{' '}
+                <span className="muted">{row.detail}</span>
+                {/* **AI 의 평가는 근거가 아니다.** 보이되 해소로 읽히지 않게
+                    따로 적는다(D-60). */}
+                {row.ai_assessment && (
+                  <span className="muted"> · AI 평가(근거 아님): {row.ai_assessment}</span>
+                )}
+                {row.state === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      guard(async () => {
+                        await progressionApi.confirmDelta(policy.case_id, row.id)
+                      })
+                    }
+                  >
+                    이 변경을 확인
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+          {policy.material_delta.blocks_all_tasks && (
+            <p className="muted small">
+              어떤 작업을 막는지 연결되지 않은 변경이 있어 <strong>전부 막는다.</strong>
+            </p>
+          )}
+          <p className="muted small">{policy.material_delta.detail}</p>
+        </div>
+      )}
+
       {/* --- controlled 확인 지점 ------------------------------------ */}
       {policy.checkpoints.length > 0 && (
         <div className="task">
@@ -220,7 +353,8 @@ export function PolicyPanel(props: {
           </div>
           <ul className="list">
             {policy.checkpoints.map((point) => (
-              <li key={point.id} className="small">
+              // 취급으로 도출된 요구는 아직 행이 없어 `id` 가 없다(P3-R4).
+              <li key={point.id ?? `${point.checkpoint}:${point.state}`} className="small">
                 {CHECKPOINT_LABEL[point.checkpoint] ?? point.checkpoint} ·{' '}
                 <span className={`tag ${point.state === 'confirmed' ? 'ok' : ''}`}>
                   {point.state}
@@ -243,6 +377,9 @@ export function PolicyPanel(props: {
                             ? policy.case_id
                             : props.detail.result?.candidate?.id ?? policy.case_id,
                           reason,
+                          point.checkpoint === 'start_scope'
+                            ? null
+                            : props.detail.result?.candidate?.snapshot_hash ?? null,
                         )
                       })
                     }
@@ -254,9 +391,16 @@ export function PolicyPanel(props: {
             ))}
           </ul>
           <p className="muted small">
-            이 확인은 <strong>push·게시 권한이나 최종 인수를 만들지 않는다</strong>(D-65).
-            각각 별도 기록이다.
+            이 확인은 <strong>push·게시 권한을 만들지 않는다</strong>(D-65).
+            각각 별도 기록이다. 결과 후보 확인 뒤에는 남은 조건이 갖춰지면 시스템이
+            종료를 확정한다 — 같은 내용을 두 번 확인시키지 않는다.
           </p>
+          {policy.is_treatment && (
+            <p className="muted small">
+              이 요구는 <strong>사람이 고른 설정이 아니다.</strong> Autonomy 가
+              기록되지 않아 이행 정책으로 controlled 로 취급하고 있다.
+            </p>
+          )}
         </div>
       )}
 

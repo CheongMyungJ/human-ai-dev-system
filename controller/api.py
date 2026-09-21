@@ -29,6 +29,7 @@ from controller.repository import (
 from domain import ids, intent_doc
 from domain import profiles as case_profiles
 from domain.models import (
+    Satisfaction,
     AcceptanceMode,
     AcceptanceRefusal,
     AgreementRefusal,
@@ -1398,6 +1399,9 @@ class CriterionResultIn(BaseModel):
     #: **이 근거가 나온 코드 조합**(P3-R2). 움직이는 브랜치 이름이 아니라 고정된
     #: 조합으로 대상을 묶어야 나중에 그 근거가 아직 유효한지 답할 수 있다.
     composition_id: str | None = None
+    #: **어떻게 충족했는가**(P3-R4). `not_reproduced` 는 `met` 이 될 수 없고,
+    #: `already_satisfied` 는 검증 실행의 증거를 요구한다(case-profiles 4절).
+    satisfaction: Satisfaction | None = None
 
 
 class CompletionPolicyIn(BaseModel):
@@ -1480,6 +1484,7 @@ def record_criterion_result(
             evidence_artifact_id=payload.evidence_artifact_id,
             evidence_artifact_rev=payload.evidence_artifact_rev,
             composition_id=payload.composition_id,
+            satisfaction=payload.satisfaction,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2394,6 +2399,117 @@ def supersede_checkpoint(
             case_id, checkpoint, payload.reason_summary
         )
     except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+# ===================================================== P3-R4 자동 진행·정합성
+
+
+class LightConformanceIn(BaseModel):
+    intent_version_id: str = Field(min_length=1, max_length=100)
+
+
+class DeltaAssessmentIn(BaseModel):
+    assessment: str = Field(min_length=1, max_length=200)
+
+
+class DeltaConfirmIn(BaseModel):
+    actor: str = Field(min_length=1, max_length=100)
+    explicit: bool = False
+    note_summary: str | None = Field(default=None, max_length=200)
+
+
+@router.get("/api/cases/{case_id}/conformance")
+def get_conformance(request: Request, case_id: str) -> dict[str, Any]:
+    """요청 정합성 확인의 **방식과 남은 불확실성**(D-25).
+
+    가벼운 확인과 독립 의미 검토를 같은 `pass` 로 보이지 않게 하는 조회다.
+    `method` 가 무엇을 실제로 했는지이고 `unverified_scope` 가 보지 않은 것이다.
+    """
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).conformance_state(case_id)
+
+
+@router.post("/api/cases/{case_id}/conformance-checks/light", status_code=201)
+def record_light_conformance(
+    request: Request, case_id: str, payload: LightConformanceIn
+) -> dict[str, Any]:
+    """가벼운 요청 정합성 확인을 기록한다.
+
+    **독립 검토 완료로 표시되지 않는다.** 규칙이 독립 검토를 요구하면 이 기록이
+    있어도 게이트는 통과하지 않으며, 응답의 `required_method` 가 그 사실을 말한다.
+    """
+    repo = _repo(request)
+    try:
+        intent = repo.get_intent_version(payload.intent_version_id)
+        if intent["case_id"] != case_id:
+            raise ConflictError("intent version belongs to another case")
+        return repo.record_light_conformance_check(payload.intent_version_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+class ConformancePolicyIn(BaseModel):
+    required: bool
+    set_by: str = Field(min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+@router.put("/api/cases/{case_id}/conformance-policy")
+def set_conformance_policy(
+    request: Request, case_id: str, payload: ConformancePolicyIn
+) -> dict[str, Any]:
+    """이 Case 에 독립 의미 검토를 요구한다(D-25).
+
+    **올리는 방향으로만 작용한다.** 끄더라도 수준·근거 부족·미확인 변경이 독립
+    검토를 요구하면 그대로 요구된다 — 응답의 `required_method` 가 그 사실을 말한다.
+    """
+    try:
+        return _repo(request).require_independent_review(
+            case_id, payload.required, payload.set_by, payload.reason
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/material-deltas")
+def get_material_deltas(request: Request, case_id: str) -> dict[str, Any]:
+    """마지막 유효 위임 기준 대비 **누적 변경**과 그것이 막는 작업(D-60)."""
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).material_delta_state(case_id)
+
+
+@router.post("/api/cases/{case_id}/material-deltas/{delta_id}/assessment")
+def assess_material_delta(
+    request: Request, case_id: str, delta_id: str, payload: DeltaAssessmentIn
+) -> dict[str, Any]:
+    """AI 의 의미 평가를 기록한다. **상태는 바뀌지 않는다.**
+
+    "'의미가 같음'이라는 주장만으로 새 의미를 승인하지 않는다"(D-60). 이 경로에
+    해소 분기가 없는 것이 계약이다.
+    """
+    try:
+        return _repo(request).record_delta_assessment(delta_id, payload.assessment)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/material-deltas/{delta_id}/confirmation", status_code=201)
+def confirm_material_delta(
+    request: Request, case_id: str, delta_id: str, payload: DeltaConfirmIn
+) -> dict[str, Any]:
+    """사람이 그 변경 한 건을 확인한다. 남은 변경은 그대로 남는다."""
+    try:
+        return _repo(request).confirm_material_delta(
+            delta_id, payload.actor, payload.explicit, payload.note_summary
+        )
+    except (NotFoundError, ConflictError, PolicyRefused) as exc:
         raise _handle(exc)
 
 

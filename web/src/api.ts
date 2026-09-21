@@ -689,6 +689,17 @@ export interface SuccessCriterion {
   result_summary: string
   recorded_by: string
   recorded_at: string
+  // **어떻게 충족했는가**(P3-R4). `null` 은 R4 이전 기록이며 "바꾸고 확인했다"가
+  // 아니라 그때는 묻지 않았다는 뜻이다.
+  satisfaction: string | null
+  // 이 판정이 이전 버전에서 이어진 것인가. `carried_from:<id>` 다.
+  recheck_source: string | null
+}
+
+export const SATISFACTION_LABEL: Record<string, string> = {
+  changed_and_verified: '바꾸고 확인함',
+  already_satisfied: '변경 없이 이미 목표 상태 (검증 실행이 관측)',
+  not_reproduced: '재현하지 못함 — 해결의 증거가 아니다',
 }
 
 /** `criterion_result` 한 행. 기준 정의가 아니라 **판정**만 담는다. */
@@ -1628,7 +1639,11 @@ export interface BudgetState {
 }
 
 export interface ControlledCheckpointRow {
-  id: string
+  // **도출된 요구는 아직 행이 없다**(P3-R4). Autonomy 가 기록되지 않아 controlled 로
+  // 취급되는 Case 의 요구는 사람이 실제로 확인할 때 행이 된다 — 조회가 쓰기를 하지
+  // 않게 하면서도 없음을 통과로 읽지 않기 위해서다.
+  id: string | null
+  derived?: boolean
   checkpoint: string
   state: string
   subject_type: string | null
@@ -1670,6 +1685,44 @@ export interface DelegationBasisRow {
   recorded_at: string
 }
 
+export interface FastLaneState {
+  eligible: boolean
+  blockers: { reason: string; detail: string }[]
+}
+
+export interface ConformanceState {
+  intent_version_id: string | null
+  // **실제로 한 방식.** `null` 은 아직 확인하지 않았다는 뜻이며 통과가 아니다.
+  method: string | null
+  verdict: string
+  required_method: string
+  independent_review_required: boolean
+  reasons: { reason: string; detail: string }[]
+  // **가벼운 확인이 보지 않은 것.** 이 문장이 없으면 두 방식이 같은 통과로 보인다.
+  unverified_scope: string | null
+  checks: { method: string; verdict: string; run_id: string | null }[]
+}
+
+export interface MaterialDeltaRow {
+  id: string
+  change_class: string
+  target_key: string
+  materiality: string
+  state: string
+  detail: string
+  ai_assessment: string | null
+  detected_at: string
+}
+
+export interface MaterialDeltaState {
+  basis: DelegationBasisRow | null
+  pending: MaterialDeltaRow[]
+  all: MaterialDeltaRow[]
+  blocked_task_keys: string[]
+  blocks_all_tasks: boolean
+  detail: string
+}
+
 export interface CasePolicy {
   case_id: string
   revision: number
@@ -1682,6 +1735,17 @@ export interface CasePolicy {
   work_depth: string | null
   work_depth_source: string
   completion_mode: string
+  // **어디서 온 값인가**(P3-R4). 사람이 정한 설정과 Autonomy 에서 도출한 값을
+  // 같은 모양으로 보이면 고르지 않은 자동 완료가 사용자의 설정처럼 읽힌다.
+  completion_mode_source: string
+  // **적용되는** Autonomy. 저장된 값과 다를 수 있는 경우가 정확히 하나다 —
+  // R1 이전 Case 는 미기록이지만 controlled 로 취급된다(사용자 결정 2026-09-22).
+  effective_autonomy: Autonomy
+  effective_source: string
+  is_treatment: boolean
+  fast_lane: FastLaneState
+  conformance: ConformanceState
+  material_delta: MaterialDeltaState
   profile: CaseProfileState
   checkpoints: ControlledCheckpointRow[]
   budget: BudgetState
@@ -1691,9 +1755,50 @@ export interface CasePolicy {
   case_status: string
 }
 
+export const CONFORMANCE_METHOD_LABEL: Record<string, string> = {
+  light: '가벼운 확인 (구조·참조·버전의 결정적 검사)',
+  independent: '독립 의미 검토 (작성과 별도 세션의 AI)',
+}
+
+export const MATERIALITY_LABEL: Record<string, string> = {
+  material: '확인 필요',
+  user_directed: '사용자 지시 · 위임 기준 갱신',
+  draft_work: '초안 작업',
+}
+
+export const COMPLETION_SOURCE_LABEL: Record<string, string> = {
+  case_explicit: '사람이 정한 설정',
+  migrated_explicit: '사람이 정한 설정 (R4 이전)',
+  autonomy_derived: 'Autonomy 에서 도출',
+}
+
 export const CHECKPOINT_LABEL: Record<string, string> = {
   start_scope: '시작 범위 확인 (목표·범위·기준·허용 행동)',
   result_candidate: '결과 후보 확인 (게시 전)',
+}
+
+export const progressionApi = {
+  /** 가벼운 요청 정합성 확인을 기록한다. **독립 검토로 표시되지 않는다**(D-25). */
+  lightConformance: (caseId: string, intentVersionId: string) =>
+    request<ConformanceState>(`/api/cases/${caseId}/conformance-checks/light`, {
+      method: 'POST',
+      body: JSON.stringify({ intent_version_id: intentVersionId }),
+    }),
+  /** 사람이 누적 변경 한 건을 확인한다. 남은 변경은 그대로 남는다(D-60). */
+  confirmDelta: (caseId: string, deltaId: string, actor = 'owner') =>
+    request<MaterialDeltaState>(
+      `/api/cases/${caseId}/material-deltas/${deltaId}/confirmation`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ actor, explicit: true }),
+      },
+    ),
+  /** 이 Case 에 독립 의미 검토를 요구한다. **올리는 방향으로만 작용한다.** */
+  requireIndependentReview: (caseId: string, required: boolean, reason: string) =>
+    request<ConformanceState>(`/api/cases/${caseId}/conformance-policy`, {
+      method: 'PUT',
+      body: JSON.stringify({ required, set_by: 'owner', reason }),
+    }),
 }
 
 export const policyApi = {
@@ -1712,7 +1817,15 @@ export const policyApi = {
       body: JSON.stringify({ autonomy, set_by: 'owner', reason_summary: reason || null }),
     }),
 
-  confirmCheckpoint: (caseId: string, checkpoint: string, subjectId: string, note: string) =>
+  confirmCheckpoint: (
+    caseId: string,
+    checkpoint: string,
+    subjectId: string,
+    note: string,
+    // **무엇을 보고 확인했는가**(P3-R4·FR-23). 이 해시가 없으면 나중에 내용이
+    // 바뀌었는지 알 수 없고, 바뀐 후보가 옛 확인으로 종료된다.
+    subjectHash?: string | null,
+  ) =>
     request<ControlledCheckpointRow[]>(
       `/api/cases/${caseId}/controlled-checkpoints/${checkpoint}/confirmation`,
       {
@@ -1723,6 +1836,7 @@ export const policyApi = {
           explicit: true,
           subject_type: checkpoint === 'start_scope' ? 'case' : 'completion_candidate',
           subject_id: subjectId,
+          subject_hash: subjectHash ?? null,
           note_summary: note || null,
         }),
       },

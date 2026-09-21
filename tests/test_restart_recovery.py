@@ -906,8 +906,12 @@ def test_sizing_preparation_and_stage_reviews_survive_a_forced_kill(controller):
     assert len(after["sizing_history"]) == 2
 
     # 검토 모드와 그 출처가 그대로다. 재시작이 기본값으로 되돌리지 않는다.
-    assert after["design"]["mode"] == "human_review"
-    assert after["design"]["mode_source"] == "project_default"
+    #
+    # **P3-R4: 설계 쪽은 이제 도출 기본값(자동 진행)이다.** 확인하는 성질은 같다 —
+    # 재시작 뒤에도 같은 출처에서 같은 값이 나온다. 아래 `plan` 의 명시 설정이
+    # 도출값에 덮이지 않는 것도 함께 본다.
+    assert after["design"]["mode"] == "auto_proceed"
+    assert after["design"]["mode_source"] == "autonomy_derived"
     assert after["plan"]["mode"] == "auto_proceed"
     assert after["plan"]["mode_source"] == "case_setting"
 
@@ -1356,3 +1360,158 @@ def test_per_repository_workspaces_and_the_composition_survive_a_forced_kill(
     # 조합이 무엇을 관측하지 못했는지도 남는다. 복원이 빈칸을 채우지 않는다.
     assert restored["snapshot_complete"] is False
     assert restored["matches_current_state"] is True
+
+
+def test_progression_records_survive_a_forced_kill(controller):
+    """P3-R4 AC-28 — 확인 지점·정합성 방식·누적 변경이 강제 종료 후 복원된다.
+
+    R4 가 여는 문은 "조건이 갖춰졌으면 사람 없이 진행·완료한다"이다. 재시작이 그
+    판단의 근거를 잃으면 둘 중 하나가 된다.
+
+        근거가 사라진다   확인했던 시작 확인이 없어져 진행이 막힌다
+        근거가 생긴다     확인하지 않은 것이 확인된 것처럼 보인다
+
+    **둘째가 더 위험하다.** 그래서 이 시험은 "복원됐다"뿐 아니라 **확인하지 않은
+    것이 확인되지 않은 채로 남았는지**도 본다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "r4-restart", "repo_path": "C:/tmp/demo", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "R4 재시작 Case", "kind": "feature"},
+        timeout=10.0,
+    ).json()
+
+    # controlled 로 설정한다. 확인 지점 둘이 `required` 로 생긴다.
+    httpx.put(
+        f"{base}/api/cases/{case['id']}/autonomy",
+        json={"autonomy": "controlled", "set_by": "owner"},
+        timeout=10.0,
+    ).raise_for_status()
+
+    axes = [
+        {
+            "axis": axis,
+            "weight": "low",
+            "evidence": f"{axis} 근거",
+            "judgement": f"{axis} 판단",
+            "unconfirmed": "",
+        }
+        for axis in (
+            "intent_clarity",
+            "change_scope",
+            "compatibility_and_data",
+            "permission_and_security",
+            "reversibility",
+            "uncertainty",
+            "verification_difficulty",
+        )
+    ]
+    draft = httpx.post(
+        f"{base}/api/cases/{case['id']}/intent-drafts",
+        json={
+            "summary": "의도 초안 v1",
+            "target_runner_id": RUNNER_ID,
+            "fields": {
+                "goal": {
+                    "text": "로그에서 오류 줄만 뽑는다",
+                    "state": "proposed",
+                    "origin": "user_requirement",
+                }
+            },
+            "criteria": [
+                {
+                    "key": "C-01",
+                    "relates_to": "expected_outcome",
+                    "text": "오류 줄만 출력된다",
+                    "method": "표본 파일로 확인한다",
+                    "summary": "오류 줄만 출력",
+                    "method_summary": "표본 파일 확인",
+                }
+            ],
+            "sizing": {"recommended_level": "simple", "axes": axes},
+        },
+        timeout=10.0,
+    ).json()
+
+    intakes = httpx.get(f"{base}/api/runner/{RUNNER_ID}/intakes", timeout=10.0).json()
+    pending = next(i for i in intakes if i["intake_id"] == draft["intake_id"])
+    body = base64.b64decode(pending["content_b64"])
+    httpx.post(
+        f"{base}/api/runner/intakes/{draft['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": draft["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    structure = intent_doc.structure(body, None)
+    intent_version_id = pending["intent"]["intent_version_id"]
+    httpx.post(
+        f"{base}/api/runner/intent-structure",
+        json={
+            "runner_id": RUNNER_ID,
+            "intent_version_id": intent_version_id,
+            "fields": structure["fields"],
+            "questions": structure["questions"],
+            "criteria": structure["criteria"],
+            "sizing": structure["sizing"],
+        },
+        timeout=10.0,
+    ).raise_for_status()
+
+    # 가벼운 요청 정합성 확인을 기록한다. **독립 검토는 하지 않았다.**
+    conformance = httpx.post(
+        f"{base}/api/cases/{case['id']}/conformance-checks/light",
+        json={"intent_version_id": intent_version_id},
+        timeout=10.0,
+    )
+    assert conformance.status_code == 201, conformance.text
+
+    # 시작 확인만 한다. **결과 후보 확인은 하지 않는다.**
+    confirmed = httpx.post(
+        f"{base}/api/cases/{case['id']}/controlled-checkpoints/start_scope/confirmation",
+        json={
+            "confirmed_by": "owner",
+            "explicit": True,
+            "subject_type": "case",
+            "subject_id": case["id"],
+            "note_summary": "목표·범위·허용 행동을 확인했다",
+        },
+        timeout=10.0,
+    )
+    assert confirmed.status_code == 201, confirmed.text
+
+    controller.kill_hard()
+    controller.start()
+
+    policy = httpx.get(f"{base}/api/cases/{case['id']}/policy", timeout=10.0).json()
+
+    # --- 확인한 것은 확인된 채로 남는다 ---------------------------------
+    points = {p["checkpoint"]: p for p in policy["checkpoints"]}
+    assert points["start_scope"]["state"] == "confirmed"
+    assert points["start_scope"]["confirmed_by"] == "owner"
+    # --- **확인하지 않은 것은 확인되지 않은 채로 남는다** ----------------
+    assert points["result_candidate"]["state"] == "required"
+
+    # --- 정합성은 **방식과 보지 않은 범위**까지 복원된다 -----------------
+    assert policy["conformance"]["method"] == "light"
+    assert policy["conformance"]["verdict"] == "pass"
+    assert "AI 가 검토하지 않았다" in policy["conformance"]["unverified_scope"]
+    # 독립 검토를 한 것으로 바뀌지 않았다.
+    assert policy["conformance"]["required_method"] == "light"
+    assert [c["method"] for c in policy["conformance"]["checks"]] == ["light"]
+
+    # --- 완료 모드의 도출과 그 출처도 그대로다 ---------------------------
+    assert policy["completion_mode"] == "human_acceptance"
+    assert policy["completion_mode_source"] == "autonomy_derived"
+    assert policy["effective_autonomy"] == "controlled"
+    assert policy["is_treatment"] is False
+
+    # --- 강제 표시가 되돌아가지 않았다 -----------------------------------
+    assert policy["enforcement"]["autonomy"]["state"] == "enforced"
+    assert policy["enforcement"]["controlled_checkpoint"]["state"] == "enforced"
+    assert policy["enforcement"]["publish"]["state"] == "not_implemented"

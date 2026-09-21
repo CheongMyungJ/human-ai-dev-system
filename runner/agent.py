@@ -402,6 +402,8 @@ class RunnerAgent:
             level=assignment.get("work_level"),
             profile=assignment.get("case_profile"),
             profile_version=assignment.get("case_profile_version"),
+            # **제어부가 정한 단계**(P3-R4). Fast Lane 의 계획 작성은 결합 기록을 쓴다.
+            stage_hint=assignment.get("preparation_stage"),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
@@ -506,10 +508,17 @@ class RunnerAgent:
                 RunPurpose.DESIGN_AUTHORING.value,
                 RunPurpose.PLAN_AUTHORING.value,
             ):
+                # **단계는 제어부가 정한다**(P3-R4). 배정에 없으면 목적에서 읽는다 —
+                # R4 이전에 배정된 실행에는 이 값이 없다.
+                hinted = assignment.get("preparation_stage")
                 stage = (
-                    PreparationStage.DESIGN
-                    if purpose == RunPurpose.DESIGN_AUTHORING.value
-                    else PreparationStage.PLAN
+                    PreparationStage(hinted)
+                    if hinted
+                    else (
+                        PreparationStage.DESIGN
+                        if purpose == RunPurpose.DESIGN_AUTHORING.value
+                        else PreparationStage.PLAN
+                    )
                 )
                 produced.update(
                     self._produce_preparation(assignment, output, stage, context or [])
@@ -518,6 +527,8 @@ class RunnerAgent:
                 produced.update(self._produce_implementation(output))
             elif purpose == RunPurpose.VERIFICATION_RUN.value:
                 produced.update(self._produce_verification(output))
+            elif purpose == RunPurpose.LOCAL_EXPERIMENT.value:
+                produced.update(self._produce_experiment(output))
             elif purpose == RunPurpose.INTENT_GATE_REVIEW.value:
                 target = assignment.get("target_intent_version_id")
                 if not target:
@@ -582,6 +593,35 @@ class RunnerAgent:
             "produced": "verification",
             "commands": parsed["commands"],
             "result_summary": parsed["result_summary"],
+            "workspace_effect": getattr(output, "workspace_effect", None),
+        }
+        if not parsed["commands"]:
+            output.outcome = RunOutcome.FAILED
+            produced["produced"] = "none"
+            produced["failure"] = "no_command_executed"
+        return produced
+
+    def _produce_experiment(self, output: Any) -> dict[str, Any]:
+        """실험 실행의 산출물은 **실제로 실행된 명령과 임시 변경의 구분**이다(D-66).
+
+        검증과 두 가지가 다르다.
+
+            작업공간 변화  실험은 고쳐도 된다. 그것이 실험의 수단이다
+            임시 변경 기록  무엇을 임시로 고쳤는지가 결론의 근거와 **구별되어야** 한다
+
+        둘째가 이 함수가 따로 있는 이유다. "증거와 임시 변경을 구분한다"(D-66)를
+        지키려면 그 구분이 실행 보고 안에 있어야 하고, 검증 보고 형식에는 그 자리가
+        없다.
+
+        **명령이 하나도 없으면 완료가 아니다.** 아무 것도 돌려 보지 않은 실험은
+        관측을 만들지 못했고, 그 실행을 완료로 올리면 "실험했다"는 기록만 남는다.
+        """
+        parsed = prompts.parse_experiment(output.final_message)
+        produced: dict[str, Any] = {
+            "produced": "experiment",
+            "commands": parsed["commands"],
+            "result_summary": parsed["result_summary"],
+            "temporary_changes": parsed["temporary_changes"],
             "workspace_effect": getattr(output, "workspace_effect", None),
         }
         if not parsed["commands"]:

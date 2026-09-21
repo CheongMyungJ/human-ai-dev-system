@@ -1,0 +1,25 @@
+제어부 기동: http://127.0.0.1:63710
+codex 설치 관측: verified
+
+=== 1. controlled 는 시작 확인 전에 배정하지 않는다 ===
+시작 확인 전 설계 요청: HTTP 409 ['intent_not_agreed', 'intent_gate_not_passed', 'controlled_start_not_confirmed']
+확인 지점: start_scope=required, result_candidate=required
+완료 모드: human_acceptance (autonomy_derived)
+강제 표시: autonomy=enforced, controlled_checkpoint=enforced, budget=enforced, repository_selection=enforced, publish=not_implemented
+시작 확인 뒤 같은 요청: HTTP 409 ['intent_not_agreed', 'intent_gate_not_passed']
+
+=== 2. 기본 ask-on-decision 의 자동 진행 (실제 codex) ===
+기본 정책: autonomy=ask_on_decision 완료=auto_on_conditions (autonomy_derived)
+초안 실행 생성: HTTP 201
+초안 실행 종료: outcome=completed exit=0 tool=codex-cli 0.154.0
+의도 버전: rev 1 항목 10개
+성공 기준: ['C-01', 'C-02', 'C-03', 'C-04', 'C-05']
+수준: standard · Fast Lane: False ['level_not_simple', 'evidence_gap', 'open_intent_questions']
+단계 검토 기본값: design=auto_proceed(autonomy_derived) plan=auto_proceed
+정합성 요구: independent 이유=['level_above_simple', 'evidence_gap']
+독립 검토 실행: HTTP 201
+독립 검토 종료: outcome=completed
+정합성 결과: method=independent verdict=pass
+QG-01: verdict=pass rule=pass ai=pass
+
+프로세스 정리 완료

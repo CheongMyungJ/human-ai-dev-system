@@ -295,6 +295,7 @@ class FakeCliExecutor:
         self.analysis_response = "저장소를 읽고 확인했습니다. 변경한 것은 없습니다."
         self.design_response = FAKE_DESIGN_FULL
         self.plan_response = FAKE_PLAN_FULL
+        self.combined_response = FAKE_PLAN_FULL
         self.implementation_response = FAKE_IMPLEMENTATION_RESPONSE
         self.verification_response = FAKE_VERIFICATION_RESPONSE
         #: 실행할 때 작업공간에 실제로 쓸 파일 {상대경로: 내용}.
@@ -326,6 +327,11 @@ class FakeCliExecutor:
             return self.design_response
         if prompt.startswith(prompt_templates.PLAN_AUTHORING_PROMPT[:40]):
             return self.plan_response
+        if prompt.startswith(prompt_templates.COMBINED_AUTHORING_PROMPT[:40]):
+            # P3-R4. Fast Lane 의 결합 기록. 계획과 같은 형식이므로 같은 응답을
+            # 쓰되 **다른 지시문을 받았다는 사실**은 구별한다 — 시험이 결합 기록의
+            # 내용을 따로 바꿀 수 있어야 한다.
+            return self.combined_response
         if prompt.startswith(prompt_templates.FEATURE_IMPLEMENTATION_PROMPT[:40]):
             return self.implementation_response
         if prompt.startswith(prompt_templates.VERIFICATION_RUN_PROMPT[:40]):
@@ -712,18 +718,23 @@ class Harness:
         evidence_artifact_rev: int | None = None,
         summary: str = "확인함",
         recorded_by: str = "owner",
+        satisfaction: str | None = None,
     ):
+        body: dict[str, Any] = {
+            "verdict": verdict,
+            "summary": summary,
+            "recorded_by": recorded_by,
+            "evidence_kind": evidence_kind,
+            "evidence_run_id": evidence_run_id,
+            "evidence_artifact_id": evidence_artifact_id,
+            "evidence_artifact_rev": evidence_artifact_rev,
+        }
+        # **어떻게 충족했는가**(P3-R4). 주지 않으면 키를 넣지 않는다 — 미기록과
+        # 명시적 `null` 을 API 계약에서 구별할 이유가 없다.
+        if satisfaction is not None:
+            body["satisfaction"] = satisfaction
         return self.client.post(
-            f"/api/cases/{case_id}/criteria/{criterion_id}/result",
-            json={
-                "verdict": verdict,
-                "summary": summary,
-                "recorded_by": recorded_by,
-                "evidence_kind": evidence_kind,
-                "evidence_run_id": evidence_run_id,
-                "evidence_artifact_id": evidence_artifact_id,
-                "evidence_artifact_rev": evidence_artifact_rev,
-            },
+            f"/api/cases/{case_id}/criteria/{criterion_id}/result", json=body
         )
 
     def mark_all_criteria_met(self, case_id: str, run_id: str | None = None) -> None:
@@ -771,6 +782,115 @@ class Harness:
                 "scope_summary": scope_summary,
             },
         )
+
+    # ------------------------------------------------------ P3-R4 도우미
+
+    def confirm_checkpoint(
+        self,
+        case_id: str,
+        checkpoint: str,
+        subject_id: str,
+        subject_type: str = "case",
+        subject_hash: str | None = None,
+        confirmed_by: str = "owner",
+        note: str | None = None,
+    ):
+        """controlled 확인 지점을 사람이 확인한다(D-65)."""
+        body = {
+            "confirmed_by": confirmed_by,
+            "explicit": True,
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+        }
+        if subject_hash is not None:
+            body["subject_hash"] = subject_hash
+        if note is not None:
+            body["note_summary"] = note
+        response = self.client.post(
+            f"/api/cases/{case_id}/controlled-checkpoints/{checkpoint}/confirmation",
+            json=body,
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    def register_combined(
+        self,
+        case_id: str,
+        sections: dict[str, str] | None = None,
+        tasks: list[dict[str, Any]] | None = None,
+        run_id: str = "run-combined-1",
+    ):
+        """Fast Lane 의 결합 기록을 만든다(P3-R4).
+
+        설계·계획 두 건 대신 **한 건**이다. 항목은 둘의 필수 항목을 합친 것이며
+        새 이름을 만들지 않는다 — 나중에 일반 진행으로 전환할 때 옮겨 적을 대상이
+        같아야 하기 때문이다.
+
+        요청은 평범한 `plan_authoring` 이다. **어느 단계를 쓸지는 제어부가 정한다** —
+        Fast Lane 이고 설계가 없으면 결합 기록이 된다(`_authoring_stage`).
+        """
+        harness_sections = sections if sections is not None else {
+            "change_summary": "reader 모듈에 필터 함수를 더한다",
+            "verifiability": "표본 파일의 기대 줄 수와 실제 출력을 비교한다",
+            "tasks": "작업 목록은 tasks 에 있다",
+            "verification": "표본 파일 시험 1건",
+        }
+        self.agent.cli_executor.combined_response = fake_preparation_response(
+            "결합", harness_sections, tasks=(FAKE_TASKS if tasks is None else tasks)
+        )
+        instruction = self.submit_artifact(
+            case_id, "요청대로 만들고 확인해 주세요.", kind="instruction", summary="결합 요청"
+        )
+        response = self.client.post(
+            f"/api/cases/{case_id}/runs",
+            json={
+                "run_id": run_id,
+                "instruction_artifact_id": instruction["artifact_id"],
+                "purpose": "plan_authoring",
+                "role": "author",
+                "tool_id": FAKE_TOOL_ID,
+                "mode": FAKE_TOOL_MODE,
+                "permission": "read_only",
+            },
+        )
+        if response.status_code in (200, 201):
+            self.agent.poll_once()
+        return response
+
+    def run_experiment(
+        self,
+        case_id: str,
+        instruction_artifact_id: str,
+        run_id: str = "run-experiment-1",
+        repository_id: str | None = None,
+    ):
+        """허용된 로컬 실험을 요청한다(D-66)."""
+        body: dict[str, Any] = {
+            "run_id": run_id,
+            "instruction_artifact_id": instruction_artifact_id,
+            "purpose": "local_experiment",
+            "role": "author",
+            "tool_id": FAKE_TOOL_ID,
+            "mode": FAKE_TOOL_MODE,
+            "permission": "workspace_write",
+            "task_id": "task-1",
+        }
+        if repository_id is not None:
+            body["repository_id"] = repository_id
+        return self.client.post(f"/api/cases/{case_id}/runs", json=body)
+
+    def light_conformance(self, case_id: str, intent_version_id: str):
+        """가벼운 요청 정합성 확인을 기록한다(D-25)."""
+        return self.client.post(
+            f"/api/cases/{case_id}/conformance-checks/light",
+            json={"intent_version_id": intent_version_id},
+        )
+
+    def conformance(self, case_id: str) -> dict[str, Any]:
+        return self.client.get(f"/api/cases/{case_id}/conformance").json()
+
+    def material_deltas(self, case_id: str) -> dict[str, Any]:
+        return self.client.get(f"/api/cases/{case_id}/material-deltas").json()
 
     def set_completion_mode(self, case_id: str, mode: str, set_by: str = "owner"):
         return self.client.put(

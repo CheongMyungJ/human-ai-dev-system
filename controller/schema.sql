@@ -1169,3 +1169,87 @@ CREATE TABLE IF NOT EXISTS budget_reservation (
 
 CREATE INDEX IF NOT EXISTS idx_budget_reservation_case
     ON budget_reservation(case_id, metric, state);
+
+-- ===================================================================
+-- 스키마 v11 (P3-R4 자동 실행·진입·완료 경로)
+--
+-- 기존 컬럼의 뜻을 **바꾸지 않는다.** 새 표 둘과 새 컬럼 다섯이며, 도출로 충분한
+-- 것은 표를 만들지 않았다 — Fast Lane 여부와 유효 Autonomy 는 기록된 사실에서
+-- 계산한다(R3 의 `stop` 과 같은 판단: 저장하면 "누가 그 값을 적었는가"가 새 문제가
+-- 된다).
+--
+-- 없음의 뜻:
+--   `conformance_check` 행이 없다 = 요청 정합성을 **아직 확인하지 않았다.**
+--                       게이트는 `not_run` 이며 자동으로 통과하지 않는다
+--   `material_delta` 행이 없다 = 마지막 유효 위임 이후 관측된 변경이 없다
+--   `criterion_result.satisfaction IS NULL` = R4 이전 기록. **`changed_and_verified`
+--                       로 채우지 않는다** — 어떻게 충족했는지 그때는 묻지 않았다
+--   `completion_policy.source IS NULL` = R4 이전에 명시 설정된 행. 도출값이 덮지 않는다
+-- ===================================================================
+
+-- 마지막 유효 위임 이후 관측된 변경 한 건(D-60).
+--
+-- **비교 대상이 `basis_id` 인 것이 이 표의 핵심이다.** AI 가 직전에 쓴 초안과
+-- 비교하면 작은 변경을 연속 채택해 원래 요청과 다른 결과로 이동할 수 있다
+-- (autonomy-budget-policy 3절). 그래서 기준은 `delegation_basis` 의 행이고,
+-- `pending` 이 **쌓인다**.
+--
+-- `ai_assessment` 는 AI 의 의미 평가를 적어 두는 자리다. **이것만으로 `pending` 이
+-- 풀리지 않는다** — "'의미가 같음'이라는 주장만으로 새 의미를 승인하지 않는다".
+-- 풀리는 경로는 사람의 확인(`decision_id`)과 사용자 지시(`user_directed`) 둘이다.
+--
+-- 본문은 없다. 해시·출처·분류·참조뿐이다.
+CREATE TABLE IF NOT EXISTS material_delta (
+    id             TEXT PRIMARY KEY,
+    case_id        TEXT NOT NULL REFERENCES "case"(id),
+    -- 무엇과 비교했는가. NULL = 위임 기준이 기록되지 않은 Case
+    basis_id       TEXT REFERENCES delegation_basis(id),
+    change_class   TEXT NOT NULL,   -- intent_field | success_criterion | repository_allowance
+    target_type    TEXT NOT NULL,
+    target_id      TEXT,
+    target_key     TEXT NOT NULL,
+    from_hash      TEXT,
+    to_hash        TEXT,
+    origin         TEXT,            -- 바뀐 항목의 출처(ContentOrigin)
+    materiality    TEXT NOT NULL,   -- material | user_directed | draft_work
+    state          TEXT NOT NULL,   -- pending | confirmed | adopted | superseded
+    detail         TEXT NOT NULL,   -- 왜 그 분류인지. 짧은 설명
+    ai_assessment  TEXT,            -- AI 의 의미 평가. **해소 근거가 아니다**
+    decision_id    TEXT REFERENCES decision(id),
+    detected_at    TEXT NOT NULL,
+    resolved_at    TEXT,
+    resolution_source TEXT,         -- human_confirmation | user_direction | superseded
+    CHECK (length(detail) <= 200),
+    CHECK (ai_assessment IS NULL OR length(ai_assessment) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_material_delta_case
+    ON material_delta(case_id, state, materiality);
+
+-- 요청 정합성 확인 한 건(D-25·QG-01).
+--
+-- **방식과 결과를 따로 적는다.** `method` 가 무엇을 실제로 했는지이고
+-- `required_method` 가 규칙이 요구한 것이다. 둘이 어긋나면(light 를 했는데 규칙은
+-- independent 를 요구) 그 확인은 충분하지 않으며 게이트가 통과하지 않는다.
+--
+-- `unverified_scope` 가 **가벼운 확인이 보지 않은 것**을 값으로 남긴다. 이 컬럼이
+-- 없으면 두 방식이 같은 `pass` 로 보이고, 그 순간 "미실행을 통과로 표시하지 않는다"
+-- (D-25)가 깨진다.
+CREATE TABLE IF NOT EXISTS conformance_check (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    intent_version_id TEXT NOT NULL REFERENCES intent_version(id),
+    method            TEXT NOT NULL,   -- light | independent
+    required_method   TEXT NOT NULL,   -- 규칙이 요구한 방식
+    verdict           TEXT NOT NULL,   -- pass | fail | hold | not_run
+    -- 독립 검토의 실행. 가벼운 확인은 NULL 이며 그것이 두 방식을 가르는 사실이다.
+    run_id            TEXT REFERENCES run(run_id),
+    subject_content_hash TEXT NOT NULL,
+    unverified_scope  TEXT,
+    reasons_json      TEXT NOT NULL DEFAULT '[]',
+    recorded_at       TEXT NOT NULL,
+    UNIQUE (intent_version_id, method),
+    CHECK (unverified_scope IS NULL OR length(unverified_scope) <= 300)
+);
+
+CREATE INDEX IF NOT EXISTS idx_conformance_case ON conformance_check(case_id);

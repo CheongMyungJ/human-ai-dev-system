@@ -27,6 +27,23 @@ from controller.db import (
     utc_now,
 )
 from domain import ids, prep_doc, profiles
+from domain import progression
+from domain.progression import (
+    LIGHT_UNVERIFIED_SCOPE,
+    NEEDS_CONTROLLED_START,
+    SATISFACTION_ALLOWING_MET,
+    SATISFACTION_NEEDING_RUN_EVIDENCE,
+    assess_fast_lane,
+    classify_change,
+    conformance_satisfies,
+    derived_completion_mode,
+    derived_review_mode,
+    effective_autonomy,
+    experiment_allowed,
+    purpose_outside_objective,
+    required_conformance_method,
+    required_stages,
+)
 from domain.budget import (
     RESERVATION_KIND,
     BudgetGuarantee,
@@ -70,6 +87,7 @@ from domain.models import (
     CompletionMode,
     CompositionEntrySource,
     ConfirmationState,
+    ConformanceMethod,
     ContentOrigin,
     ContextRefRole,
     ControlledCheckpoint,
@@ -78,6 +96,9 @@ from domain.models import (
     DecideAt,
     DecisionKind,
     DelegationBasisKind,
+    DeltaChangeClass,
+    DeltaState,
+    EffectiveAutonomySource,
     EvidenceKind,
     FeedbackState,
     FieldChange,
@@ -89,6 +110,7 @@ from domain.models import (
     IntentAgreementState,
     IntentField,
     IntentStatus,
+    Materiality,
     Permission,
     PolicyRefusal,
     PolicyState,
@@ -104,6 +126,7 @@ from domain.models import (
     RunPurpose,
     RunRole,
     RunStatus,
+    Satisfaction,
     SizingAxis,
     SizingSource,
     SizingState,
@@ -226,6 +249,25 @@ def _field_name(field: str) -> str:
         # 거절 사유를 예외로 남긴다. 조용히 통과시키면 오타가 새 항목이 되고,
         # 그대로 죽으면 화면이 "무엇이 잘못됐는가"를 말할 수 없다.
         raise ConflictError(f"unknown intent field: {field}") from exc
+
+
+def _criterion_fingerprint(criterion: Any) -> str:
+    """성공 기준 한 건의 **내용 지문**(P3-R4).
+
+    요약·확인 방법·연결 항목을 함께 해시한다. 기준의 본문은 Runner 에 있고 제어부가
+    가진 것은 이 셋뿐이므로, 여기서 같으면 제어부가 관측할 수 있는 범위에서 같다.
+    **그것이 전부라고 주장하지 않는다** — 요약이 같은데 본문이 달라졌을 수 있고,
+    그 경우는 의미 검토가 본다.
+    """
+    return _snapshot_hash(
+        "\x00".join(
+            (
+                str(criterion["summary"]),
+                str(criterion["method_summary"]),
+                str(criterion["relates_to"]),
+            )
+        )
+    )
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -714,20 +756,20 @@ class Repository:
                         CriterionState.SUPERSEDED.value,
                     ),
                 )
-                self.conn.execute(
-                    "UPDATE criterion_result SET verdict = ?, recorded_at = ?"
-                    " WHERE criterion_id IN ("
-                    "   SELECT id FROM success_criterion"
-                    "   WHERE case_id = ? AND intent_version_id != ?"
-                    " ) AND verdict != ?",
-                    (
-                        CriterionVerdict.NEEDS_RECHECK.value,
-                        now,
-                        case_id,
-                        intent_id,
-                        CriterionVerdict.NEEDS_RECHECK.value,
-                    ),
-                )
+                # **판정의 재검토 표시는 여기서 하지 않는다**(P3-R4).
+                #
+                # R4 이전에는 새 버전이 생기는 순간 이전 판정을 전부
+                # `needs_recheck` 로 내렸다. 그 규칙은 "의도가 바뀌면 연결된 성공
+                # 기준을 재검토한다"를 지키지만, **한 항목을 고친 피드백 하나가 모든
+                # 검증을 무효로 만든다.** intent-artifacts 69행은 그 뒤에 "영향이
+                # 없는 기록은 유지한다"를 함께 요구한다.
+                #
+                # 무엇이 영향을 받았는지는 **새 버전의 구조가 보고돼야** 알 수 있다.
+                # 그래서 판단을 `_carry_unaffected_results` 로 옮겼다 — 이어지는
+                # 판정은 그대로 남고, 이어지지 않는 판정이 그때 `needs_recheck` 가
+                # 된다. 구조가 끝내 보고되지 않으면 이전 판정이 그대로 남지만, 그
+                # 기준들은 이미 `superseded` 라 현재 판정에 쓰이지 않는다
+                # (`current_criteria` 와 `record_criterion_result` 가 막는다).
                 # 작업 수준 판단도 같은 규칙이다(P3-01). 축별 근거는 **이 의도 버전을
                 # 보고 쓴 것**이므로 의도가 바뀌면 그 판단도 대체된다. 승계하면
                 # 바뀐 의도에 옛 근거가 그대로 붙고, 사람이 조정한 수준이 새 범위에
@@ -873,8 +915,9 @@ class Repository:
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
-                    " assignment_generation, created_at, purpose, repository_id)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " assignment_generation, created_at, purpose, repository_id,"
+                    " is_experiment)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -892,6 +935,11 @@ class Repository:
                         # **어느 저장소의 작업공간에서 도는가.** NULL 은 "주 저장소"가
                         # 아니라 기록되지 않음이다(P3-R2).
                         repository_id,
+                        # **허용된 로컬 실험인가**(P3-R4·D-66). 목적에서 도출하며
+                        # 요청이 스스로 주장하지 못한다 — 실험 표시는 결과 후보에서
+                        # 제품 변경과 구별되는 근거이고, 요청이 그 구별을 정하면
+                        # 임시 변경을 실험으로 적어 검증을 건너뛸 수 있다.
+                        1 if purpose is RunPurpose.LOCAL_EXPERIMENT else 0,
                     ),
                 )
                 self._insert_context_refs(run_id, refs)
@@ -1028,9 +1076,35 @@ class Repository:
         # `None` 이고 그 경우 진입 검사가 이미 막았다 — 여기서 기본값을 지어내지 않는다.
         level = self.current_level(run["case_id"])
         run["work_level"] = level.value if level else None
+        # **어느 단계의 산출물을 쓸 것인가**(P3-R4). Fast Lane 의 계획 작성 실행은
+        # 설계·계획 두 건 대신 **결합 기록 한 건**을 쓴다(D-60).
+        #
+        # 이 판단을 Runner 에 두지 않는 이유는 그것이 진입 조건과 같은 판단이기
+        # 때문이다. 두 곳에서 각각 계산하면 "Runner 는 결합 기록을 썼는데 진입
+        # 검사는 계획을 요구하는" 상태가 조용히 생긴다(R2 가 실제로 한 실수다).
+        run["preparation_stage"] = self._authoring_stage(
+            run["case_id"], run.get("purpose")
+        )
         latest_intent = self.latest_intent_version(run["case_id"])
         run["current_intent_version_id"] = latest_intent["id"] if latest_intent else None
         return run
+
+    def _authoring_stage(self, case_id: str, purpose: str | None) -> str | None:
+        """이 작성 실행이 만들 준비 산출물의 단계.
+
+        `design_authoring` 은 언제나 설계다. `plan_authoring` 은 **Fast Lane 이고
+        아직 설계가 없을 때만** 결합 기록이 된다 — 설계가 이미 있으면 그 위의 계획을
+        쓰는 것이 맞고, 결합 기록으로 바꾸면 있는 설계가 버려진다.
+        """
+        if purpose == RunPurpose.DESIGN_AUTHORING.value:
+            return PreparationStage.DESIGN.value
+        if purpose != RunPurpose.PLAN_AUTHORING.value:
+            return None
+        if self.current_preparation(case_id, PreparationStage.DESIGN) is not None:
+            return PreparationStage.PLAN.value
+        if self.fast_lane_state(case_id)["eligible"]:
+            return PreparationStage.COMBINED.value
+        return PreparationStage.PLAN.value
 
     def bump_generation(self, run_id: str) -> dict[str, Any]:
         """재배정. 세대를 올리고 다시 대기 상태로 돌린다.
@@ -1190,6 +1264,10 @@ class Repository:
                 usage,
                 finished_at,
             )
+        # **실행이 끝나는 것도 마지막 조건일 수 있다**(P3-R4). 미정리 실행이 남아
+        # 있으면 자동 완료가 보류되므로(completion-lifecycle 5절), 그 실행이 끝난
+        # 순간이 조건이 갖춰지는 시점이다. 조건을 못 갖추면 아무 것도 하지 않는다.
+        self.maybe_auto_complete(run["case_id"])
         return self.get_run(run_id)
 
     # ------------------------------------------------------------ request log
@@ -1293,6 +1371,12 @@ class Repository:
         # 기준이 0건이면 0건으로 남긴다 — 없는 기준을 시스템이 채우지 않는다.
         if criteria is not None:
             self.apply_success_criteria(intent_version_id, criteria)
+        # **영향받지 않은 판정은 유지한다**(P3-R4·intent-artifacts 69행).
+        #
+        # `apply_success_criteria` 안이 아니라 여기서 부르는 이유는, 기준을 하나도
+        # 보고하지 않은 버전에서도 이전 판정의 재검토 표시가 필요하기 때문이다.
+        # 저쪽에 두면 `criteria is None` 인 보고에서 옛 판정이 그대로 남는다.
+        self._carry_unaffected_results(intent_version_id)
         # 작업 수준 판단도 같은 보고로 들어온다(P3-01). 같은 이유다 — 축별 근거를
         # 따로 입력받는 본문 API 를 만들면 제어부가 그 서술을 갖게 된다.
         # `None` 이면 아무 것도 만들지 않는다. **수준 미결정은 미결정으로 남는다.**
@@ -1301,7 +1385,154 @@ class Repository:
         # 게이트 상태를 항상 최신 구조에 맞춰 둔다. **AI 검토는 건드리지 않는다** —
         # 규칙만 통과한 상태는 여전히 `not_run` 이다.
         self.evaluate_gate_rules(intent_version_id)
+        # **마지막 유효 위임과 대조한다**(P3-R4·D-60). 구조가 보고된 지금이 비교할
+        # 수 있는 첫 순간이다 — 버전을 만드는 시점에는 항목도 기준도 아직 없다.
+        self.detect_material_deltas(intent_version_id)
         return self.get_intent_detail(intent_version_id)
+
+    def detect_material_deltas(self, intent_version_id: str) -> list[dict[str, Any]]:
+        """이 버전이 **마지막으로 동의된 의도**와 무엇이 달라졌는지 기록한다(D-60).
+
+        **비교 대상이 AI 의 직전 초안이 아니다.** 초안끼리 비교하면 작은 변경을
+        연속 채택해 원래 요청과 다른 결과로 이동할 수 있다(autonomy-budget-policy
+        3절). 그래서 기준은 **동의된 버전**이고, 확인되지 않은 변경은 그 다음 동의가
+        생길 때까지 `pending` 으로 **쌓인다.**
+
+        동의된 버전이 없으면 아무 것도 기록하지 않는다. 아직 위임 자체가 없으므로
+        "위임과 달라졌다"를 말할 수 없다 — 그 상태는 초안 작업이다.
+
+        제어부는 본문을 읽지 않으므로 **구조화된 사실만으로** 판단한다.
+
+            항목      Runner 가 보고한 `change_from_prev` 와 `origin`
+            기준      기준 키의 추가·삭제와 요약 해시의 변화
+            사용자 지시  이 버전이 반영한 피드백이 있는가
+
+        마지막 줄이 정상 흐름을 여는 경로다. 사용자의 답변·수정 요청에서 온 변경은
+        **위임 기준을 갱신**하고 막지 않는다(D-60 "실제 답한 항목과 명시한 범위의
+        위임 기준만 갱신").
+        """
+        intent = self.get_intent_version(intent_version_id)
+        case_id = intent["case_id"]
+        baseline = self._last_agreed_intent_version(case_id, before=intent["revision"])
+        if baseline is None:
+            return []
+
+        # 이 버전이 사용자의 피드백을 반영했는가. 반영한 항목이 무엇인지는 원문에
+        # 있고 제어부는 **그런 지시가 있었다는 사실**만 안다.
+        reflected = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM feedback WHERE reflected_in_version_id = ?",
+            (intent_version_id,),
+        ).fetchone()["n"]
+        user_directed = bool(reflected)
+
+        baseline_fields = {
+            f["field"]: f for f in self.list_intent_fields(baseline["id"])
+        }
+        detected: list[str] = []
+        with transaction(self.conn):
+            for field in self.list_intent_fields(intent_version_id):
+                if field["change_from_prev"] != FieldChange.CHANGED.value:
+                    continue
+                before = baseline_fields.get(field["field"])
+                # 동의된 버전에 없던 항목은 그 버전의 위임 대상이 아니다.
+                agreed_item = before is not None and before["state"] in (
+                    ConfirmationState.USER_CONFIRMED.value,
+                    ConfirmationState.PROPOSED.value,
+                )
+                self._record_delta(
+                    case_id,
+                    change_class=DeltaChangeClass.INTENT_FIELD,
+                    target_type="intent_field",
+                    target_id=None,
+                    target_key=field["field"],
+                    from_hash=baseline["id"],
+                    to_hash=intent_version_id,
+                    origin=field["origin"],
+                    target_agreed=agreed_item,
+                    user_directed=user_directed
+                    and field["origin"]
+                    in (
+                        ContentOrigin.USER_REQUIREMENT.value,
+                        ContentOrigin.PROJECT_RULE.value,
+                    ),
+                )
+                detected.append(field["field"])
+
+            base_criteria = {
+                c["criterion_key"]: c
+                for c in self.conn.execute(
+                    "SELECT * FROM success_criterion WHERE intent_version_id = ?",
+                    (baseline["id"],),
+                ).fetchall()
+            }
+            now_criteria = {
+                c["criterion_key"]: c
+                for c in self.conn.execute(
+                    "SELECT * FROM success_criterion WHERE intent_version_id = ?",
+                    (intent_version_id,),
+                ).fetchall()
+            }
+            for key, before in base_criteria.items():
+                after = now_criteria.get(key)
+                if after is not None and _criterion_fingerprint(
+                    after
+                ) == _criterion_fingerprint(before):
+                    continue
+                # **삭제와 변경을 같은 사유로 본다.** 기준이 사라진 것과 내용이
+                # 바뀐 것은 둘 다 "합의한 기준이 그대로가 아니다"이며, 완료 판정을
+                # 쉽게 만드는 방향의 변경이 정확히 여기서 일어난다(D-60).
+                self._record_delta(
+                    case_id,
+                    change_class=DeltaChangeClass.SUCCESS_CRITERION,
+                    target_type="success_criterion",
+                    target_id=(after or before)["id"],
+                    target_key=key,
+                    from_hash=_criterion_fingerprint(before),
+                    to_hash=_criterion_fingerprint(after) if after else None,
+                    # 기준에는 출처 컬럼이 없다. **없는 값을 지어내지 않는다** —
+                    # `origin = None` 은 분류에서 보수적인 쪽(material)으로 읽힌다.
+                    origin=None,
+                    target_agreed=True,
+                    user_directed=user_directed,
+                )
+                detected.append(key)
+            for key, after in now_criteria.items():
+                if key in base_criteria:
+                    continue
+                self._record_delta(
+                    case_id,
+                    change_class=DeltaChangeClass.SUCCESS_CRITERION,
+                    target_type="success_criterion",
+                    target_id=after["id"],
+                    target_key=key,
+                    from_hash=None,
+                    to_hash=_criterion_fingerprint(after),
+                    origin=None,
+                    # 동의된 버전에 없던 기준이다. 범위 추가이므로 확인 대상이지만
+                    # 사용자 지시에서 왔다면 위임 기준이 갱신된다.
+                    target_agreed=True,
+                    user_directed=user_directed,
+                )
+                detected.append(key)
+        return self.list_material_deltas(case_id)
+
+    def _last_agreed_intent_version(
+        self, case_id: str, before: int
+    ) -> dict[str, Any] | None:
+        """이 버전 **이전에** 사람이 동의한 가장 최근 의도 버전.
+
+        `before` 를 받는 이유는 자기 자신을 기준으로 삼지 않기 위해서다. 새 버전에
+        동의가 붙는 것은 나중 일이고, 붙고 나면 그 버전이 다음 비교의 기준이 된다.
+        """
+        row = self.conn.execute(
+            "SELECT iv.* FROM decision d"
+            " JOIN intent_version iv ON iv.id = d.subject_id"
+            " WHERE d.kind = ? AND d.subject_type = 'intent_version' AND d.case_id = ?"
+            "   AND d.revoked_at IS NULL AND iv.revision < ?"
+            " ORDER BY iv.revision DESC LIMIT 1",
+            (DecisionKind.INTENT_AGREEMENT.value, case_id, before),
+        ).fetchone()
+        return _row_to_dict(row)
 
     def list_intent_fields(self, intent_version_id: str) -> list[dict[str, Any]]:
         """항목 목록. **Profile 이 정한 순서**로 돌려준다.
@@ -1986,13 +2217,20 @@ class Repository:
                 )
             else:
                 gate_result_id = existing["id"]
-                ai_verdict = GateVerdict(existing["ai_verdict"])
+                # **AI 판정을 그대로 합치지 않는다**(P3-R4). 합칠 대상은 "요구를
+                # 충족하는 정합성 확인"이며, 가벼운 확인이 요구를 충족하면 그쪽이
+                # 쓰인다. 독립 검토 결과는 `ai_verdict` 에 그대로 남는다.
+                _, conformance_verdict = self._conformance_for_gate(
+                    intent_version_id, detail["case_id"]
+                )
                 self.conn.execute(
                     "UPDATE gate_result SET rule_verdict = ?, verdict = ?, evaluated_at = ?,"
                     " subject_content_hash = ? WHERE id = ?",
                     (
                         rule_verdict.value,
-                        gatemod.combine_verdicts(rule_verdict, ai_verdict).value,
+                        gatemod.combine_verdicts(
+                            rule_verdict, conformance_verdict
+                        ).value,
                         now,
                         detail["content_hash"],
                         gate_result_id,
@@ -2055,12 +2293,29 @@ class Repository:
         rule_verdict = GateVerdict(existing["rule_verdict"])
         now = utc_now()
         with transaction(self.conn):
+            # **독립 검토도 정합성 확인 한 건으로 기록한다**(P3-R4). 게이트 판정은
+            # 그 기록에서 나오며, 가벼운 확인과 **같은 표에 다른 방식으로** 남는다.
+            # 두 방식을 한 컬럼으로 합치면 무엇을 실제로 했는지가 사라진다.
+            self._upsert_conformance_check(
+                case_id=detail["case_id"],
+                intent_version_id=intent_version_id,
+                method=ConformanceMethod.INDEPENDENT,
+                verdict=ai_verdict,
+                run_id=run_id,
+                subject_content_hash=detail["content_hash"],
+                unverified_scope=None,
+                reasons=[],
+                now=now,
+            )
+            _, conformance_verdict = self._conformance_for_gate(
+                intent_version_id, detail["case_id"]
+            )
             self.conn.execute(
                 "UPDATE gate_result SET ai_verdict = ?, verdict = ?, ai_run_id = ?,"
                 " ai_session_ref = ?, author_session_ref = ?, reviewed_at = ? WHERE id = ?",
                 (
                     ai_verdict.value,
-                    gatemod.combine_verdicts(rule_verdict, ai_verdict).value,
+                    gatemod.combine_verdicts(rule_verdict, conformance_verdict).value,
                     run_id,
                     review_session,
                     author_session,
@@ -2229,6 +2484,14 @@ class Repository:
                                                        instruction_artifact_id,
                                                        instruction_artifact_rev)
             ),
+            # **Autonomy·목적·누적 변경도 지금 DB 에서 다시 읽는다**(P3-R4). 같은
+            # 규칙이다 — 메모리에 "이 Case 는 시작 확인을 받았다"를 두면 재시작으로
+            # 우회된다(FR-29).
+            checkpoint_state=self.checkpoint_state(case_id),
+            case_profile=case.get("profile"),
+            objective_widened=self.objective_widened(case_id),
+            material_delta_state=self.material_delta_state(case_id),
+            fast_lane=self.fast_lane_state(case_id),
         )
         return evaluate_admission(request)
 
@@ -2466,11 +2729,123 @@ class Repository:
                 )
         return self.list_success_criteria(intent_version_id)
 
+    def _carry_unaffected_results(self, intent_version_id: str) -> None:
+        """이전 버전의 기준 판정 중 **내용이 그대로인 것**을 새 버전으로 잇는다.
+
+        새 의도 버전이 생기면 이전 기준은 전부 `superseded` 가 되고 그 판정은
+        `needs_recheck` 가 된다(`create_intent_version`). 그 규칙은 "의도가 바뀌면
+        연결된 성공 기준을 재검토한다"를 지키지만, **한 항목만 고친 피드백 하나가
+        모든 검증을 무효로 만든다.** intent-artifacts 69행은 반대를 요구한다 —
+        "의도가 바뀌면 연결된 설계·계획·성공 기준을 재검토하고, **영향이 없는 기록은
+        유지한다**".
+
+        그래서 지문이 같은 기준만 판정을 잇는다. 요약·확인 방법·연결 항목이 하나라도
+        다르면 잇지 않는다 — 제어부가 관측할 수 있는 범위에서 "같다"를 말할 수 없기
+        때문이다.
+
+        **잇는 것은 판정과 근거뿐이다.** 어느 버전에서 그 판정이 나왔는지는 근거
+        실행·산출물 참조가 그대로 말한다. 이어진 판정에 `recheck_source` 를 남겨
+        "이번 버전에서 다시 확인한 것이 아니다"를 드러낸다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        previous = self.conn.execute(
+            "SELECT * FROM intent_version WHERE case_id = ? AND revision < ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (intent["case_id"], intent["revision"]),
+        ).fetchone()
+        if previous is None:
+            return
+        before = {
+            c["criterion_key"]: c
+            for c in self.conn.execute(
+                "SELECT * FROM success_criterion WHERE intent_version_id = ?",
+                (previous["id"],),
+            ).fetchall()
+        }
+        if not before:
+            return
+        # 이 버전에서 **바뀐 의도 항목**. 그 항목을 가리키는 기준은 영향을 받는다.
+        changed_fields = {
+            f["field"]
+            for f in self.list_intent_fields(intent_version_id)
+            if f["change_from_prev"] == FieldChange.CHANGED.value
+        }
+        carried_keys: set[str] = set()
+        for crit in self.conn.execute(
+            "SELECT * FROM success_criterion WHERE intent_version_id = ?",
+            (intent_version_id,),
+        ).fetchall():
+            old_crit = before.get(crit["criterion_key"])
+            if old_crit is None:
+                continue
+            if _criterion_fingerprint(old_crit) != _criterion_fingerprint(crit):
+                continue
+            # **그 기준이 가리키는 의도 항목이 바뀌었으면 잇지 않는다.**
+            #
+            # 기준의 문구가 그대로여도 그것이 검증하는 의도가 바뀌었으면 옛 판정은
+            # 다른 것을 확인한 결과다. 지문만 보면 "기대 결과가 바뀌었는데 기준
+            # 문구는 그대로"인 경우에 옛 `met` 이 새 의도에 그대로 붙는다.
+            if crit["relates_to"] in changed_fields:
+                continue
+            old_result = self.conn.execute(
+                "SELECT * FROM criterion_result WHERE criterion_id = ?", (old_crit["id"],)
+            ).fetchone()
+            if old_result is None:
+                continue
+            # 이어 갈 값이 없는 판정은 잇지 않는다. `unverified`·`needs_recheck` 는
+            # "아직 모른다"이며 그것을 옮겨 적을 이유가 없다.
+            if old_result["verdict"] in (
+                CriterionVerdict.UNVERIFIED.value,
+                CriterionVerdict.NEEDS_RECHECK.value,
+            ):
+                continue
+            carried_keys.add(crit["criterion_key"])
+            self.conn.execute(
+                "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
+                " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
+                " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?,"
+                " satisfaction = ?, recheck_source = ?"
+                " WHERE criterion_id = ?",
+                (
+                    old_result["verdict"],
+                    old_result["evidence_kind"],
+                    old_result["evidence_run_id"],
+                    old_result["evidence_artifact_id"],
+                    old_result["evidence_artifact_rev"],
+                    old_result["summary"],
+                    old_result["recorded_by"],
+                    old_result["recorded_at"],
+                    old_result["composition_id"],
+                    old_result["satisfaction"],
+                    f"carried_from:{old_crit['id']}",
+                    crit["id"],
+                ),
+            )
+        # **이어지지 않은 판정만 재검토로 내린다.** 이어진 판정을 함께 내리면
+        # "영향이 없는 기록은 유지한다"가 다시 깨진다.
+        now = utc_now()
+        for key, old_crit in before.items():
+            if key in carried_keys:
+                continue
+            self.conn.execute(
+                "UPDATE criterion_result SET verdict = ?, recorded_at = ?"
+                " WHERE criterion_id = ? AND verdict != ?",
+                (
+                    CriterionVerdict.NEEDS_RECHECK.value,
+                    now,
+                    old_crit["id"],
+                    CriterionVerdict.NEEDS_RECHECK.value,
+                ),
+            )
+
     def list_success_criteria(self, intent_version_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT c.*, r.verdict, r.evidence_kind, r.evidence_run_id,"
             "       r.evidence_artifact_id, r.evidence_artifact_rev,"
-            "       r.summary AS result_summary, r.recorded_by, r.recorded_at"
+            "       r.summary AS result_summary, r.recorded_by, r.recorded_at,"
+            # **P3-R4: 어떻게 충족했는가와 그 판정이 이어진 것인가.** 화면이 "다시
+            # 확인한 판정"과 "이어진 판정"을 구별해야 한다(intent-artifacts 69행).
+            "       r.satisfaction, r.recheck_source"
             " FROM success_criterion c"
             " LEFT JOIN criterion_result r ON r.criterion_id = c.id"
             " WHERE c.intent_version_id = ?"
@@ -2507,6 +2882,7 @@ class Repository:
         evidence_artifact_id: str | None = None,
         evidence_artifact_rev: int | None = None,
         composition_id: str | None = None,
+        satisfaction: Satisfaction | None = None,
     ) -> dict[str, Any]:
         """기준별 판정을 기록한다.
 
@@ -2523,6 +2899,19 @@ class Repository:
         움직이는 브랜치 이름이 아니라 고정된 조합으로 대상을 묶어야 나중에 그 근거가
         아직 유효한지 답할 수 있다(execution-workspace-review 2.1절). 조회는 그
         유효성을 **저장하지 않고 도출한다**.
+
+        **`satisfaction` 은 어떻게 충족했는가다**(P3-R4·case-profiles 4절). 셋 중
+        하나이며 둘은 `met` 이 될 수 있고 하나는 될 수 없다.
+
+            changed_and_verified  바꾸고 확인했다
+            already_satisfied     바꾸지 않았고 이미 목표 상태임을 **검증 실행이
+                                  관측**했다. 코드 변경을 만들기 위해 불필요한 수정을
+                                  강제하지 않는다
+            not_reproduced        재현하지 못했다. **`met` 이 되지 않는다** —
+                                  "미재현만으로 버그 해결을 선언하지 않는다"
+
+        마지막 줄을 화면이 아니라 **여기서** 막는다. 문구로만 구별하면 API 직접
+        호출로 우회된다.
         """
         criterion = self.get_success_criterion(criterion_id)
         self.guard_open_case(criterion["case_id"])
@@ -2568,6 +2957,30 @@ class Repository:
                 if ref["availability"] == Availability.LOST_BEFORE_PERSIST.value:
                     raise ConflictError("evidence original was lost before persistence")
 
+            # --- P3-R4: 어떻게 충족했는가 --------------------------------
+            if satisfaction is not None:
+                if satisfaction.value not in SATISFACTION_ALLOWING_MET:
+                    raise ConflictError(
+                        f"cannot record 'met' with satisfaction='{satisfaction.value}':"
+                        " not reproducing a defect is not evidence that it is fixed"
+                    )
+                if satisfaction.value in SATISFACTION_NEEDING_RUN_EVIDENCE and (
+                    evidence_kind is not EvidenceKind.RUN_OUTPUT
+                ):
+                    # 코드를 바꾸지 않고 "이미 목표 상태다"라고 말하려면 **그것을
+                    # 관측한 실행**이 있어야 한다. 사람 판단만으로 적으면 미재현과
+                    # 구별되지 않는다(case-profiles 4절 마지막 문단).
+                    raise ConflictError(
+                        "satisfaction='already_satisfied' needs run_output evidence:"
+                        " a verification run must have observed the target state"
+                    )
+        elif satisfaction is Satisfaction.CHANGED_AND_VERIFIED:
+            # 충족하지 않은 판정에 "바꾸고 확인했다"를 붙이지 않는다. 기록이
+            # 판정과 어긋나면 나중에 어느 쪽이 사실인지 물을 수 없다.
+            raise ConflictError(
+                "satisfaction='changed_and_verified' does not fit a non-met verdict"
+            )
+
         if composition_id is not None:
             composition = self.get_code_composition(composition_id)
             if composition["case_id"] != criterion["case_id"]:
@@ -2578,7 +2991,8 @@ class Repository:
             self.conn.execute(
                 "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
                 " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
-                " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?"
+                " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?,"
+                " satisfaction = ?, recheck_source = NULL"
                 " WHERE criterion_id = ?",
                 (
                     verdict.value,
@@ -2590,9 +3004,14 @@ class Repository:
                     recorded_by,
                     now,
                     composition_id,
+                    satisfaction.value if satisfaction is not None else None,
                     criterion_id,
                 ),
             )
+        # **기준 판정이 마지막 조건일 때가 많다.** 여기서 자동 완료를 시도하지 않으면
+        # 기본 ask-on-decision 의 "조건 충족 시 자동 완료"(D-31)가 사람이 버튼을 눌러야
+        # 일어나는 일이 되고, 그것은 자동 완료가 아니다.
+        self.maybe_auto_complete(criterion["case_id"])
         return self.get_criterion_result(criterion_id)
 
     def get_criterion_result(self, criterion_id: str) -> dict[str, Any]:
@@ -2612,13 +3031,43 @@ class Repository:
     # ----------------------------------------------------------- 완료 정책
 
     def completion_mode(self, case_id: str) -> CompletionMode:
-        """Case 의 완료 정책. **행이 없으면 기본값(사람 최종 확인)이다**(D-31)."""
+        """Case 의 완료 정책.
+
+        **P3-R4에서 바뀌었다.** v0.6 에서는 행이 없으면 사람 최종 확인이었다. 이제
+        행이 없으면 **Autonomy 에서 도출한다**(D-31) — 기본 ask-on-decision 은 조건을
+        충족하면 자동 완료하고 controlled 는 결과 후보 확인 뒤 종료한다.
+
+        **명시 설정은 그대로 이긴다.** 행이 있으면 도출하지 않는다
+        (autonomy-budget-policy 5절 "사용자 명시 설정을 조용히 덮어쓰지 않는다").
+        R4 이전에 설정된 행은 이행이 `source = migrated_explicit` 로 적어 두었고,
+        그것도 명시 설정이다 — 그때는 도출 경로 자체가 없었다.
+        """
+        return CompletionMode(self.completion_mode_state(case_id)["mode"])
+
+    def completion_mode_state(self, case_id: str) -> dict[str, Any]:
+        """완료 모드와 **그 값이 어디서 왔는가.**
+
+        출처를 함께 돌려주는 이유는 화면이 "사람이 정한 값"과 "Autonomy 에서 도출한
+        값"을 구별해야 하기 때문이다. 둘을 같은 모양으로 보이면 사용자가 고르지 않은
+        자동 완료가 사용자의 설정처럼 읽힌다.
+        """
         row = self.conn.execute(
-            "SELECT mode FROM completion_policy WHERE case_id = ?", (case_id,)
+            "SELECT mode, source, set_by FROM completion_policy WHERE case_id = ?",
+            (case_id,),
         ).fetchone()
-        if row is None:
-            return CompletionMode.HUMAN_ACCEPTANCE
-        return CompletionMode(row["mode"])
+        if row is not None:
+            return {
+                "mode": row["mode"],
+                "source": row["source"] or "case_explicit",
+                "set_by": row["set_by"],
+            }
+        autonomy = self.effective_autonomy(case_id)
+        return {
+            "mode": derived_completion_mode(autonomy).value,
+            "source": "autonomy_derived",
+            "set_by": None,
+            "effective_autonomy": autonomy.value.value,
+        }
 
     def set_completion_mode(
         self, case_id: str, mode: CompletionMode, set_by: str
@@ -2627,10 +3076,11 @@ class Repository:
         self.guard_open_case(case_id)
         with transaction(self.conn):
             self.conn.execute(
-                "INSERT INTO completion_policy (case_id, mode, set_by, set_at)"
-                " VALUES (?, ?, ?, ?)"
+                "INSERT INTO completion_policy (case_id, mode, set_by, set_at, source)"
+                " VALUES (?, ?, ?, ?, 'case_explicit')"
                 " ON CONFLICT(case_id) DO UPDATE SET"
-                "   mode = excluded.mode, set_by = excluded.set_by, set_at = excluded.set_at",
+                "   mode = excluded.mode, set_by = excluded.set_by,"
+                "   set_at = excluded.set_at, source = 'case_explicit'",
                 (case_id, mode.value, set_by, utc_now()),
             )
         return {"case_id": case_id, "mode": mode.value, "set_by": set_by}
@@ -2853,13 +3303,14 @@ class Repository:
                 f"{AcceptanceRefusal.CANDIDATE_SUPERSEDED.value}:"
                 " this candidate was replaced; review the current one"
             )
-        if self.completion_mode(candidate["case_id"]) is CompletionMode.AUTO_ON_CONDITIONS:
-            # 자동 완료 모드가 예외를 수용하지 않는다는 규칙은 요청 경로에서도
-            # 막아야 한다. 정책을 사람 확인으로 되돌린 뒤에 수용해야 한다.
-            raise ConflictError(
-                f"{AcceptanceRefusal.AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION.value}:"
-                " switch the case back to human acceptance to decide an exception"
-            )
+        # **P3-R4에서 걷어낸 거부.** 여기서는 완료 모드가 자동이면 사람의 예외 수용
+        # 까지 거부하고 "사람 확인으로 되돌린 뒤 수용하라"고 답했다. v0.7 에서 자동이
+        # **기본**이 되므로 그대로 두면 기본 Case 에서 사람이 예외를 수용할 수 없다 —
+        # D-32 와 completion-lifecycle 4절에 어긋난다.
+        #
+        # 막아야 하는 것은 "자동 정책이 **스스로** 예외를 수용하는 것"이고, 그 검사는
+        # `check_acceptance(AUTO_POLICY)` 에 그대로 있다. 두 문장은 다른 규칙이며
+        # 여기서 합치면 사람의 결정 경로가 정책 설정에 묶인다.
         criterion = self.get_success_criterion(target_id)
         if criterion["case_id"] != candidate["case_id"]:
             raise ConflictError("exception target belongs to a different case")
@@ -2966,6 +3417,47 @@ class Repository:
         # 자동 모드는 예외를 스스로 수용하지 않는다. 예외가 걸린 후보는 사람만 닫는다.
         if mode is AcceptanceMode.AUTO_POLICY and candidate["exceptions"]:
             refusals.append(AcceptanceRefusal.AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION)
+
+        # --- P3-R4: controlled 의 확인 순서 --------------------------------
+        #
+        # D-65 의 순서에서 **종료 직전의 선행 조건**이다. 확인한 후보의 내용이
+        # 달라졌으면 이전 확인을 새 후보에 쓰지 않고, 같은 내용의 재전송에는 재확인을
+        # 요구하지 않는다 — 그 구별이 `subject_hash` 비교에 있다.
+        refusals.extend(self._controlled_closure_refusals(candidate))
+
+        # 확인되지 않은 누적 변경이 남은 채로 종료하지 않는다(D-60). 미확인 변경은
+        # "이 결과가 무엇에 대한 것인가"를 흔드는 상태이며, 그대로 닫으면 사용자가
+        # 위임하지 않은 의미의 결과를 완료로 받는다.
+        if self.pending_material_deltas(candidate["case_id"]):
+            refusals.append(AcceptanceRefusal.MATERIAL_DELTA_UNCONFIRMED)
+        return refusals
+
+    def _controlled_closure_refusals(
+        self, candidate: dict[str, Any]
+    ) -> list[AcceptanceRefusal]:
+        """controlled 의 확인 지점이 이 후보의 종료를 허용하는가(P3-R4·D-65).
+
+        세 가지를 나눠 보는 이유는 사람이 해야 할 일이 다르기 때문이다.
+
+            시작 확인이 없다      시작 범위를 확인한다
+            결과 확인이 없다      이 후보를 확인한다
+            확인이 낡았다         바뀐 후보를 다시 본다
+
+        **같은 내용의 재전송은 셋 중 어느 것도 아니다.** 후보 해시가 같으면 이전
+        확인이 그대로 유효하며, 그 판단을 `subject_hash` 비교 하나로 한다.
+        """
+        state = self.checkpoint_state(candidate["case_id"])
+        if not state["required"]:
+            return []
+        refusals: list[AcceptanceRefusal] = []
+        if not state["start_confirmed"]:
+            refusals.append(AcceptanceRefusal.CONTROLLED_START_NOT_CONFIRMED)
+        if not state["result_confirmed"]:
+            refusals.append(AcceptanceRefusal.CONTROLLED_RESULT_NOT_CONFIRMED)
+        elif state["result_subject_hash"] != candidate["snapshot_hash"]:
+            # 확인한 대상이 지금 후보가 아니다. **확인 기록은 남는다** — 무엇을 보고
+            # 확인했는지가 사라지면 나중에 그 결정을 설명할 수 없다(FR-23).
+            refusals.append(AcceptanceRefusal.CONTROLLED_CONFIRMATION_STALE)
         return refusals
 
     def record_final_acceptance(
@@ -3094,6 +3586,37 @@ class Repository:
             "acceptance": acceptance,
             "candidate": self.get_completion_candidate(candidate["id"]),
         }
+
+    def maybe_auto_complete(self, case_id: str) -> dict[str, Any] | None:
+        """조건이 갖춰졌으면 **시스템이** 자동 완료한다(P3-R4·D-31).
+
+        `auto_complete_if_allowed()` 와 다른 점 하나: **후보를 먼저 만들지 않는다.**
+        저쪽은 사람이 "지금 완료할 수 있는가"를 물은 것이므로 못 하는 이유를 보여
+        주려고 후보를 만든다. 이쪽은 시스템이 실행 결과·기준 판정마다 부르는 자리라,
+        조건이 갖춰지지 않았는데 후보를 만들면 아직 진행 중인 Case 가 매번
+        `waiting_final_acceptance` 로 표시된다.
+
+        그래서 **저장하지 않는 스냅샷으로 먼저 본다.** 남은 항목이나 결과를 확정할
+        수 없는 실행이 있으면 아무 것도 하지 않는다.
+
+        조용히 실패하지 않는다 — 판단은 `check_acceptance` 가 하고 여기서 예외를
+        삼키지 않는다. 자동 완료가 실패하면 그 원인은 드러나야 한다.
+        """
+        if self.case_is_closed(case_id):
+            return None
+        if self.completion_mode(case_id) is not CompletionMode.AUTO_ON_CONDITIONS:
+            return None
+        snapshot = self._candidate_snapshot(case_id)
+        if snapshot["unresolved"] or snapshot["unsettled_runs"]:
+            return None
+        if snapshot["criteria_total"] == 0:
+            # 견줄 기준이 없으면 "미해결 0건"이 되어 아무 것도 확인하지 않은 결과가
+            # 조용히 통과한다. `check_acceptance` 가 같은 규칙을 갖고 있지만, 후보를
+            # 만들기 전에 여기서도 멈춘다 — 빈 통과를 만들지 않는다(FR-17).
+            return None
+        if self.pending_material_deltas(case_id):
+            return None
+        return self.auto_complete_if_allowed(case_id)
 
     # ------------------------------------------------- 종료 후 새 Case
 
@@ -3364,6 +3887,11 @@ class Repository:
     STAGE_ARTIFACT_KIND = {
         PreparationStage.DESIGN: ArtifactKind.DESIGN,
         PreparationStage.PLAN: ArtifactKind.DEV_PLAN,
+        # P3-R4. 결합 기록은 **계획 산출물 종류를 그대로 쓴다.** 새 `ArtifactKind`
+        # 를 만들지 않는 이유는 그 종류가 Runner 의 원문 보관·조회 경로에 쓰이고,
+        # 값을 늘리면 옛 Runner 가 모르는 종류를 받기 때문이다. 결합 기록이 계획의
+        # 자리를 대신한다는 사실은 `stage` 가 말한다.
+        PreparationStage.COMBINED: ArtifactKind.DEV_PLAN,
     }
 
     def create_preparation_artifact(
@@ -3404,6 +3932,13 @@ class Repository:
             if design is None:
                 raise ConflictError("a development plan needs a current design to build on")
             based_on_design_id = design["id"]
+        if stage is PreparationStage.COMBINED:
+            # **결합 기록은 설계를 선행 조건으로 받지 않는다.** 그것이 Fast Lane 이
+            # 줄이는 것이고(D-60), 대신 Fast Lane 조건 자체가 선행 조건이 된다 —
+            # 조건이 아니면 진입 검사가 `fast_lane_left_needs_preparation` 으로
+            # 거부한다. 여기서 막지 않는 이유는 **기록을 남기는 것은 언제나 허용**
+            # 하기 때문이다. 막는 것은 그 기록으로 실행을 여는 일이다.
+            pass
 
         row = self.conn.execute(
             "SELECT MAX(revision) AS r FROM preparation_artifact WHERE case_id = ? AND stage = ?",
@@ -3620,16 +4155,41 @@ class Repository:
         # **Task 0건이면 그래프를 만들지 않는다** — 빈 그래프를 만들어 두면
         # `work_graph_missing` 과 "Task 가 전부 취소된 그래프"를 구별할 수 없다.
         task_rows = list(tasks or [])
-        if stage is PreparationStage.PLAN and task_rows:
+        if stage in (PreparationStage.PLAN, PreparationStage.COMBINED) and task_rows:
             self.create_work_graph_revision(
                 case_id=prep["case_id"],
                 plan_preparation_id=prep_id,
                 tasks=task_rows,
                 source=WorkGraphSource.PLAN_ARTIFACT,
-                reason_summary=f"개발계획 v{prep['revision']} 이 정의한 작업",
+                reason_summary=f"{stage.value} v{prep['revision']} 이 정의한 작업",
                 actor=self.PLAN_GRAPH_ACTOR,
             )
+        # **자동 진행 조건이 갖춰진 순간 기록한다**(P3-R4). 구조 보고가 필수 항목을
+        # 채우는 시점이 그 순간이고, 사람이 버튼을 눌러야 기록된다면 "자동 진행"이
+        # 아니다(D-16 "설계·계획의 사람 검토는 선택 사항").
+        #
+        # **생략이 아니다.** `record_auto_proceed()` 의 조건(산출물 존재·필수 항목·
+        # 원문 가용)은 그대로이며, 못 갖추면 `awaiting_auto_conditions` 로 남는다.
+        # 사람 검토로 설정된 단계에서는 아무 것도 하지 않는다.
+        self._record_auto_proceed_if_ready(prep["case_id"], stage, prep_id)
         return self.get_preparation_artifact(prep_id)
+
+    def _record_auto_proceed_if_ready(
+        self, case_id: str, stage: PreparationStage, prep_id: str
+    ) -> None:
+        """조건이 갖춰졌으면 자동 진행을 기록한다. 아니면 조용히 둔다.
+
+        **사람 승인으로 적지 않는다.** `record_auto_proceed()` 가 `decision` 행을
+        만들지 않고 actor 를 정책 식별자로 두는 계약을 그대로 쓴다.
+        """
+        if self.stage_review_mode(case_id, stage) is not ReviewMode.AUTO_PROCEED:
+            return
+        try:
+            self.record_auto_proceed(case_id, stage, prep_id)
+        except ConflictError:
+            # 필수 항목이 미정이거나 원문을 읽을 수 없다. 그것이 정상 상태이며
+            # 화면이 `awaiting_auto_conditions` 로 보인다. 조건을 만들어 주지 않는다.
+            return
 
     def effective_required_sections(self, prep_id: str) -> frozenset[str]:
         """이 산출물에 **지금** 요구되는 항목.
@@ -3676,16 +4236,26 @@ class Repository:
     # ------------------------------------------------ P3-01 단계별 사람 검토
 
     def stage_review_mode(self, case_id: str, stage: PreparationStage) -> ReviewMode:
-        """이 단계의 검토 방식. **행이 없으면 사람 검토다**(D-14 프로젝트 기본값).
+        """이 단계의 검토 방식.
 
-        없음을 자동 진행으로 읽으면 기본값이 조용히 뒤집힌다. 그래서 기본값을
-        이 한 곳에서만 해석한다.
+        **P3-R4에서 바뀌었다.** v0.6 기본값은 사람 검토였다(D-14 시절). v0.7 에서
+        설계·계획의 사람 검토는 **선택 사항**이고(D-16·D-21), controlled 에서도
+        그렇다(D-65 "설계·계획의 사람 검토는 별도 선택"). 그래서 행이 없으면
+        Autonomy 에서 도출한다.
+
+        **Autonomy 가 기록되지 않은 Case 는 v0.6 기본값을 유지한다.** 사람이 검토하기로
+        하고 진행하던 업무가 조용히 통과하는 일을 만들지 않는다 — 이 한 줄이 소급
+        금지의 구현이고, `domain.progression.derived_review_mode` 가 그 판단을 갖는다.
+
+        Case 명시 설정은 그대로 이긴다. 기본값 해석은 여전히 이 한 곳뿐이다.
         """
         row = self.conn.execute(
             "SELECT mode FROM stage_review_setting WHERE case_id = ? AND stage = ?",
             (case_id, PreparationStage(stage).value),
         ).fetchone()
-        return ReviewMode(row["mode"]) if row else ReviewMode.HUMAN_REVIEW
+        if row is not None:
+            return ReviewMode(row["mode"])
+        return derived_review_mode(self.effective_autonomy(case_id))
 
     def set_stage_review_mode(
         self,
@@ -3763,7 +4333,25 @@ class Repository:
             )
         existing = self.get_stage_review(prep_id)
         if existing is not None:
-            return existing
+            if existing["state"] == StageReviewState.HUMAN_REVIEWED.value:
+                return existing
+            # **자동 조건 충족 기록을 사람 검토로 올린다**(P3-R4).
+            #
+            # R4 이전에는 이 상태가 생길 수 없었다 — 자동 진행 기록은 사람이 따로
+            # 요청해야 만들어졌고, 그런 Case 에서 사람 검토를 또 요청할 이유가
+            # 없었다. 이제 조건이 갖춰지는 순간 시스템이 기록하므로, 그 뒤에 사람이
+            # 실제로 검토하는 일이 생긴다.
+            #
+            # 그대로 돌려주면 **실제로 있었던 사람의 검토가 사라진다.** 그것이 이
+            # 분기가 있는 이유다. 반대로 두 행을 함께 두는 것은 `UNIQUE
+            # (preparation_id)` 가 막고, 그 제약은 "이 산출물의 검토 상태는 하나"라는
+            # 사실을 지키므로 풀지 않는다.
+            #
+            # 사람 검토가 자동 조건 충족보다 **강한 사실**이므로 그쪽이 남는다.
+            # 없는 사람의 검토를 만드는 방향이 아니라 있었던 검토를 적는 방향이다.
+            self.conn.execute(
+                "DELETE FROM stage_review WHERE id = ?", (existing["id"],)
+            )
         kind = (
             DecisionKind.DESIGN_REVIEW
             if stage is PreparationStage.DESIGN
@@ -3896,8 +4484,30 @@ class Repository:
             "stage": stage.value,
             "mode": mode.value,
             # 기본값으로 읽은 것인지 사람이 정한 것인지 구별한다.
-            "mode_source": "project_default" if setting is None else "case_setting",
-            "mode_reason": (setting["reason_summary"] if setting else "프로젝트 기본값"),
+            #
+            # **P3-R4에서 기본값의 출처가 달라졌다.** 이제 Autonomy 에서 도출하므로
+            # `project_default` 라고 적으면 사람이 없는 프로젝트 설정 화면을 찾게
+            # 된다. 취급 중인 Case(R1 이전)는 v0.6 기본값을 그대로 쓰며 그 사실도
+            # 값으로 구별한다.
+            "mode_source": (
+                "case_setting"
+                if setting is not None
+                else (
+                    "migrated_default"
+                    if self.effective_autonomy(case_id).is_treatment
+                    else "autonomy_derived"
+                )
+            ),
+            "mode_reason": (
+                setting["reason_summary"]
+                if setting
+                else (
+                    "Autonomy 가 기록되지 않아 v0.6 기본값(사람 검토)을 유지한다"
+                    if self.effective_autonomy(case_id).is_treatment
+                    else "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택"
+                    " 사항이다(D-16·D-65)"
+                )
+            ),
             "artifact": current,
             "review": review,
             "state": state.value,
@@ -3937,6 +4547,13 @@ class Repository:
             "sizing_history": self.list_sizing_assessments(case_id),
             "design": self.stage_state(case_id, PreparationStage.DESIGN),
             "plan": self.stage_state(case_id, PreparationStage.PLAN),
+            # P3-R4. Fast Lane 의 결합 기록. **없는 것이 정상이다** — 일반 경로는
+            # 설계·계획 두 건이고, 이 항목이 비어 있다는 사실이 "Fast Lane 을 쓰지
+            # 않았다"이지 "준비가 모자라다"가 아니다.
+            "combined": self.stage_state(case_id, PreparationStage.COMBINED),
+            # 그 결합 기록이 지금 선행 조건을 충족할 수 있는지는 Fast Lane 조건이
+            # 정한다. 화면·진입 검사가 같은 판정을 본다.
+            "fast_lane": self.fast_lane_state(case_id),
             "deferred_open_questions": self.deferred_open_questions(case_id),
             # P3-02. 준비 조건 **위에 얹히는** 상태다. 계획 검토가 끝났다는 사실과
             # 무엇을 어떤 순서로 만들지가 정해졌다는 사실은 다른 것이다.
@@ -3992,6 +4609,11 @@ class Repository:
                         design["artifact_rev"],
                     )
                 plan = self.current_preparation(case_id, PreparationStage.PLAN)
+                if plan is None:
+                    # **Fast Lane 의 이전 기록은 결합 기록이다**(P3-R4). 주지 않으면
+                    # 다시 쓰는 실행이 앞선 내용을 보지 못해 처음부터 다시 쓴다 —
+                    # P2-04가 라이브에서 실제로 겪은 퇴화다.
+                    plan = self.current_preparation(case_id, PreparationStage.COMBINED)
                 if plan is not None:
                     add(ContextRefRole.PREVIOUS_PLAN, plan["artifact_id"], plan["artifact_rev"])
         return refs
@@ -4043,14 +4665,22 @@ class Repository:
         (sizing-and-review-ux 6절 "총점 하나와 녹색 표시만 보여주지 않는다").
         """
         self.get_case(case_id)
+        mode = self.completion_mode_state(case_id)
         return {
             "case_id": case_id,
-            "completion_mode": self.completion_mode(case_id).value,
+            "completion_mode": mode["mode"],
+            # **어디서 온 값인지 함께 말한다**(P3-R4). 사람이 고른 설정과 Autonomy 에서
+            # 도출한 값을 같은 모양으로 보이면 고르지 않은 자동 완료가 사용자의
+            # 설정처럼 읽힌다.
+            "completion_mode_source": mode["source"],
             "criteria": self.current_criteria(case_id),
             "unsettled_runs": self.unsettled_runs(case_id),
             "candidate": self.current_completion_candidate(case_id),
             "closure": self.get_closure(case_id),
             "relations": self.list_case_relations(case_id),
+            # controlled 의 확인 순서가 지금 무엇을 기다리는가. 화면이 "무엇을
+            # 해야 하는가"를 말할 수 있어야 한다(FR-14).
+            "controlled": self.checkpoint_state(case_id),
         }
 
     # ===================================================== P3-02 작업 그래프
@@ -4149,7 +4779,13 @@ class Repository:
         self.get_case(case_id)
         self.guard_open_case(case_id)
         prep = self.get_preparation_artifact(plan_preparation_id)
-        if PreparationStage(prep["stage"]) is not PreparationStage.PLAN:
+        # **설계 위에는 그래프를 세우지 않는다.** 결합 기록은 계획의 자리를 대신하므로
+        # 여기 포함된다(P3-R4) — 빼면 Fast Lane Case 는 Task 를 정의하고도 영원히
+        # `work_graph_missing` 이 된다.
+        if PreparationStage(prep["stage"]) not in (
+            PreparationStage.PLAN,
+            PreparationStage.COMBINED,
+        ):
             raise ConflictError("a work graph is built on a development plan, not a design")
         latest = self.latest_intent_version(case_id)
         if latest is None:
@@ -5351,17 +5987,26 @@ class Repository:
     #: 다르기 때문이다. hard 예산을 설정한 사람이 "이제 초과하지 않는다"고 믿으면
     #: 그것은 우리가 지원하지 않는 보장을 표시한 것이다(DEVELOPMENT.md 3절).
     ENFORCEMENT: dict[str, dict[str, str]] = {
+        # **P3-R4에서 바뀐 축.** Autonomy 가 진입 조건과 완료 경로를 실제로 정한다.
+        # 다만 방향이 둘이다 — controlled 는 **막고** ask-on-decision 은 **연다**.
+        # 둘을 한 문장으로 "강제한다"고 쓰면 기본 Case 에서 무엇이 달라졌는지가
+        # 보이지 않는다.
         "autonomy": {
-            "state": "recorded_not_enforced",
+            "state": "enforced",
             "enforced_by": "P3-R4",
-            "detail": "Autonomy 값은 기록된다. 목적별 진입 조건과 자동 실행 경로는 아직"
-            " v0.6 규칙대로 동작한다",
+            "detail": "controlled 는 시작 확인 전에 설계·계획·구현·검증·실험을"
+            " 배정하지 않는다. ask-on-decision 은 명확한 요청을 그 범위의 실행 위임으로"
+            " 인정해 추가 승인 없이 진행하고 조건 충족 시 자동 완료한다. 단계 검토"
+            " 기본값도 여기서 도출된다. 기록되지 않은 Autonomy(R1 이전)는 controlled"
+            " 로 **취급**하되 값은 여전히 미기록이다",
         },
         "controlled_checkpoint": {
-            "state": "recorded_not_enforced",
+            "state": "enforced",
             "enforced_by": "P3-R4",
-            "detail": "확인 지점과 확인 기록은 남지만 확인하지 않은 상태가 실행·게시를"
-            " 막지는 않는다",
+            "detail": "시작 확인은 작업 실행을, 결과 후보 확인은 종료를 막는다. 확인한"
+            " 후보의 내용이 바뀌면 이전 확인을 새 후보에 쓰지 않으며, 같은 내용의"
+            " 재전송에는 재확인을 요구하지 않는다. 확인이 push·게시 권한을 만들지는"
+            " 않는다 — 실제 게시는 P5 다",
         },
         # **P3-R3에서 바뀐 축.** 한도가 실제로 배정을 정한다. 다만 지표마다 약속할
         # 수 있는 것이 달라서 한 문장으로 "강제한다"고 쓰지 않는다 — 실행 수·컨텍스트
@@ -5466,6 +6111,7 @@ class Repository:
             policy_version = row["policy_version"]
             revision = row["revision"]
             recorded = autonomy is not None
+        effective = self.effective_autonomy(case_id)
         return {
             "case_id": case_id,
             "revision": revision,
@@ -5481,6 +6127,13 @@ class Repository:
             ),
             "work_depth_source": "sizing_assessment",
             "completion_mode": self.completion_mode(case_id).value,
+            "completion_mode_source": self.completion_mode_state(case_id)["source"],
+            # **적용되는 Autonomy 와 그 출처**(P3-R4). 저장된 값과 다를 수 있으며
+            # 다른 경우가 정확히 하나다 — R1 이전 Case 의 controlled 취급.
+            **effective.to_dict(),
+            "fast_lane": self.fast_lane_state(case_id),
+            "conformance": self.conformance_state(case_id),
+            "material_delta": self.material_delta_state(case_id),
             "profile": self.case_profile(case_id),
             "checkpoints": self.list_checkpoints(case_id),
             "budget": self.budget_state(case_id),
@@ -5656,11 +6309,51 @@ class Repository:
     # ------------------------------------------------ controlled 체크포인트
 
     def list_checkpoints(self, case_id: str) -> list[dict[str, Any]]:
+        """확인 지점 목록.
+
+        **취급 중인 Case 의 요구는 도출한다**(P3-R4). `autonomy = NULL` 인 Case 를
+        controlled 로 취급하기로 했으므로 확인 지점이 요구되지만, 그 행을 조회할
+        때마다 만들어 넣으면 읽기 경로가 쓰기가 된다. 그래서 **확인되기 전까지는
+        도출하고**, 사람이 실제로 확인할 때 행을 만든다(`_ensure_treated_checkpoints`).
+
+        도출된 항목은 `note_summary` 로 "사람이 고른 설정"과 구별된다.
+        """
         rows = self.conn.execute(
             "SELECT * FROM controlled_checkpoint WHERE case_id = ? ORDER BY created_at",
             (case_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        points = [dict(r) for r in rows]
+        autonomy = self.effective_autonomy(case_id)
+        if not (autonomy.is_treatment and autonomy.controlled):
+            return points
+        live = {
+            p["checkpoint"]
+            for p in points
+            if p["state"] != CheckpointState.SUPERSEDED.value
+        }
+        for checkpoint in ControlledCheckpoint:
+            if checkpoint.value in live:
+                continue
+            points.append(
+                {
+                    "id": None,
+                    "case_id": case_id,
+                    "policy_id": None,
+                    "checkpoint": checkpoint.value,
+                    "state": CheckpointState.REQUIRED.value,
+                    "subject_type": None,
+                    "subject_id": None,
+                    "subject_hash": None,
+                    "decision_id": None,
+                    "confirmed_by": None,
+                    "confirmed_at": None,
+                    "note_summary": self.TREATED_CHECKPOINT_NOTE,
+                    "created_at": None,
+                    "superseded_at": None,
+                    "derived": True,
+                }
+            )
+        return points
 
     def confirm_checkpoint(
         self,
@@ -5688,6 +6381,12 @@ class Repository:
         self._guard_policy_change(case_id)
         if not explicit:
             raise PolicyRefused([PolicyRefusal.NOT_EXPLICIT])
+        now = utc_now()
+        with transaction(self.conn):
+            # 취급 중인 Case 는 요구가 도출돼 있을 뿐 행이 없다. 사람이 실제로
+            # 확인하는 **이 시점에** 행을 만든다 — 조회가 쓰기를 하지 않게 하면서
+            # 확인 기록은 정상 경로와 같은 표에 남는다.
+            self._ensure_treated_checkpoints(case_id)
         row = self.conn.execute(
             "SELECT * FROM controlled_checkpoint"
             " WHERE case_id = ? AND checkpoint = ? AND state = ?",
@@ -5695,7 +6394,6 @@ class Repository:
         ).fetchone()
         if row is None:
             raise PolicyRefused([PolicyRefusal.CHECKPOINT_NOT_REQUIRED])
-        now = utc_now()
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE controlled_checkpoint SET state = ?, subject_type = ?,"
@@ -5712,7 +6410,35 @@ class Repository:
                     row["id"],
                 ),
             )
+        if checkpoint is ControlledCheckpoint.RESULT_CANDIDATE:
+            # **확인 뒤에는 시스템이 종료를 확정한다**(D-65 "…필요 외부 CI → 시스템
+            # 종료"). 사람이 또 한 번 "완료" 를 눌러야 하면 같은 내용의 확인을
+            # 두 번 요구하는 것이다(completion-lifecycle 3절 "결과 확인 뒤 같은
+            # 후보의 외부 조건이 충족되면 추가 인수 없이 완료한다").
+            #
+            # 남은 조건이 있으면 **확인만 기록되고 종료는 보류된다.** 확인을 되돌리지
+            # 않는다 — 사람이 실제로 본 사실은 조건이 갖춰지지 않았다고 사라지지 않는다.
+            self._close_after_controlled_confirmation(case_id, subject_id, confirmed_by)
         return self.list_checkpoints(case_id)
+
+    def _close_after_controlled_confirmation(
+        self, case_id: str, candidate_id: str, actor: str
+    ) -> None:
+        """결과 후보 확인 뒤의 종료 시도. **조건이 없으면 조용히 보류한다.**
+
+        인수의 주체는 확인한 사람이고 모드는 `human` 이다. 정책 식별자로 적지
+        않는다 — 여기에는 실제 사람의 확인이 있었다(FR-17 "자동 완료를 사람 확인으로
+        적지 않는다"의 반대 방향도 같다).
+        """
+        try:
+            candidate = self.get_completion_candidate(candidate_id)
+        except NotFoundError:
+            return
+        if candidate["case_id"] != case_id or candidate["acceptance"] is not None:
+            return
+        if self.check_acceptance(candidate_id, AcceptanceMode.HUMAN):
+            return
+        self.record_final_acceptance(candidate_id, actor=actor, mode=AcceptanceMode.HUMAN)
 
     def supersede_checkpoint(
         self, case_id: str, checkpoint: ControlledCheckpoint, reason_summary: str
@@ -5725,7 +6451,10 @@ class Repository:
         """
         self._guard_policy_change(case_id)
         policy = self._current_policy_row(case_id)
-        if policy is None or policy["autonomy"] != Autonomy.CONTROLLED.value:
+        # **취급 중인 Case 도 대상이다**(P3-R4). 저장된 값이 아니라 적용되는 값으로
+        # 판단한다 — `autonomy = NULL` 인 Case 도 controlled 로 취급되므로 확인한
+        # 대상이 바뀌면 같은 규칙으로 재확인을 요구해야 한다.
+        if policy is None or not self.effective_autonomy(case_id).controlled:
             raise PolicyRefused([PolicyRefusal.CHECKPOINT_NOT_REQUIRED])
         now = utc_now()
         with transaction(self.conn):
@@ -5755,6 +6484,630 @@ class Repository:
                 ),
             )
         return self.list_checkpoints(case_id)
+
+    # ============================================ P3-R4 자동 진행·진입·완료
+    #
+    # R1 이 기록만 하던 두 축(Autonomy·확인 지점)이 여기서 실제 배정과 종료를 정한다.
+    # 판정 자체는 `domain/progression.py` 에 있고 여기서는 **DB 에서 사실을 읽어
+    # 넘기고 결과를 기록**한다. 진입 검사·화면·시험이 모두 같은 함수를 보게 하기
+    # 위해서다 — R2 가 두 벌로 쓴 탓에 강제 표시 시험이 갱신 없이 통과했다.
+
+    def effective_autonomy(self, case_id: str) -> progression.EffectiveAutonomy:
+        """이 Case 에 **적용되는** Autonomy.
+
+        저장된 값과 다를 수 있는 경우가 하나 있다 — `autonomy = NULL` 인 R1 이전
+        Case 는 `controlled` 로 **취급**한다(사용자 결정 2026-09-22). 그래도 저장된
+        값은 그대로 `NULL`·`migrated_unknown` 이다. `controlled` 를 적어 넣으면 있지도
+        않은 사람의 선택을 기록하는 일이 된다(D-14·FR-23).
+        """
+        row = self._current_policy_row(case_id)
+        if row is None:
+            # 정책 행 자체가 없다(직접 SQL 삽입 등). 기본값을 적용하되 기록으로
+            # 취급하지 않는다 — `effective_policy` 가 `autonomy_recorded = False` 로
+            # 같은 사실을 말한다.
+            return effective_autonomy(Autonomy.ASK_ON_DECISION.value)
+        return effective_autonomy(row["autonomy"])
+
+    #: 취급으로 만들어진 확인 지점임을 남기는 문구. **사람이 고른 설정과 구별한다.**
+    TREATED_CHECKPOINT_NOTE = "미기록 Autonomy 를 controlled 로 취급(이행 정책)"
+
+    def _ensure_treated_checkpoints(self, case_id: str) -> None:
+        """취급 중인 Case 의 확인 지점을 만든다.
+
+        `set_autonomy()` 가 만드는 행과 **같은 표에 같은 모양으로** 들어간다. 다른
+        점은 `note_summary` 하나다 — 그 한 줄이 "사람이 controlled 를 골랐다"와
+        "기록이 없어 그렇게 취급한다"를 구별한다.
+
+        **확인된 행이 있으면 건드리지 않는다.** 사람이 실제로 확인한 기록은 어떤
+        경로로도 다시 쓰지 않는다.
+        """
+        autonomy = self.effective_autonomy(case_id)
+        if not autonomy.is_treatment or not autonomy.controlled:
+            return
+        policy = self._current_policy_row(case_id)
+        if policy is None:
+            return
+        now = utc_now()
+        for checkpoint in ControlledCheckpoint:
+            existing = self.conn.execute(
+                "SELECT id FROM controlled_checkpoint"
+                " WHERE case_id = ? AND checkpoint = ? AND state IN (?, ?)",
+                (
+                    case_id,
+                    checkpoint.value,
+                    CheckpointState.REQUIRED.value,
+                    CheckpointState.CONFIRMED.value,
+                ),
+            ).fetchone()
+            if existing is not None:
+                continue
+            self.conn.execute(
+                "INSERT INTO controlled_checkpoint"
+                " (id, case_id, policy_id, checkpoint, state, note_summary, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("chk"),
+                    case_id,
+                    policy["id"],
+                    checkpoint.value,
+                    CheckpointState.REQUIRED.value,
+                    self.TREATED_CHECKPOINT_NOTE,
+                    now,
+                ),
+            )
+
+    def objective_widened(self, case_id: str) -> bool:
+        """사용자의 명시 결정으로 이 Case 의 목적이 넓어졌는가(D-66).
+
+        근거는 `delegation_basis` 의 `user_decision` 행 하나다. **AI 의 판단이나
+        Profile 변경은 근거가 아니다** — "분류 변경만으로 재승인·예산 초기화·기준
+        삭제를 하지 않는다"(D-62)의 반대 방향도 같다. 분류를 바꿔 권한을 얻지 못한다.
+        """
+        row = self.conn.execute(
+            "SELECT 1 FROM delegation_basis WHERE case_id = ? AND basis_kind = ?"
+            " AND state = ? LIMIT 1",
+            (case_id, DelegationBasisKind.USER_DECISION.value, PolicyState.CURRENT.value),
+        ).fetchone()
+        return row is not None
+
+    def checkpoint_state(self, case_id: str) -> dict[str, Any]:
+        """확인 지점의 현재 상태를 **판정에 쓰기 쉬운 모양으로** 돌려준다.
+
+        진입 검사와 종료 검사가 같은 값을 본다. `confirmed_subject_hash` 가 있으면
+        그것이 "무엇을 보고 확인했는가"이며, 지금 후보의 해시와 다르면 이전 확인을
+        새 후보에 쓰지 않는다(D-65·FR-23).
+        """
+        autonomy = self.effective_autonomy(case_id)
+        if not autonomy.controlled:
+            return {
+                "required": False,
+                "effective_autonomy": autonomy.value.value,
+                "is_treatment": autonomy.is_treatment,
+                "start_confirmed": True,
+                "result_confirmed": True,
+                "result_subject_id": None,
+                "result_subject_hash": None,
+            }
+        points = {
+            p["checkpoint"]: p
+            for p in self.list_checkpoints(case_id)
+            if p["state"] != CheckpointState.SUPERSEDED.value
+        }
+        start = points.get(ControlledCheckpoint.START_SCOPE.value)
+        result = points.get(ControlledCheckpoint.RESULT_CANDIDATE.value)
+        return {
+            "required": True,
+            "effective_autonomy": autonomy.value.value,
+            "is_treatment": autonomy.is_treatment,
+            # **행이 없으면 확인되지 않은 것이다.** 없음을 통과로 읽지 않는다.
+            "start_confirmed": bool(
+                start is not None and start["state"] == CheckpointState.CONFIRMED.value
+            ),
+            "result_confirmed": bool(
+                result is not None and result["state"] == CheckpointState.CONFIRMED.value
+            ),
+            "result_subject_id": (result or {}).get("subject_id"),
+            "result_subject_hash": (result or {}).get("subject_hash"),
+        }
+
+    # ------------------------------------------------ Fast Lane 과 정합성 방식
+
+    def fast_lane_state(self, case_id: str) -> dict[str, Any]:
+        """Fast Lane 조건의 판정. **저장하지 않고 도출한다.**
+
+        입력은 전부 이미 기록된 사실이다 — 수준 판단, 근거 부족 축, 열린 질문,
+        미확인 누적 변경. 저장하면 조건이 바뀌었는데 값이 남아 있는 상태를 다시
+        관리해야 하고 "누가 그 값을 적었는가"가 새 문제가 된다(R3 의 `stop` 과 같다).
+        """
+        sizing = self.current_sizing(case_id)
+        state = self.intent_state(case_id)
+        outcome = assess_fast_lane(
+            level=(sizing or {}).get("level"),
+            evidence_gap=bool((sizing or {}).get("evidence_gap")),
+            open_intent_questions=len(state.get("open_intent_questions") or []),
+            deferred_questions=len(self.deferred_open_questions(case_id)),
+            pending_material_deltas=len(self.pending_material_deltas(case_id)),
+        )
+        return outcome.to_dict()
+
+    def conformance_requirement(self, case_id: str) -> dict[str, Any]:
+        """요청 정합성 확인을 **어떤 방식으로** 해야 하는가(D-25).
+
+        QG-01 자체는 끌 수 없다. 달라지는 것은 방식뿐이며, Case 설정은 독립 검토를
+        **요구하는 방향으로만** 작용한다 — 낮추는 인자가 없는 것이 계약이다
+        (autonomy-budget-policy 5절).
+        """
+        sizing = self.current_sizing(case_id)
+        requirement = required_conformance_method(
+            level=(sizing or {}).get("level"),
+            evidence_gap=bool((sizing or {}).get("evidence_gap")),
+            pending_material_deltas=len(self.pending_material_deltas(case_id)),
+            case_requires_independent=self.case_requires_independent_review(case_id),
+        )
+        return requirement.to_dict()
+
+    #: 요청 정합성 확인 방식의 Case 설정을 담는 단계 이름.
+    #:
+    #: `stage_review_setting` 을 재사용하는 이유는 저장 구조가 정확히 같기 때문이다 —
+    #: "이 단계는 사람이 본다"와 "이 의도는 독립 검토를 받는다"는 같은 모양의 선택이다.
+    #: 새 표를 만들면 이력·이행·조회를 한 벌 더 써야 한다.
+    CONFORMANCE_SETTING_STAGE = "intent"
+
+    def case_requires_independent_review(self, case_id: str) -> bool:
+        """Case 설정이 독립 의미 검토를 명시로 요구하는가.
+
+        **올리는 방향으로만 쓰인다.** 이 값이 거짓이어도 규칙이 독립 검토를 요구하면
+        그대로 요구된다 — 낮추는 경로가 없는 것이 계약이다(autonomy-budget-policy
+        5절 "필수 요청 정합성 확인은 일반 preset 이나 AI 추천으로 완화할 수 없다").
+        """
+        row = self.conn.execute(
+            "SELECT mode FROM stage_review_setting WHERE case_id = ? AND stage = ?",
+            (case_id, self.CONFORMANCE_SETTING_STAGE),
+        ).fetchone()
+        return bool(row is not None and row["mode"] == ReviewMode.HUMAN_REVIEW.value)
+
+    def require_independent_review(
+        self, case_id: str, required: bool, set_by: str, reason_summary: str
+    ) -> dict[str, Any]:
+        """이 Case 의 요청 정합성 확인에 독립 의미 검토를 요구한다.
+
+        **끄는 쪽은 규칙을 이기지 못한다.** `required = False` 는 "이 Case 의 추가
+        요구를 거둔다"일 뿐이며, 수준·근거 부족·미확인 변경이 독립 검토를 요구하면
+        그대로 요구된다. 그 판단은 `domain.progression.required_conformance_method`
+        하나에 있고 이 설정은 그 입력 중 하나다.
+        """
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        if not str(reason_summary or "").strip():
+            raise ConflictError("a conformance policy change needs a reason")
+        mode = ReviewMode.HUMAN_REVIEW if required else ReviewMode.AUTO_PROCEED
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO stage_review_setting (case_id, stage, mode, set_by,"
+                " reason_summary, set_at) VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id, stage) DO UPDATE SET mode = excluded.mode,"
+                "   set_by = excluded.set_by, reason_summary = excluded.reason_summary,"
+                "   set_at = excluded.set_at",
+                (
+                    case_id,
+                    self.CONFORMANCE_SETTING_STAGE,
+                    mode.value,
+                    set_by,
+                    _summary(reason_summary),
+                    utc_now(),
+                ),
+            )
+        return self.conformance_state(case_id)
+
+    def get_conformance_check(
+        self, intent_version_id: str, method: ConformanceMethod
+    ) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM conformance_check WHERE intent_version_id = ? AND method = ?",
+            (intent_version_id, method.value),
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def list_conformance_checks(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM conformance_check WHERE case_id = ? ORDER BY recorded_at",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_light_conformance_check(
+        self, intent_version_id: str, recorded_by: str = "policy:light_conformance"
+    ) -> dict[str, Any]:
+        """가벼운 확인을 기록한다(D-25 "명확한 저위험 요청에는 가벼운 확인").
+
+        세 가지를 지킨다.
+
+            방식을 적는다        `method = light`. 독립 검토로 표시하지 않는다
+            요구와 대조한다      규칙이 독립 검토를 요구하면 그 사실도 함께 적는다.
+                                 **충족했다고 적지 않는다**
+            안 본 것을 적는다    `unverified_scope` 에 "원문의 의미 대응을 AI 가
+                                 검토하지 않았다"가 값으로 남는다
+
+        **규칙 검사가 통과하지 않았으면 기록하지 않는다.** 가벼운 확인은 규칙 검사
+        **위에** 얹히는 것이지 그것을 대신하지 않는다.
+        """
+        detail = self.get_intent_detail(intent_version_id)
+        case_id = detail["case_id"]
+        self.guard_open_case(case_id)
+        requirement = required_conformance_method(
+            level=(self.current_sizing(case_id) or {}).get("level"),
+            evidence_gap=bool((self.current_sizing(case_id) or {}).get("evidence_gap")),
+            pending_material_deltas=len(self.pending_material_deltas(case_id)),
+            case_requires_independent=self.case_requires_independent_review(case_id),
+        )
+        gate = self._gate_row(intent_version_id, GateId.QG_01)
+        if gate is None:
+            self.evaluate_gate_rules(intent_version_id, GateId.QG_01)
+            gate = self._gate_row(intent_version_id, GateId.QG_01)
+        rule_verdict = GateVerdict(gate["rule_verdict"])
+        verdict = (
+            GateVerdict.PASS if rule_verdict is GateVerdict.PASS else rule_verdict
+        )
+
+        now = utc_now()
+        with transaction(self.conn):
+            self._upsert_conformance_check(
+                case_id=case_id,
+                intent_version_id=intent_version_id,
+                method=ConformanceMethod.LIGHT,
+                verdict=verdict,
+                run_id=None,
+                subject_content_hash=detail["content_hash"],
+                unverified_scope=LIGHT_UNVERIFIED_SCOPE,
+                reasons=list(requirement.reasons),
+                now=now,
+            )
+            self._refresh_gate_conformance(intent_version_id)
+        return self.conformance_state(case_id)
+
+    def _upsert_conformance_check(
+        self,
+        *,
+        case_id: str,
+        intent_version_id: str,
+        method: ConformanceMethod,
+        verdict: GateVerdict,
+        run_id: str | None,
+        subject_content_hash: str,
+        unverified_scope: str | None,
+        reasons: list[str],
+        now: str,
+    ) -> None:
+        """정합성 확인 한 건을 쓴다. 두 방식이 **같은 함수**를 쓴다.
+
+        갈라 두면 한쪽만 고치는 실수가 생기고, 그 실수의 결과는 "무엇을 실제로
+        확인했는가"가 방식마다 다른 모양으로 남는 것이다.
+
+        `required_method` 는 **쓰는 시점에 다시 계산한다.** 요구가 나중에 올라가면
+        (수준 상향·근거 부족·새 누적 변경) 이미 기록된 가벼운 확인이 자동으로
+        불충분해져야 하기 때문이다 — `_conformance_for_gate` 가 그 대조를 한다.
+        """
+        requirement = required_conformance_method(
+            level=(self.current_sizing(case_id) or {}).get("level"),
+            evidence_gap=bool((self.current_sizing(case_id) or {}).get("evidence_gap")),
+            pending_material_deltas=len(self.pending_material_deltas(case_id)),
+            case_requires_independent=self.case_requires_independent_review(case_id),
+        )
+        reasons_json = json.dumps(reasons, ensure_ascii=False)
+        existing = self.get_conformance_check(intent_version_id, method)
+        if existing is None:
+            self.conn.execute(
+                "INSERT INTO conformance_check"
+                " (id, case_id, intent_version_id, method, required_method, verdict,"
+                "  run_id, subject_content_hash, unverified_scope, reasons_json,"
+                "  recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("conf"),
+                    case_id,
+                    intent_version_id,
+                    method.value,
+                    requirement.required.value,
+                    verdict.value,
+                    run_id,
+                    subject_content_hash,
+                    unverified_scope,
+                    reasons_json,
+                    now,
+                ),
+            )
+            return
+        self.conn.execute(
+            "UPDATE conformance_check SET required_method = ?, verdict = ?, run_id = ?,"
+            " subject_content_hash = ?, unverified_scope = ?, reasons_json = ?,"
+            " recorded_at = ? WHERE id = ?",
+            (
+                requirement.required.value,
+                verdict.value,
+                run_id,
+                subject_content_hash,
+                unverified_scope,
+                reasons_json,
+                now,
+                existing["id"],
+            ),
+        )
+
+    def _conformance_for_gate(
+        self, intent_version_id: str, case_id: str
+    ) -> tuple[ConformanceMethod | None, GateVerdict]:
+        """이 의도 버전의 정합성 확인이 **요구를 충족하는가**와 그 판정.
+
+        두 방식 중 요구를 충족하는 것을 고른다. 독립 검토는 가벼운 확인의 요구도
+        충족하지만 **반대는 아니다** — 그 비대칭이 `conformance_satisfies` 에 있다.
+        """
+        requirement = required_conformance_method(
+            level=(self.current_sizing(case_id) or {}).get("level"),
+            evidence_gap=bool((self.current_sizing(case_id) or {}).get("evidence_gap")),
+            pending_material_deltas=len(self.pending_material_deltas(case_id)),
+            case_requires_independent=self.case_requires_independent_review(case_id),
+        )
+        detail_hash = self.get_intent_detail(intent_version_id)["content_hash"]
+        for method in (ConformanceMethod.INDEPENDENT, ConformanceMethod.LIGHT):
+            check = self.get_conformance_check(intent_version_id, method)
+            if check is None:
+                continue
+            if not conformance_satisfies(requirement.required, method):
+                continue
+            # **확인한 원문이 지금 원문인가.** 내용이 바뀌었으면 그 확인은 다른
+            # 것을 본 결과다. 여기서 보지 않으면 원문을 고친 뒤 옛 확인으로
+            # 게이트가 통과한다(FR-23).
+            if check["subject_content_hash"] != detail_hash:
+                continue
+            return method, GateVerdict(check["verdict"])
+        return None, GateVerdict.NOT_RUN
+
+    def _refresh_gate_conformance(self, intent_version_id: str) -> None:
+        """정합성 확인 기록에서 게이트 판정을 다시 계산한다.
+
+        **`ai_verdict` 컬럼을 건드리지 않는다.** 독립 검토의 결과는 거기 그대로
+        남고, 여기서 바꾸는 것은 합쳐진 `verdict` 뿐이다 — 가벼운 확인을 AI 검토
+        결과로 적으면 두 방식의 구별이 사라진다.
+        """
+        row = self._gate_row(intent_version_id, GateId.QG_01)
+        if row is None:
+            return
+        method, conformance_verdict = self._conformance_for_gate(
+            intent_version_id, row["case_id"]
+        )
+        rule_verdict = GateVerdict(row["rule_verdict"])
+        self.conn.execute(
+            "UPDATE gate_result SET verdict = ? WHERE id = ?",
+            (
+                gatemod.combine_verdicts(rule_verdict, conformance_verdict).value,
+                row["id"],
+            ),
+        )
+
+    def conformance_state(self, case_id: str) -> dict[str, Any]:
+        """최신 의도 버전의 요청 정합성 확인 상태.
+
+        **방식과 남은 불확실성을 함께 말한다.** 이 응답이 없으면 화면에서 가벼운
+        확인과 독립 검토가 같은 `pass` 로 보이고, 그 순간 "미실행을 통과로 표시하지
+        않는다"(D-25)가 깨진다.
+        """
+        requirement = self.conformance_requirement(case_id)
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return {
+                "intent_version_id": None,
+                "method": None,
+                "verdict": GateVerdict.NOT_APPLICABLE.value,
+                "unverified_scope": None,
+                "checks": [],
+                **requirement,
+            }
+        method, verdict = self._conformance_for_gate(latest["id"], case_id)
+        check = (
+            self.get_conformance_check(latest["id"], method)
+            if method is not None
+            else None
+        )
+        return {
+            "intent_version_id": latest["id"],
+            "method": method.value if method is not None else None,
+            "verdict": verdict.value,
+            "unverified_scope": (check or {}).get("unverified_scope"),
+            "checks": [
+                c
+                for c in self.list_conformance_checks(case_id)
+                if c["intent_version_id"] == latest["id"]
+            ],
+            **requirement,
+        }
+
+    # -------------------------------------------------- 누적 material delta
+
+    def pending_material_deltas(self, case_id: str) -> list[dict[str, Any]]:
+        """확인되지 않은 **material** 변경. 이것이 쌓이는 것이 "누적"이다.
+
+        `draft_work`·`user_directed` 는 여기 없다. 막지 않는 변경이기 때문이다.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM material_delta WHERE case_id = ? AND state = ? AND materiality = ?"
+            " ORDER BY detected_at",
+            (case_id, DeltaState.PENDING.value, Materiality.MATERIAL.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_material_deltas(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM material_delta WHERE case_id = ? ORDER BY detected_at",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def material_delta_state(self, case_id: str) -> dict[str, Any]:
+        """누적 변경의 현재 상태와 **무엇을 막고 있는가.**
+
+        기준은 마지막 유효 위임이다. AI 가 직전에 쓴 초안이 아니다(D-60).
+        """
+        basis = self.list_delegation_basis(case_id)["current"]
+        pending = self.pending_material_deltas(case_id)
+        blocked, block_all = progression.blocked_task_keys(
+            pending, self._criterion_task_keys(case_id)
+        )
+        return {
+            "basis": basis,
+            "pending": pending,
+            "all": self.list_material_deltas(case_id),
+            "blocked_task_keys": sorted(blocked),
+            "blocks_all_tasks": block_all,
+            "detail": "비교 대상은 마지막 유효 위임 기준이다. AI 초안이 아니다(D-60)."
+            " AI 의 의미 평가만으로는 해소되지 않는다",
+        }
+
+    def _criterion_task_keys(self, case_id: str) -> dict[str, list[str]]:
+        """기준 → 그 기준에 붙은 Task 키. 차단 범위를 좁히는 입력이다."""
+        revision = self.current_work_graph_row(case_id)
+        if revision is None:
+            return {}
+        rows = self.conn.execute(
+            "SELECT criterion_id, task_key FROM task_criterion WHERE graph_revision_id = ?",
+            (revision["id"],),
+        ).fetchall()
+        mapping: dict[str, list[str]] = {}
+        for row in rows:
+            mapping.setdefault(row["criterion_id"], []).append(row["task_key"])
+        return mapping
+
+    def _record_delta(
+        self,
+        case_id: str,
+        *,
+        change_class: DeltaChangeClass,
+        target_type: str,
+        target_id: str | None,
+        target_key: str,
+        from_hash: str | None,
+        to_hash: str | None,
+        origin: str | None,
+        target_agreed: bool,
+        user_directed: bool,
+    ) -> None:
+        """변경 한 건을 분류해 기록한다. 같은 트랜잭션 안에서 불린다.
+
+        `material` 이 아니면 `adopted` 로 들어간다 — 기록은 남기되 막지 않는다.
+        "근거와 영향 평가를 기록하고 자동 진행"(autonomy-budget-policy 3절)의 구현이다.
+        """
+        classification = classify_change(
+            origin=origin, target_agreed=target_agreed, user_directed=user_directed
+        )
+        basis = self.conn.execute(
+            "SELECT id FROM delegation_basis WHERE case_id = ? AND state = ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchone()
+        state = (
+            DeltaState.PENDING
+            if classification.materiality is Materiality.MATERIAL
+            else DeltaState.ADOPTED
+        )
+        now = utc_now()
+        self.conn.execute(
+            "INSERT INTO material_delta"
+            " (id, case_id, basis_id, change_class, target_type, target_id, target_key,"
+            "  from_hash, to_hash, origin, materiality, state, detail, detected_at,"
+            "  resolved_at, resolution_source)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ids.new_id("delta"),
+                case_id,
+                basis["id"] if basis else None,
+                change_class.value,
+                target_type,
+                target_id,
+                target_key,
+                from_hash,
+                to_hash,
+                origin,
+                classification.materiality.value,
+                state.value,
+                _summary(classification.detail),
+                now,
+                None if state is DeltaState.PENDING else now,
+                None
+                if state is DeltaState.PENDING
+                else (
+                    "user_direction"
+                    if classification.materiality is Materiality.USER_DIRECTED
+                    else "draft_work"
+                ),
+            ),
+        )
+
+    def record_delta_assessment(
+        self, delta_id: str, assessment: str
+    ) -> dict[str, Any]:
+        """AI 의 의미 평가를 기록한다. **상태는 바뀌지 않는다.**
+
+        이 함수가 `state` 를 건드리지 않는 것이 계약이다. "'의미가 같음'이라는 주장만
+        으로 새 의미를 승인하지 않는다"(autonomy-budget-policy 3절)를 코드로 지키는
+        자리이며, 여기에 해소 분기를 하나라도 두면 AI 가 자기 평가로 차단을 푼다.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM material_delta WHERE id = ?", (delta_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"material delta not found: {delta_id}")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE material_delta SET ai_assessment = ? WHERE id = ?",
+                (_summary(assessment), delta_id),
+            )
+        return dict(
+            self.conn.execute(
+                "SELECT * FROM material_delta WHERE id = ?", (delta_id,)
+            ).fetchone()
+        )
+
+    def confirm_material_delta(
+        self, delta_id: str, actor: str, explicit: bool, note_summary: str | None = None
+    ) -> dict[str, Any]:
+        """사람이 그 변경을 확인한다.
+
+        **명시적 확인이 아닌 요청은 확인으로 적지 않는다**(D-14). 확인은 그 변경
+        한 건에만 적용되며 남은 `pending` 을 함께 풀지 않는다 — 한 번의 확인이
+        누적 전체의 승인이 되면 누적을 세는 의미가 없다.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM material_delta WHERE id = ?", (delta_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"material delta not found: {delta_id}")
+        if not explicit:
+            raise PolicyRefused([PolicyRefusal.NOT_EXPLICIT])
+        self._guard_policy_change(row["case_id"])
+        if row["state"] != DeltaState.PENDING.value:
+            return dict(row)
+        decision_id = ids.new_decision_id()
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, subject_content_hash)"
+                " VALUES (?, ?, ?, 'material_delta', ?, 1, ?, ?, ?)",
+                (
+                    decision_id,
+                    row["case_id"],
+                    DecisionKind.MATERIAL_DELTA_CONFIRMATION.value,
+                    delta_id,
+                    actor,
+                    now,
+                    row["to_hash"],
+                ),
+            )
+            self.conn.execute(
+                "UPDATE material_delta SET state = ?, decision_id = ?, resolved_at = ?,"
+                " resolution_source = 'human_confirmation' WHERE id = ?",
+                (DeltaState.CONFIRMED.value, decision_id, now, delta_id),
+            )
+        return self.material_delta_state(row["case_id"])
 
     # ---------------------------------------------------------------- 예산
 

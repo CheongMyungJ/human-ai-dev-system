@@ -1,0 +1,540 @@
+{
+  "case_id": "case-2efdc864ea3bffbf",
+  "sizing": {
+    "id": "sizing-6384cede358d48db",
+    "case_id": "case-2efdc864ea3bffbf",
+    "revision": 1,
+    "intent_version_id": "intent-e3b54b4e424b1dda",
+    "source": "ai_recommendation",
+    "recommended_level": "simple",
+    "derived_level": "simple",
+    "level": "simple",
+    "adjusted_from": null,
+    "evidence_gap": false,
+    "reason_summary": "의도 초안에 적힌 수준 판단",
+    "residual_risk_summary": "",
+    "actor": "run-fl-draft-065512",
+    "state": "current",
+    "created_at": "2026-09-21T21:56:38.203039+00:00",
+    "superseded_at": null,
+    "axes": [
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "change_scope",
+        "weight": "low",
+        "judgement_summary": "변경 범위가 단일 파일의 국소 기능으로 제한된다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "compatibility_and_data",
+        "weight": "low",
+        "judgement_summary": "기존 인터페이스와 영속 데이터에 미치는 영향이 작다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "intent_clarity",
+        "weight": "low",
+        "judgement_summary": "의도와 성공 조건이 구체적이고 명확하다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "permission_and_security",
+        "weight": "low",
+        "judgement_summary": "새 권한, 외부 접근 또는 보안 경계 변경이 필요하지 않다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "reversibility",
+        "weight": "low",
+        "judgement_summary": "변경이 국소적이어서 되돌리기 쉽고 실패 비용이 낮다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "uncertainty",
+        "weight": "low",
+        "judgement_summary": "요구사항이나 해법 선택에 관한 중요한 불확실성이 없다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-6384cede358d48db",
+        "axis": "verification_difficulty",
+        "weight": "low",
+        "judgement_summary": "결정적 입력과 반환값 비교로 간단히 검증할 수 있다.",
+        "unconfirmed_summary": ""
+      }
+    ]
+  },
+  "level": "simple",
+  "sizing_history": [
+    {
+      "id": "sizing-6384cede358d48db",
+      "case_id": "case-2efdc864ea3bffbf",
+      "revision": 1,
+      "intent_version_id": "intent-e3b54b4e424b1dda",
+      "source": "ai_recommendation",
+      "recommended_level": "simple",
+      "derived_level": "simple",
+      "level": "simple",
+      "adjusted_from": null,
+      "evidence_gap": false,
+      "reason_summary": "의도 초안에 적힌 수준 판단",
+      "residual_risk_summary": "",
+      "actor": "run-fl-draft-065512",
+      "state": "current",
+      "created_at": "2026-09-21T21:56:38.203039+00:00",
+      "superseded_at": null,
+      "axes": [
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "change_scope",
+          "weight": "low",
+          "judgement_summary": "변경 범위가 단일 파일의 국소 기능으로 제한된다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "compatibility_and_data",
+          "weight": "low",
+          "judgement_summary": "기존 인터페이스와 영속 데이터에 미치는 영향이 작다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "intent_clarity",
+          "weight": "low",
+          "judgement_summary": "의도와 성공 조건이 구체적이고 명확하다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "permission_and_security",
+          "weight": "low",
+          "judgement_summary": "새 권한, 외부 접근 또는 보안 경계 변경이 필요하지 않다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "변경이 국소적이어서 되돌리기 쉽고 실패 비용이 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "uncertainty",
+          "weight": "low",
+          "judgement_summary": "요구사항이나 해법 선택에 관한 중요한 불확실성이 없다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-6384cede358d48db",
+          "axis": "verification_difficulty",
+          "weight": "low",
+          "judgement_summary": "결정적 입력과 반환값 비교로 간단히 검증할 수 있다.",
+          "unconfirmed_summary": ""
+        }
+      ]
+    }
+  ],
+  "design": {
+    "stage": "design",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": null,
+    "review": null,
+    "state": "not_ready",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "plan": {
+    "stage": "plan",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": null,
+    "review": null,
+    "state": "not_ready",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "combined": {
+    "stage": "combined",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": {
+      "id": "prep-137deff729e721a7",
+      "case_id": "case-2efdc864ea3bffbf",
+      "stage": "combined",
+      "revision": 1,
+      "artifact_id": "art-208b750ca09822e5",
+      "artifact_rev": 1,
+      "intent_version_id": "intent-e3b54b4e424b1dda",
+      "based_on_design_id": null,
+      "level": "simple",
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "run-fl-combined-065512",
+      "summary": "combined (run run-fl-combined-065512)",
+      "state": "current",
+      "created_at": "2026-09-21T21:58:07.171178+00:00",
+      "superseded_at": null,
+      "sections": [
+        {
+          "preparation_id": "prep-137deff729e721a7",
+          "section": "change_summary",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "변경 위치·동작·영향"
+        },
+        {
+          "preparation_id": "prep-137deff729e721a7",
+          "section": "verifiability",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "검증 가능성"
+        },
+        {
+          "preparation_id": "prep-137deff729e721a7",
+          "section": "tasks",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "작업별 목적·산출물·완료 조건"
+        },
+        {
+          "preparation_id": "prep-137deff729e721a7",
+          "section": "verification",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "검증 작업"
+        },
+        {
+          "preparation_id": "prep-137deff729e721a7",
+          "section": "open_questions",
+          "state": "undecided",
+          "origin": "none",
+          "required": false,
+          "required_at_report": false,
+          "label": "미정 질문"
+        }
+      ],
+      "availability": "available",
+      "content_hash": "sha256:105561b9669ba6011d5d8bef4c7987471d150b6d0dfecf5ed42ff708f7286e34",
+      "owner_runner_id": "runner-live-r4",
+      "review": {
+        "id": "stagerev-2da02bb213c147af",
+        "case_id": "case-2efdc864ea3bffbf",
+        "stage": "combined",
+        "preparation_id": "prep-137deff729e721a7",
+        "mode": "auto_proceed",
+        "state": "auto_conditions_met",
+        "decision_id": null,
+        "actor": "stage-auto-proceed-policy",
+        "subject_content_hash": "sha256:105561b9669ba6011d5d8bef4c7987471d150b6d0dfecf5ed42ff708f7286e34",
+        "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+        "recorded_at": "2026-09-21T21:58:07.178194+00:00"
+      },
+      "missing_required_sections": []
+    },
+    "review": {
+      "id": "stagerev-2da02bb213c147af",
+      "case_id": "case-2efdc864ea3bffbf",
+      "stage": "combined",
+      "preparation_id": "prep-137deff729e721a7",
+      "mode": "auto_proceed",
+      "state": "auto_conditions_met",
+      "decision_id": null,
+      "actor": "stage-auto-proceed-policy",
+      "subject_content_hash": "sha256:105561b9669ba6011d5d8bef4c7987471d150b6d0dfecf5ed42ff708f7286e34",
+      "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+      "recorded_at": "2026-09-21T21:58:07.178194+00:00"
+    },
+    "state": "auto_conditions_met",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "fast_lane": {
+    "eligible": true,
+    "blockers": []
+  },
+  "deferred_open_questions": [],
+  "work_graph": {
+    "case_id": "case-2efdc864ea3bffbf",
+    "present": true,
+    "stale": false,
+    "graph": {
+      "id": "wgraph-0e7c23bc47705a06",
+      "case_id": "case-2efdc864ea3bffbf",
+      "revision": 1,
+      "intent_version_id": "intent-e3b54b4e424b1dda",
+      "plan_preparation_id": "prep-137deff729e721a7",
+      "source": "plan_artifact",
+      "reason_summary": "combined v1 이 정의한 작업",
+      "actor": "policy:plan_artifact",
+      "state": "current",
+      "created_at": "2026-09-21T21:58:07.175611+00:00",
+      "superseded_at": null,
+      "tasks": [
+        {
+          "id": "task-685691092a60a7f8",
+          "case_id": "case-2efdc864ea3bffbf",
+          "graph_revision_id": "wgraph-0e7c23bc47705a06",
+          "task_key": "T1",
+          "kind": "implementation",
+          "relates_to": "",
+          "summary": "오류 접두사 필터 기능 추가",
+          "deliverable_summary": "reader.py의 filter_errors 함수",
+          "completion_summary": "필터 동작·새 리스트·변경 범위 충족",
+          "order_index": 1,
+          "origin": "ai_proposal",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-21T21:58:07.175611+00:00",
+          "depends_on": [],
+          "criteria": [
+            {
+              "criterion_id": "crit-35c2973074df154e",
+              "relation": "implements"
+            },
+            {
+              "criterion_id": "crit-a5088c583675bd58",
+              "relation": "implements"
+            },
+            {
+              "criterion_id": "crit-be5193d398317e84",
+              "relation": "implements"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T1",
+            "state": "planned",
+            "runnable": true,
+            "blocked_by": []
+          }
+        },
+        {
+          "id": "task-489adcda1e176a11",
+          "case_id": "case-2efdc864ea3bffbf",
+          "graph_revision_id": "wgraph-0e7c23bc47705a06",
+          "task_key": "T2",
+          "kind": "verification",
+          "relates_to": "",
+          "summary": "합의된 수용 기준 검증",
+          "deliverable_summary": "기능 및 변경 범위 검증 결과",
+          "completion_summary": "C-01부터 C-04까지 모두 확인",
+          "order_index": 2,
+          "origin": "ai_proposal",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-21T21:58:07.175611+00:00",
+          "depends_on": [
+            "T1"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-35c2973074df154e",
+              "relation": "verifies"
+            },
+            {
+              "criterion_id": "crit-6572f1c09b55150a",
+              "relation": "verifies"
+            },
+            {
+              "criterion_id": "crit-a5088c583675bd58",
+              "relation": "verifies"
+            },
+            {
+              "criterion_id": "crit-be5193d398317e84",
+              "relation": "verifies"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T2",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "tasks": [
+      {
+        "id": "task-685691092a60a7f8",
+        "case_id": "case-2efdc864ea3bffbf",
+        "graph_revision_id": "wgraph-0e7c23bc47705a06",
+        "task_key": "T1",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "오류 접두사 필터 기능 추가",
+        "deliverable_summary": "reader.py의 filter_errors 함수",
+        "completion_summary": "필터 동작·새 리스트·변경 범위 충족",
+        "order_index": 1,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-21T21:58:07.175611+00:00",
+        "depends_on": [],
+        "criteria": [
+          {
+            "criterion_id": "crit-35c2973074df154e",
+            "relation": "implements"
+          },
+          {
+            "criterion_id": "crit-a5088c583675bd58",
+            "relation": "implements"
+          },
+          {
+            "criterion_id": "crit-be5193d398317e84",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T1",
+          "state": "planned",
+          "runnable": true,
+          "blocked_by": []
+        }
+      },
+      {
+        "id": "task-489adcda1e176a11",
+        "case_id": "case-2efdc864ea3bffbf",
+        "graph_revision_id": "wgraph-0e7c23bc47705a06",
+        "task_key": "T2",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "합의된 수용 기준 검증",
+        "deliverable_summary": "기능 및 변경 범위 검증 결과",
+        "completion_summary": "C-01부터 C-04까지 모두 확인",
+        "order_index": 2,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-21T21:58:07.175611+00:00",
+        "depends_on": [
+          "T1"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-35c2973074df154e",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-6572f1c09b55150a",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-a5088c583675bd58",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-be5193d398317e84",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T2",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+            }
+          ]
+        }
+      }
+    ],
+    "readiness": {
+      "T1": {
+        "task_key": "T1",
+        "state": "planned",
+        "runnable": true,
+        "blocked_by": []
+      },
+      "T2": {
+        "task_key": "T2",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned)"
+          }
+        ]
+      }
+    },
+    "criteria_coverage": [
+      {
+        "criterion_id": "crit-a5088c583675bd58",
+        "criterion_key": "C-01",
+        "summary": "정확한 오류 접두사 필터링",
+        "implemented_by": [
+          "T1"
+        ],
+        "verified_by": [
+          "T2"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-35c2973074df154e",
+        "criterion_key": "C-02",
+        "summary": "새 리스트 반환",
+        "implemented_by": [
+          "T1"
+        ],
+        "verified_by": [
+          "T2"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-6572f1c09b55150a",
+        "criterion_key": "C-03",
+        "summary": "샘플 로그에서 2줄 반환",
+        "implemented_by": [],
+        "verified_by": [
+          "T2"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-be5193d398317e84",
+        "criterion_key": "C-04",
+        "summary": "변경 범위 준수",
+        "implemented_by": [
+          "T1"
+        ],
+        "verified_by": [
+          "T2"
+        ],
+        "has_verification_task": true
+      }
+    ],
+    "deferred_open_questions": [],
+    "question_blocks": {},
+    "unresolved_block_refs": []
+  }
+}

@@ -15,6 +15,7 @@ import {
   CLOSURE_KIND_LABEL,
   CRITERION_VERDICT_LABEL,
   EVIDENCE_KIND_LABEL,
+  SATISFACTION_LABEL,
   api,
   intentApi,
   resultApi,
@@ -373,6 +374,26 @@ function CriterionRow(props: {
       </td>
       <td className="small">
         <strong>{CRITERION_VERDICT_LABEL[criterion.verdict] ?? criterion.verdict}</strong>
+        {/* **어떻게 충족했는가**(P3-R4). 바꾸고 확인한 것과 이미 목표 상태였던 것은
+            같은 `met` 이지만 다른 사실이며, 그 구별이 보이지 않으면 무변경 충족이
+            미재현과 섞여 보인다(case-profiles 4절). */}
+        {criterion.satisfaction && (
+          <>
+            <br />
+            <span className="muted">
+              {SATISFACTION_LABEL[criterion.satisfaction] ?? criterion.satisfaction}
+            </span>
+          </>
+        )}
+        {/* **다시 확인한 판정과 이어진 판정을 구별한다**(intent-artifacts 69행). */}
+        {criterion.recheck_source?.startsWith('carried_from:') && (
+          <>
+            <br />
+            <span className="muted">
+              이전 버전에서 이어진 판정 — 이 버전에서 다시 확인한 것이 아니다
+            </span>
+          </>
+        )}
         {props.exception && (
           <>
             <br />

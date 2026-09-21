@@ -80,32 +80,66 @@ def _prepare_both(
 # ------------------------------------------------------------------- AC-1
 
 
-def test_both_stages_default_to_human_review(harness):
-    """AC-1: **기본값은 두 단계 모두 사람 검토다.**
+def test_the_stage_review_default_comes_from_autonomy(harness):
+    """AC-1 / R4: **기본값을 Autonomy 에서 도출한다.**
 
-    설정 행이 없는 상태를 자동 진행으로 읽으면 기본값이 조용히 뒤집힌다.
+    **P3-R4에서 갱신했다.** 이 시험은 원래 "기본값은 두 단계 모두 사람 검토다"를
+    고정했고 그것이 v0.6 의 사실이었다(D-14 시절). v0.7 에서 설계·계획의 사람
+    검토는 **선택 사항**이며(D-16·D-21), controlled 에서도 그렇다(D-65 "설계·계획의
+    사람 검토는 별도 선택").
+
+    **지켜야 하는 성질은 그대로다** — "설정 행이 없는 상태"를 아무 근거 없이 읽지
+    않는다. 달라진 것은 그 근거가 프로젝트 기본값이 아니라 Autonomy 라는 점이고,
+    조회가 출처를 그렇게 말한다.
     """
     case, _intent = _agreed_case(harness)
     prep = harness.preparation(case["id"])
 
+    assert prep["design"]["mode"] == "auto_proceed"
+    assert prep["plan"]["mode"] == "auto_proceed"
+    # 사람이 정한 것이 아니라 **Autonomy 에서 도출**한 것임을 구별한다.
+    assert prep["design"]["mode_source"] == "autonomy_derived"
+    assert prep["plan"]["mode_source"] == "autonomy_derived"
+    assert "D-16" in prep["design"]["mode_reason"]
+
+
+def test_a_pre_r1_case_keeps_the_v0_6_review_default(harness):
+    """R4: Autonomy 가 기록되지 않은 Case 는 **사람 검토 기본값을 유지한다.**
+
+    v0.6 에서 사람이 검토하기로 하고 진행하던 업무가 조용히 통과하면 안 된다.
+    `autonomy = NULL` 을 controlled 로 **취급**하는 결정(2026-09-22)은 진입·완료를
+    보수적으로 하라는 것이지 그 Case 의 단계 검토 설정을 새로 만들라는 것이 아니다.
+    """
+    project = harness.create_project()
+    case = harness.create_pre_r1_case(project["id"])
+    prep = harness.preparation(case["id"])
+
     assert prep["design"]["mode"] == "human_review"
     assert prep["plan"]["mode"] == "human_review"
-    # 사람이 정한 것이 아니라 프로젝트 기본값으로 읽은 것임을 구별한다.
-    assert prep["design"]["mode_source"] == "project_default"
-    assert prep["plan"]["mode_source"] == "project_default"
+    assert prep["design"]["mode_source"] == "migrated_default"
+    # 저장된 Autonomy 는 여전히 **미기록**이다. controlled 로 적히지 않았다.
+    policy = harness.client.get(f"/api/cases/{case['id']}/policy").json()
+    assert policy["autonomy"] is None
+    assert policy["autonomy_recorded"] is False
 
 
 def test_the_two_stages_are_configured_independently(harness):
-    """AC-1: 한 단계를 자동으로 바꿔도 다른 단계는 그대로다(FR-05 검토)."""
+    """AC-1: 한 단계를 바꿔도 다른 단계는 그대로다(FR-05 검토).
+
+    **P3-R4에서 방향이 뒤집혔다.** 도출 기본값이 자동 진행이므로 독립성을 보려면
+    한쪽을 **사람 검토로** 올려 본다. 확인하는 성질은 같다 — 두 단계는 서로의
+    설정을 따라가지 않는다.
+    """
     case, _intent = _agreed_case(harness)
     assert harness.set_stage_mode(
-        case["id"], "design", "auto_proceed", reason="설계가 국소적이다"
+        case["id"], "design", "human_review", reason="이 설계는 사람이 본다"
     ).status_code == 200
 
     prep = harness.preparation(case["id"])
-    assert prep["design"]["mode"] == "auto_proceed"
-    assert prep["plan"]["mode"] == "human_review"
-    assert prep["plan"]["mode_source"] == "project_default"
+    assert prep["design"]["mode"] == "human_review"
+    assert prep["design"]["mode_source"] == "case_setting"
+    assert prep["plan"]["mode"] == "auto_proceed"
+    assert prep["plan"]["mode_source"] == "autonomy_derived"
 
 
 def test_switching_to_auto_proceed_needs_a_reason(harness):
@@ -162,6 +196,17 @@ def test_a_plan_cannot_be_authored_before_the_design_is_reviewed(harness):
     설계 검토 전의 계획 작성은 무엇을 구현할 계획인지 말할 수 없다.
     """
     case, _intent = _agreed_case(harness)
+    # **P3-R4: Fast Lane 이 아닌 Case 다.** Fast Lane 에서는 계획 작성 실행이 계획이
+    # 아니라 **결합 기록**을 쓰고, 결합 기록은 설계 위에 세우는 것이 아니다(D-60).
+    # 확인하려는 성질("검토되지 않은 설계 위에 계획을 세우지 않는다")은 일반 경로의
+    # 것이므로 수준을 올려 그 경로로 만든다.
+    assert harness.adjust_level(
+        case["id"], "deep", reason="영향 범위가 넓다"
+    ).status_code == 201
+    # 그리고 사람 검토를 고른 경우다 — 도출 기본값은 자동 진행이며 그 경로에서는
+    # 조건이 갖춰지는 순간 기록이 생긴다.
+    harness.set_stage_mode(case["id"], "design", "human_review", reason="이 설계는 사람이 본다")
+
     # 설계가 아예 없는 상태
     response = harness.ai_prepare(case["id"], "plan", run_id="run-plan-early")
     assert response.status_code == 409
@@ -203,8 +248,15 @@ def test_auto_proceed_preserves_the_artifact_and_is_not_human_approval(harness):
 
 
 def test_auto_proceed_is_refused_while_the_stage_is_on_human_review(harness):
-    """AC-6: 자동 진행이 사람을 대신하지 않는다."""
+    """AC-6: 자동 진행이 사람을 대신하지 않는다.
+
+    **P3-R4: 사람 검토를 명시로 고른 경우다.** 도출 기본값이 자동 진행으로 바뀌었어도
+    사람이 검토하기로 고른 단계에서는 자동 조건 충족이 그 자리를 대신하지 않는다.
+    """
     case, _intent = _agreed_case(harness)
+    assert harness.set_stage_mode(
+        case["id"], "design", "human_review", reason="이 설계는 사람이 본다"
+    ).status_code == 200
     assert harness.ai_prepare(case["id"], "design").status_code == 201
 
     response = harness.auto_proceed(case["id"], "design")
@@ -215,6 +267,7 @@ def test_auto_proceed_is_refused_while_the_stage_is_on_human_review(harness):
 def test_a_human_review_records_a_decision_row(harness):
     """AC-6: 사람 검토는 `decision` 표에 남는다. 자동 진행과 기록이 다르다."""
     case, _intent = _agreed_case(harness)
+    harness.set_stage_mode(case["id"], "design", "human_review", reason="이 설계는 사람이 본다")
     assert harness.ai_prepare(case["id"], "design").status_code == 201
     assert harness.review_stage(case["id"], "design").status_code == 201
 
@@ -230,6 +283,9 @@ def test_a_human_review_records_a_decision_row(harness):
 def test_opening_the_screen_is_not_a_review(harness):
     """AC-6: `reviewed` 가 아니면 기록하지 않는다. 열어 본 것이 검토가 아니다."""
     case, _intent = _agreed_case(harness)
+    assert harness.set_stage_mode(
+        case["id"], "design", "human_review", reason="이 설계는 사람이 본다"
+    ).status_code == 200
     assert harness.ai_prepare(case["id"], "design").status_code == 201
 
     response = harness.review_stage(case["id"], "design", reviewed=False)
@@ -301,8 +357,16 @@ def test_a_deeper_level_requires_more_sections(harness):
 
 
 def test_review_missing_is_reported_per_stage(harness):
-    """AC-8: 사람 검토가 남아 있으면 단계별로 구별된 사유가 나온다."""
+    """AC-8: 사람 검토가 남아 있으면 단계별로 구별된 사유가 나온다.
+
+    **P3-R4: 두 단계 모두 사람 검토를 고른 Case 다.** 도출 기본값(자동 진행)에서는
+    조건이 갖춰지는 순간 기록이 생겨 이 사유가 나타나지 않는다. 구별하려는 성질은
+    그대로다 — 어느 단계의 검토가 남았는지가 사유로 갈린다.
+    """
     case, _intent = _agreed_case(harness)
+    harness.set_stage_mode(case["id"], "design", "human_review", reason="사람이 본다")
+    harness.set_stage_mode(case["id"], "plan", "human_review", reason="사람이 본다")
+
     assert harness.ai_prepare(case["id"], "design").status_code == 201
     assert "design_review_missing" in _refusals(harness.request_implementation(case["id"]))
 
@@ -323,9 +387,16 @@ def test_an_auto_proceed_stage_with_an_artifact_is_not_reported_as_not_ready(har
     harness.set_stage_mode(case["id"], "design", "auto_proceed", reason="국소 변경")
     assert harness.preparation(case["id"])["design"]["state"] == "not_ready"
 
+    # **P3-R4: 필수 항목이 미정이면 조건이 갖춰지지 않는다.** 그때가 정확히
+    # "산출물은 있는데 조건 충족 기록만 없는" 상태이며, `not_ready` 와 합치면
+    # 사람이 무엇을 해야 하는지 알 수 없다.
+    harness.agent.cli_executor.design_response = fake_preparation_response(
+        "설계", {"change_summary": "필터 함수를 더한다"}
+    )
     assert harness.ai_prepare(case["id"], "design").status_code == 201
     state = harness.preparation(case["id"])["design"]
     assert state["artifact"] is not None
+    assert state["missing_required_sections"] == ["verifiability"]
     assert state["state"] == "awaiting_auto_conditions"
 
 
@@ -333,17 +404,44 @@ def test_auto_proceed_still_needs_its_condition_record(harness):
     """AC-8: 모드를 자동으로 바꾼 것만으로 검토가 끝나지 않는다.
 
     설정만으로 끝났다고 적으면 그것이 곧 사람 승인 기록의 대체가 된다.
+
+    **P3-R4에서 기록의 시점이 달라졌다.** 조건이 갖춰지는 순간 시스템이 기록하며,
+    그것이 "자동 진행"의 뜻이다(D-16). 지켜야 하는 성질은 그대로다 — **조건을
+    갖추지 못하면 기록되지 않는다.** 설정이 조건을 대신하지 않는다.
     """
     case, _intent = _agreed_case(harness)
     harness.set_stage_mode(case["id"], "design", "auto_proceed", reason="국소 변경")
+    # 간소 수준의 필수 항목 하나(`verifiability`)를 비운 산출물을 낸다.
+    harness.agent.cli_executor.design_response = fake_preparation_response(
+        "설계", {"change_summary": "필터 함수를 더한다"}
+    )
     assert harness.ai_prepare(case["id"], "design").status_code == 201
 
     refusals = _refusals(harness.request_implementation(case["id"]))
     assert "design_review_missing" in refusals
+    # 설정이 자동이어도 **조건을 갖추지 못하면 기록을 만들지 않는다.**
+    assert harness.auto_proceed(case["id"], "design").status_code == 409
+    assert harness.preparation(case["id"])["design"]["review"] is None
 
-    assert harness.auto_proceed(case["id"], "design").status_code == 201
-    refusals = _refusals(harness.request_implementation(case["id"], run_id="run-impl-2"))
-    assert "design_review_missing" not in refusals
+
+def test_auto_proceed_is_recorded_as_soon_as_the_conditions_hold(harness):
+    """R4: 자동 진행 조건이 갖춰지면 **시스템이 기록한다.**
+
+    사람이 버튼을 눌러야 기록된다면 그것은 자동 진행이 아니다. 다만 기록의 내용은
+    그대로다 — `decision` 행이 없고 actor 는 정책 식별자이며 상태는
+    `auto_conditions_met` 이다. **사람 승인으로 적지 않는다.**
+    """
+    case, _intent = _agreed_case(harness)
+    assert harness.ai_prepare(case["id"], "design").status_code == 201
+
+    state = harness.preparation(case["id"])["design"]
+    assert state["state"] == "auto_conditions_met"
+    assert state["review"]["mode"] == "auto_proceed"
+    assert state["review"]["decision_id"] is None
+    assert state["review"]["actor"] == "stage-auto-proceed-policy"
+    # `decision` 표에 사람 검토 행이 생기지 않았다.
+    decisions = harness.client.get(f"/api/cases/{case['id']}").json()["decisions"]
+    assert [d for d in decisions if d["kind"] == "design_review"] == []
 
 
 # ------------------------------------------------------------------- AC-9
@@ -397,6 +495,9 @@ def test_a_new_design_supersedes_the_plan_built_on_the_old_one(harness):
 def test_a_stale_review_is_not_reused_after_a_new_artifact(harness):
     """AC-9: 산출물이 새로 만들어지면 이전 검토가 따라오지 않는다."""
     case, _intent = _agreed_case(harness)
+    assert harness.set_stage_mode(
+        case["id"], "design", "human_review", reason="이 설계는 사람이 본다"
+    ).status_code == 200
     assert harness.ai_prepare(case["id"], "design").status_code == 201
     assert harness.review_stage(case["id"], "design").status_code == 201
     first = harness.preparation(case["id"])["design"]["artifact"]["id"]
