@@ -702,3 +702,77 @@ def test_new_p3_03_tables_have_no_body_columns(harness):
     assert "length(failure_reason) <= 200" in limits["case_workspace"]
     assert "length(command_summary) <= 200" in limits["run_command"]
     conn.close()
+
+
+def test_new_p3_r2_tables_have_no_body_columns(harness):
+    """P3-R2 AC-18: 저장소·조합 표에도 본문 컬럼이 없다.
+
+    **조합의 `tree_digest` 가 경계에 가장 가깝다.** 그것은 작업 트리 내용의
+    지문(해시)이며 `artifact_ref.content_hash` 와 같은 성격이다 — 파일 경로도
+    diff 본문도 아니다. 지문이 본문 컬럼으로 자라지 않는지 여기서 본다.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    body_like = {"content", "body", "text", "raw", "payload", "diff", "log",
+                 "output", "command", "stdout", "stderr", "files", "paths"}
+    for table in ("code_composition", "code_composition_entry"):
+        columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        assert columns, f"{table} 이 없다"
+        assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"
+
+    # 저장소 경로·브랜치는 **식별자**다. 등록 저장소의 이름에는 길이 상한이 있다.
+    sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name = 'project_repository'"
+    ).fetchone()["sql"]
+    assert "length(name) <= 100" in sql
+    conn.close()
+
+
+def test_a_second_repository_diff_body_also_stays_on_the_runner(harness):
+    """P3-R2 AC-18: **두 번째 저장소의** 변경 내용도 제어부에 오지 않는다.
+
+    저장소가 하나일 때만 경계를 확인하면, 저장소가 늘어난 경로에 빈틈이 생겼는지
+    알 수 없다. 조합이 생기면서 트리 지문이 올라오는데 그것이 본문을 싣고 오지
+    않는지가 여기서 확인된다.
+    """
+    from tests.test_preparation import _prepare_both
+    from tests.test_repositories import _second_repo
+    from tests.test_workspace import _agreed_git_case
+
+    marker = "SECOND-REPO-BODY-8fe12-원문본문"
+    case, _repo = _agreed_git_case(harness)
+    primary = harness.project_repository_id(case["project_id"])
+    second = _second_repo(harness, {"id": case["project_id"]})
+    harness.select_repository(case["id"], primary)
+    harness.select_repository(case["id"], second["repository"]["id"])
+    harness.prepare_workspace(case["id"], repository_id=primary)
+    harness.prepare_workspace(case["id"], repository_id=second["repository"]["id"])
+    _prepare_both(harness, case["id"], run_prefix="run-demo", repository_id=primary)
+
+    harness.agent.cli_executor.write_files = {f"{marker}.py": f"# {marker}\nvalue = 1\n"}
+    harness.agent.cli_executor.implementation_response = (
+        '{"changed_summary": "두 번째 저장소에 표식 파일",'
+        f' "detail": "{marker}", "blocked": false}}'
+    )
+    assert harness.request_implementation(
+        case["id"],
+        run_id="run-second-repo",
+        permission="workspace_write",
+        repository_id=second["repository"]["id"],
+    ).status_code == 201
+    harness.agent.poll_once()
+
+    composition = harness.client.post(f"/api/cases/{case['id']}/composition").json()
+    encoded = marker.encode("utf-8")
+    assert encoded not in _controller_bytes(harness), "두 번째 저장소의 변경이 제어부에 남았다"
+    assert encoded in _runner_bytes(harness), "변경 내용이 Runner에도 없다"
+
+    # 대신 **지문과 수**가 올라온다. 그래야 조합이 대상을 고정할 수 있다.
+    entry = next(
+        e for e in composition["entries"] if e["repository_id"] == second["repository"]["id"]
+    )
+    assert entry["source"] == "run_effect"
+    assert len(entry["tree_digest"]) == 64, "트리 지문이 sha256 이 아니다"
+    assert marker not in entry["tree_digest"]

@@ -1,0 +1,27 @@
+{
+  "run_id": "run-live-ui-1789998958",
+  "generation": 1,
+  "state": "finished",
+  "started_at": "2026-09-21T13:56:05.875713+00:00",
+  "finished_at": "2026-09-21T13:56:17.357811+00:00",
+  "result": {
+    "outcome": "completed",
+    "exit_code": 0,
+    "output_artifact_id": "art-996f23c5289c5eb6",
+    "output_artifact_rev": 1,
+    "usage": {
+      "tokens": {
+        "input_tokens": 30711,
+        "cached_input_tokens": 24320,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 163,
+        "reasoning_output_tokens": 0
+      },
+      "cost_usd": "not_reported"
+    },
+    "workspace_effect": null,
+    "residual_activity": "unknown",
+    "session_ref": "01a0c440-a5eb-7902-a636-de1ade3cf7c4",
+    "observed_tool_version": "codex-cli 0.154.0"
+  }
+}

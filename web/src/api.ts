@@ -1346,6 +1346,9 @@ export interface WorkspaceEffect {
   outside_workspace_observed: boolean
   // `null` 은 관측하지 않았다는 뜻이다. `false` 와 다르다.
   outside_workspace_changed: boolean | null
+  // 그 시점 트리 내용의 **지문(해시)**. 조합이 이것으로 스냅샷을 고정한다(P3-R2).
+  tree_digest_before?: string
+  tree_digest_after?: string
 }
 
 export interface RunCommand {
@@ -1368,12 +1371,19 @@ export interface RunEffectRow {
   effect: WorkspaceEffect
   // 직전 실행이 남긴 상태와 다른 자리에서 시작했다. **드러내되 되돌리지 않는다**(FR-26).
   unexpected_external_change: boolean
+  // 어느 저장소의 실행인가(P3-R2). `repository_recorded` 가 false 면 **모른다**이며
+  // 아무 저장소에나 붙이지 않는다.
+  repository_id: string | null
+  repository_recorded?: boolean
 }
 
 export type WorkspaceState = 'requested' | 'ready' | 'failed'
 
-export interface WorkspaceView {
+// 저장소 **하나**의 작업공간(P3-R2·D-39).
+export interface RepositoryWorkspace {
   case_id: string
+  repository_id: string
+  repository_name: string
   state: WorkspaceState
   branch: string
   repo_path: string
@@ -1386,11 +1396,72 @@ export interface WorkspaceView {
   failure_reason: string
   requested_at: string
   ready_at: string | null
+  // 무엇을 근거로 이 작업공간을 만들었는가. `implicit_single_repository` 는
+  // 선택 기록이 없는 이행된 Case 이며, **없던 선택을 만들어 적지 않는다**.
+  allowance_source: string
   run_effects: RunEffectRow[]
   outside_workspace_changed: boolean
+}
+
+// 저장소별 작업공간 전부와 조합·선택을 담은 조회 결과(P3-R2).
+export interface WorkspaceView {
+  case_id: string
+  workspaces: RepositoryWorkspace[]
+  // **부분 준비를 완전 준비로 읽지 않는다.** 하나라도 실패·대기면 false 다.
+  all_ready: boolean
+  ready_count: number
+  repository_count: number
+  // 대상 저장소가 기록되지 않은 실행. 숨기지 않고 따로 보인다.
+  unattributed_run_effects: RunEffectRow[]
+  composition: CodeComposition | null
+  selection: CaseRepositoryState
   isolation: string
   // 한계 문구는 **서버가 준다.** 화면이 지어내면 언젠가 "격리됨"으로 바뀐다.
   isolation_note: string
+}
+
+// --------------------------------------------------- P3-R2 코드 조합
+//
+// `Repo ID → 정확한 스냅샷 참조` 의 벡터(execution-workspace-review 2.1절).
+
+export interface CodeCompositionEntry {
+  repository_id: string
+  repository_name: string
+  base_commit: string
+  head_commit: string
+  // `null` 은 **관측하지 않았다**이며 0이 아니다.
+  dirty_entries: number | null
+  tree_digest: string
+  source: 'run_effect' | 'workspace_base'
+  observed_run_id: string | null
+  observed_at: string | null
+  // 기준 커밋만 있고 지금 상태는 모른다.
+  snapshot_incomplete: boolean
+}
+
+export interface CompositionValidity {
+  composition_id: string | null
+  linked: boolean
+  // 이 조합에 **든** 저장소만 본다. 무관한 저장소의 변경은 stale 이 아니다.
+  changed_repositories?: string[]
+  stale?: boolean
+  detail: string
+}
+
+export interface CodeComposition {
+  id: string
+  case_id: string
+  revision: number
+  composition_hash: string
+  entries: CodeCompositionEntry[]
+  covers_all_code_repositories: boolean
+  snapshot_complete: boolean
+  // **개별 저장소 통과가 통합 통과가 아니다.**
+  integration_verified: boolean
+  integration_detail?: string
+  matches_current_state?: boolean
+  state: string
+  created_at: string
 }
 
 export const WORKSPACE_STATE_LABEL: Record<WorkspaceState, string> = {
@@ -1404,11 +1475,15 @@ export const workspaceApi = {
 
   // 작업공간을 준비해 달라고 기록한다. **응답은 준비 완료가 아니다** —
   // Runner 가 실제로 만든 뒤에야 `ready` 가 된다.
-  prepare: (caseId: string, baseRef = 'HEAD') =>
-    request<WorkspaceView>(`/api/cases/${caseId}/workspace`, {
+  prepare: (caseId: string, baseRef = 'HEAD', repositoryId?: string) =>
+    request<RepositoryWorkspace>(`/api/cases/${caseId}/workspace`, {
       method: 'POST',
-      body: JSON.stringify({ base_ref: baseRef }),
+      body: JSON.stringify({ base_ref: baseRef, repository_id: repositoryId ?? null }),
     }),
+
+  // 지금 상태로 코드 조합을 **고정한다.** 같은 상태면 새 revision 을 만들지 않는다.
+  buildComposition: (caseId: string) =>
+    request<CodeComposition | null>(`/api/cases/${caseId}/composition`, { method: 'POST' }),
 }
 
 // --------------------------------------------------------------- P3-R1 정책
@@ -1518,6 +1593,8 @@ export interface CaseRepositoryState {
   implicit_single_repository: { repository_id: string; repo_path: string; detail: string } | null
   journal_repository_id: string | null
   write_allowance_implies_publish: boolean
+  // 허용 내 자동 추가의 결과(P3-R2). 허용 밖은 여기 오지 않고 거절된다.
+  auto_selection?: { repository_id: string; changed: boolean; detail: string }
 }
 
 export interface DelegationBasisRow {

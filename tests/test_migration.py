@@ -410,3 +410,122 @@ def test_a_v7_database_keeps_its_records_and_marks_the_policy_as_unrecorded(tmp_
     assert conn.execute("SELECT COUNT(*) c FROM case_policy").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) c FROM decision").fetchone()["c"] == 1
     conn.close()
+
+
+def _v8_schema() -> str:
+    """v9 표가 없는 가장 최근 커밋 스키마를 찾는다(P3-R2).
+
+    **커밋된 것을 그대로 꺼내 쓴다.** 시험 안에 스키마를 베껴 두면 그 사본이 실제
+    과거와 달라져도 시험이 통과해 버린다.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "code_composition" not in schema and "case_policy" in schema:
+            return schema
+    pytest.skip("v8 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v8_workspace_keeps_its_branch_base_commit_and_worktree(tmp_path):
+    """v8 → v9 (P3-R2 AC-1).
+
+    **이 시험이 R2의 가장 위험한 지점을 지킨다.** `case_workspace` 는 기본 키가
+    `case_id` 였고 이미 준비된 작업공간 행이 거기 있다. SQLite 에서 기본 키를
+    바꾸려면 표를 다시 만들어 옮겨야 하는데, 그 과정에서
+
+        행을 잃으면 "어떤 코드 위에서 시작했는가"의 답이 사라지고,
+        worktree 경로를 새 규칙으로 바꾸면 이미 한 작업이 떨어져 나가며,
+        어느 저장소인지 지어내면 기록이 거짓이 된다.
+
+    셋을 모두 확인한다. 허용 출처가 `implicit_single_repository` 인 것도 함께 본다 —
+    이행이 "이 Case 가 그 저장소를 선택했다"는 결정을 새로 만들지 않기 때문이다.
+    """
+    schema = _v8_schema()
+    path = tmp_path / "controller.sqlite3"
+
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(schema)
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (8, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old-repo','codex',?)",
+        (now,),
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1','prj-1','v8 시절 Case','feature','in_progress',?,?)",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO project_repository"
+        " (id, project_id, name, repo_path, source, registered_by, registered_at)"
+        " VALUES ('repo-1','prj-1','primary','C:/tmp/old-repo','migrated_from_project',"
+        " 'migration',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','pc','host-1','registered',?)",
+        (now,),
+    )
+    # 실제로 준비돼 있던 작업공간. 사용자의 미커밋 변경 관측까지 들어 있다.
+    old.execute(
+        "INSERT INTO case_workspace (case_id, project_id, state, branch, runner_id,"
+        " repo_path, worktree_path, base_commit, base_ref, user_tree_dirty,"
+        " user_tree_entries, failure_reason, requested_at, ready_at)"
+        " VALUES ('case-1','prj-1','ready','hads/case-1','runner-1','C:/tmp/old-repo',"
+        " 'C:/tmp/worktrees/case-1','abc1234def5678','HEAD',1,3,'',?,?)",
+        (now, now),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    workspace = conn.execute("SELECT * FROM case_workspace").fetchone()
+    assert workspace is not None, "이행이 작업공간 행을 잃었다"
+    # --- 무엇으로 시작했는가는 그대로다 ---------------------------------
+    assert workspace["branch"] == "hads/case-1"
+    assert workspace["base_commit"] == "abc1234def5678"
+    assert workspace["base_ref"] == "HEAD"
+    assert workspace["state"] == "ready"
+    assert workspace["runner_id"] == "runner-1"
+    # --- **경로를 옮기지 않는다.** 옮기면 이미 한 작업이 떨어져 나간다 ---
+    assert workspace["worktree_path"] == "C:/tmp/worktrees/case-1"
+    assert workspace["repo_path"] == "C:/tmp/old-repo"
+    # --- 사용자 트리 관측도 남는다 ---------------------------------------
+    assert workspace["user_tree_dirty"] == 1
+    assert workspace["user_tree_entries"] == 3
+    # --- 어느 저장소인지는 **등록된 것 하나**로 확인해서 연결한다 --------
+    assert workspace["repository_id"] == "repo-1"
+    # --- 허용 출처: 선택 기록을 지어내지 않았다 --------------------------
+    assert workspace["allowance_source"] == "implicit_single_repository"
+    assert conn.execute("SELECT COUNT(*) c FROM case_repository").fetchone()["c"] == 0
+
+    # --- 새 축은 **미기록**이다 -------------------------------------------
+    assert conn.execute("SELECT repository_id FROM run").fetchall() == []
+    assert conn.execute("SELECT COUNT(*) c FROM code_composition").fetchone()["c"] == 0
+
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
+
+    # 다시 돌려도 행이 늘거나 다시 옮겨지지 않는다. `migrate()` 는 연결마다 돈다.
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM case_workspace").fetchone()["c"] == 1
+    assert (
+        conn.execute("SELECT worktree_path FROM case_workspace").fetchone()["worktree_path"]
+        == "C:/tmp/worktrees/case-1"
+    )
+    conn.close()

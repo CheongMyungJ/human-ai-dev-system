@@ -477,6 +477,14 @@ class AdmissionRefusal(str, Enum):
     WORKSPACE_FAILED = "workspace_failed"
     CASE_WRITE_IN_PROGRESS = "case_write_in_progress"
 
+    # --- P3-R2 Case × Repository -----------------------------------------
+    #
+    # 작업공간이 저장소마다 생기면 "이 실행이 어느 작업공간에서 도는가"가 새 질문이
+    # 된다. 하나뿐일 때는 모호하지 않아 그대로 해석하고, 둘 이상인데 실행에 대상이
+    # 기록되지 않았으면 **지어내지 않고 거부한다** — 어느 저장소를 고칠지 모르는
+    # 채로 쓰기를 여는 것이 가장 비싼 실수다(D-39).
+    WORKSPACE_TARGET_NOT_RECORDED = "workspace_target_not_recorded"
+
 
 class GateId(str, Enum):
     """이번 단계가 구현하는 게이트. QG-02~07은 아직 값으로 두지 않는다 —
@@ -1133,8 +1141,57 @@ class PolicyRefusal(str, Enum):
     JOURNAL_REPOSITORY_NOT_A_CODE_TARGET = "journal_repository_not_a_code_target"
     #: 이 Case 는 Profile 이 기록되지 않았다(R1 이전). 조용히 채우지 않는다.
     PROFILE_NOT_RECORDED = "profile_not_recorded"
+    #: 명시적으로 제외한 저장소다. **행이 없는 것과 다르다** — 없음은 아직 판단하지
+    #: 않은 것이고, 제외는 R2 의 자동 추가가 건드리지 못하는 경계다(D-63).
+    REPOSITORY_EXPLICITLY_EXCLUDED = "repository_explicitly_excluded"
+    #: 선택은 돼 있지만 코드 쓰기가 허용되지 않은 저장소다. 선택이 쓰기 허용을
+    #: 만들지 않는다(D-63 "등록 저장소, 쓰기/게시 허용 집합, Case 선택 집합을 구분").
+    REPOSITORY_NOT_SELECTED_FOR_CODE = "repository_not_selected_for_code"
+    #: 등록 저장소가 둘 이상인데 이 Case 가 무엇을 쓸지 기록하지 않았다. 하나를
+    #: 골라 주지 않는다 — 고르는 것은 사람 또는 허용 내 자동 추가의 일이다.
+    REPOSITORY_SELECTION_REQUIRED = "repository_selection_required"
+    #: 허용 내 자동 추가가 **새 권한**을 요구했다. 자동 추가는 이미 가진 범위 안에서만
+    #: 성립하며 쓰기 허용이 하나도 없는 Case 에 쓰기를 만들어 주지 않는다(D-38).
+    AUTO_ADD_NEEDS_NEW_PERMISSION = "auto_add_needs_new_permission"
+    #: 자동 추가로 게시 허용을 함께 주려 했다. **쓰기 허용 저장소 추가는 게시 허용
+    #: 확대가 아니다**(D-64). 게시는 언제나 사람이 따로 허용한다.
+    AUTO_ADD_CANNOT_GRANT_PUBLISH = "auto_add_cannot_grant_publish"
     #: controlled 가 아닌 Case 의 체크포인트를 확인하려 했다.
     CHECKPOINT_NOT_REQUIRED = "checkpoint_not_required"
     #: 확인 대상이 바뀌었다. 새 대상으로 다시 확인한다(FR-23).
     CHECKPOINT_SUBJECT_CHANGED = "checkpoint_subject_changed"
     NOT_EXPLICIT = "not_explicit"
+
+
+# --------------------------------------------------------------------- P3-R2
+#
+# Case × Repository 작업공간과 코드 조합. **여기서부터 저장소 선택·쓰기 허용이
+# 실제로 무엇을 막는다.** 게시 허용은 여전히 기록일 뿐이며 실제 push·PR 은 P5 다.
+
+
+class WorkspaceAllowanceSource(str, Enum):
+    """그 작업공간을 **무엇을 근거로** 만들었는가(P3-R2).
+
+    `CASE_REPOSITORY`            Case 가 그 저장소를 선택하고 코드 쓰기를 허용했다
+    `IMPLICIT_SINGLE_REPOSITORY` 선택 기록이 없는 Case 다. P3-03까지의 Case 는 선택
+                                 없이 Project 의 단일 저장소에서 실제로 작업했고,
+                                 거기에 "선택 기록이 없으니 쓰기 금지"를 적용하면 새
+                                 정책을 기존 권한에 소급하는 것이 된다. 허용하되
+                                 **허용의 출처를 기록에 남긴다** — 없던 선택을
+                                 지어내지 않는다(DEVELOPMENT.md 3절)
+    """
+
+    CASE_REPOSITORY = "case_repository"
+    IMPLICIT_SINGLE_REPOSITORY = "implicit_single_repository"
+
+
+class CompositionEntrySource(str, Enum):
+    """조합 항목을 무엇으로 채웠는가(execution-workspace-review 2.1절).
+
+    `RUN_EFFECT`     실행이 실제로 관측했다. HEAD·미커밋 상태·트리 지문까지 고정된다
+    `WORKSPACE_BASE` 관측이 없다. **기준 커밋만 있고 지금 상태는 모른다.** 기준
+                     커밋만으로 실제 입력을 설명할 수 없다는 사실을 값으로 남긴다
+    """
+
+    RUN_EFFECT = "run_effect"
+    WORKSPACE_BASE = "workspace_base"

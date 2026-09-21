@@ -1,0 +1,14 @@
+[Case] case-17a48cc3198dd5e5
+[worktree] ui = C:\Users\USER\AppData\Local\Temp\hads-p3-r2-live\runner\worktrees\case-17a48cc3198dd5e5\repo-22d9a742bfbcec32
+[원문] Runner 가 저장을 보고했다: available
+[거부] 대상 미기록 읽기 실행 → 409 ['workspace_target_not_recorded']
+[허용] UI 저장소 지정 읽기 실행 → 201
+[대기] 실제 codex 실행…
+[실행] outcome=completed exit=0 repository_id=repo-22d9a742bfbcec32 tool=codex-cli 0.154.0
+[효과] 없음(읽기 전용)
+[원장] UI worktree 경로를 담은 실행 기록: 0건
+[원문] run-live-ui-1789998958 의 로컬 원문 파일 2건
+[조합] ui: source=workspace_base base=9fb1e5ceb4 head=없음 미관측=True 지문=없음
+[조합] api: source=workspace_base 미관측=True  ← 실행이 없었으므로 관측되지 않았다
+[보존] API 그대로=True · UI 그대로=True
+[결과] 라이브 2부 통과

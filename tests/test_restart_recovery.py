@@ -1087,15 +1087,22 @@ def test_workspace_and_execution_effects_survive_a_forced_kill(controller):
     controller.kill_hard()
     controller.start()
 
-    workspace = httpx.get(f"{base}/api/cases/{case['id']}/workspace", timeout=10.0).json()
+    view = httpx.get(f"{base}/api/cases/{case['id']}/workspace", timeout=10.0).json()
+    # **P3-R2: 조회가 저장소별 목록이다.** 이 Case 는 저장소 하나를 쓰므로 하나다.
+    assert view["repository_count"] == 1
+    assert view["all_ready"] is True
+    workspace = view["workspaces"][0]
     assert workspace["state"] == "ready"
     assert workspace["base_commit"] == "0123456789abcdef0123456789abcdef01234567"
     assert workspace["branch"] == f"hads/{case['id']}"
+    # 어느 저장소의 작업공간인지도 남는다. 재시작이 그 연결을 잃으면 다음 실행이
+    # 어느 저장소에서 도는지 말할 수 없다(P3-R2).
+    assert workspace["repository_id"]
     # 사용자의 원래 트리를 정리하지 않았다는 관측도 남아 있다.
     assert workspace["user_tree_dirty"] is True
     assert workspace["user_tree_entries"] == 3
     # 격리 한계 문구는 **값으로** 복원된다. 화면이 지어내지 않는다(D-44).
-    assert workspace["isolation"] == "worktree_file_layout_only"
+    assert view["isolation"] == "worktree_file_layout_only"
 
     restored = httpx.get(f"{base}/api/runs/run-ws-1", timeout=10.0).json()
     assert restored["workspace_effect"]["files_changed"] == 2
@@ -1203,3 +1210,105 @@ def test_policy_profile_budget_and_repositories_survive_a_forced_kill(controller
     assert selected[0]["publish_allowed"] == 0
 
     assert policy["delegation_basis"]["current"]["basis_kind"] == "original_request"
+
+
+def test_per_repository_workspaces_and_the_composition_survive_a_forced_kill(
+    controller, tmp_path
+):
+    """P3-R2 AC-16 — 저장소별 작업공간과 코드 조합이 강제 종료 후에도 남는다.
+
+    **무엇이 복원돼야 하는가.** 저장소가 여럿이면 "어떤 코드 위에서 시작했는가"가
+    저장소마다 따로 있고, 그 연결을 잃으면 다음 실행이 어느 저장소에서 도는지 말할
+    수 없다. 조합도 마찬가지다 — 근거가 가리키는 대상이 재시작으로 사라지면 그
+    근거가 아직 유효한지 답할 수 없다(execution-workspace-review 2.1절).
+
+    여기서는 제어부 API 만 쓴다. git 동작은 `tests/test_repositories.py` 가 진짜
+    저장소로 본다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "multi-restart", "repo_path": "C:/tmp/api", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    registry = httpx.get(f"{base}/api/projects/{project['id']}/repositories", timeout=10.0).json()
+    primary = registry["repositories"][0]["id"]
+    ui = httpx.post(
+        f"{base}/api/projects/{project['id']}/repositories",
+        json={"name": "ui", "repo_path": "C:/tmp/ui"},
+        timeout=10.0,
+    ).json()["id"]
+
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "두 저장소 Case", "kind": "analysis"},
+        timeout=10.0,
+    ).json()
+
+    for repository_id in (primary, ui):
+        httpx.put(
+            f"{base}/api/cases/{case['id']}/repositories",
+            json={
+                "repository_id": repository_id,
+                "code_write_allowed": True,
+                "publish_allowed": False,
+                "selected_by": "owner",
+            },
+            timeout=10.0,
+        ).raise_for_status()
+
+    for repository_id, path, sha in (
+        (primary, "C:/tmp/api", "1111111111111111111111111111111111111111"),
+        (ui, "C:/tmp/ui", "2222222222222222222222222222222222222222"),
+    ):
+        httpx.post(
+            f"{base}/api/cases/{case['id']}/workspace",
+            json={"repository_id": repository_id, "base_ref": "HEAD"},
+            timeout=10.0,
+        ).raise_for_status()
+        httpx.post(
+            f"{base}/api/runner/workspaces/{case['id']}/ready",
+            json={
+                "runner_id": RUNNER_ID,
+                "repository_id": repository_id,
+                "repo_path": path,
+                "worktree_path": f"{path}-worktree",
+                "branch": f"hads/{case['id']}",
+                "base_commit": sha,
+                "base_ref": "HEAD",
+                "user_tree_dirty": repository_id == ui,
+                "user_tree_entries": 2 if repository_id == ui else 0,
+            },
+            timeout=10.0,
+        ).raise_for_status()
+
+    composition = httpx.post(
+        f"{base}/api/cases/{case['id']}/composition", timeout=10.0
+    ).json()
+    assert len(composition["entries"]) == 2
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    view = httpx.get(f"{base}/api/cases/{case['id']}/workspace", timeout=10.0).json()
+    assert view["repository_count"] == 2
+    assert view["all_ready"] is True
+    spaces = {w["repository_id"]: w for w in view["workspaces"]}
+    # **저장소마다 자기 기준 커밋과 자기 사용자 트리 관측이 그대로다.**
+    assert spaces[primary]["base_commit"] == "1111111111111111111111111111111111111111"
+    assert spaces[ui]["base_commit"] == "2222222222222222222222222222222222222222"
+    assert spaces[primary]["user_tree_dirty"] is False
+    assert spaces[ui]["user_tree_dirty"] is True
+    assert spaces[ui]["user_tree_entries"] == 2
+    assert spaces[primary]["allowance_source"] == "case_repository"
+
+    restored = httpx.get(f"{base}/api/cases/{case['id']}/composition", timeout=10.0).json()
+    assert restored["id"] == composition["id"]
+    assert restored["composition_hash"] == composition["composition_hash"]
+    assert {e["repository_id"] for e in restored["entries"]} == {primary, ui}
+    # 조합이 무엇을 관측하지 못했는지도 남는다. 복원이 빈칸을 채우지 않는다.
+    assert restored["snapshot_complete"] is False
+    assert restored["matches_current_state"] is True

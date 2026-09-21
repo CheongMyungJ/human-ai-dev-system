@@ -561,20 +561,21 @@ class Harness:
         mode: str = "p2-01-local",
         permission: str = "read_only",
         task_id: str = "task-1",
+        repository_id: str | None = None,
     ) -> dict[str, Any]:
-        response = self.client.post(
-            f"/api/cases/{case_id}/runs",
-            json={
-                "run_id": run_id,
-                "instruction_artifact_id": artifact_id,
-                "purpose": purpose,
-                "role": role,
-                "tool_id": tool_id,
-                "mode": mode,
-                "permission": permission,
-                "task_id": task_id,
-            },
-        )
+        body: dict[str, Any] = {
+            "run_id": run_id,
+            "instruction_artifact_id": artifact_id,
+            "purpose": purpose,
+            "role": role,
+            "tool_id": tool_id,
+            "mode": mode,
+            "permission": permission,
+            "task_id": task_id,
+        }
+        if repository_id is not None:
+            body["repository_id"] = repository_id
+        response = self.client.post(f"/api/cases/{case_id}/runs", json=body)
         # 201 = 새로 만듦, 200 = 같은 run_id 의 재전송(만들지 않음)
         assert response.status_code in (200, 201), response.text
         return response.json()
@@ -583,7 +584,11 @@ class Harness:
     # ------------------------------------------------------ P3-02 도우미
 
     def complete_task(
-        self, case_id: str, task_key: str, run_id: str | None = None
+        self,
+        case_id: str,
+        task_key: str,
+        run_id: str | None = None,
+        repository_id: str | None = None,
     ) -> dict[str, Any]:
         """그 Task 를 **실제 실행으로** 끝낸다.
 
@@ -603,6 +608,7 @@ class Harness:
             tool_id=FAKE_TOOL_ID,
             mode=FAKE_TOOL_MODE,
             task_id=task_key,
+            repository_id=repository_id,
         )
         self.agent.poll_once()
         return created
@@ -882,6 +888,7 @@ class Harness:
         stage: str,
         run_id: str | None = None,
         request_text: str = "설계를 작성해 주세요.",
+        repository_id: str | None = None,
     ) -> Any:
         """AI에게 설계 또는 개발계획을 작성시킨다.
 
@@ -891,18 +898,21 @@ class Harness:
         instruction = self.submit_artifact(
             case_id, request_text, kind="instruction", summary=f"{stage} 작성 요청"
         )
-        response = self.client.post(
-            f"/api/cases/{case_id}/runs",
-            json={
-                "run_id": run_id or f"run-{stage}-1",
-                "instruction_artifact_id": instruction["artifact_id"],
-                "purpose": f"{stage}_authoring",
-                "role": "author",
-                "tool_id": FAKE_TOOL_ID,
-                "mode": FAKE_TOOL_MODE,
-                "permission": "read_only",
-            },
-        )
+        body: dict[str, Any] = {
+            "run_id": run_id or f"run-{stage}-1",
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": f"{stage}_authoring",
+            "role": "author",
+            "tool_id": FAKE_TOOL_ID,
+            "mode": FAKE_TOOL_MODE,
+            "permission": "read_only",
+        }
+        # **작업공간이 둘 이상이면 읽기 전용 실행도 대상을 밝혀야 한다**(P3-R2).
+        # 밝히지 않으면 배정이 조용히 사용자의 원래 저장소로 떨어지고, 설계를 쓰는
+        # 실행이 이 Case 의 작업이 아니라 사용자의 다른 작업을 읽는다.
+        if repository_id is not None:
+            body["repository_id"] = repository_id
+        response = self.client.post(f"/api/cases/{case_id}/runs", json=body)
         if response.status_code in (200, 201):
             self.agent.poll_once()
         return response
@@ -945,6 +955,7 @@ class Harness:
         run_id: str = "run-impl-1",
         permission: str = "read_only",
         task_id: str = "T2",
+        repository_id: str | None = None,
     ):
         """기능 구현 실행을 요청한다. 허용/거부 응답을 그대로 돌려준다.
 
@@ -954,19 +965,21 @@ class Harness:
         instruction = self.submit_artifact(
             case_id, "계획대로 구현해 주세요.", kind="instruction", summary="구현 요청"
         )
-        return self.client.post(
-            f"/api/cases/{case_id}/runs",
-            json={
-                "run_id": run_id,
-                "instruction_artifact_id": instruction["artifact_id"],
-                "purpose": "feature_implementation",
-                "role": "author",
-                "tool_id": FAKE_TOOL_ID,
-                "mode": FAKE_TOOL_MODE,
-                "permission": permission,
-                "task_id": task_id,
-            },
-        )
+        body: dict[str, Any] = {
+            "run_id": run_id,
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": "feature_implementation",
+            "role": "author",
+            "tool_id": FAKE_TOOL_ID,
+            "mode": FAKE_TOOL_MODE,
+            "permission": permission,
+            "task_id": task_id,
+        }
+        # **어느 저장소의 작업공간에서 도는가**(P3-R2). 주지 않으면 키 자체를 넣지
+        # 않는다 — 명시적 `null` 과 미기록을 API 계약에서 구별할 이유가 없다.
+        if repository_id is not None:
+            body["repository_id"] = repository_id
+        return self.client.post(f"/api/cases/{case_id}/runs", json=body)
 
     def open_questions(self, case_id: str) -> list[dict[str, Any]]:
         """최신 의도 버전에 붙은 질문 목록. 이월 질문도 여기 들어 있다.
@@ -1039,21 +1052,85 @@ class Harness:
         assert response.status_code == 201, response.text
         return response.json(), repo
 
-    def request_workspace(self, case_id: str, base_ref: str = "HEAD"):
-        return self.client.post(
-            f"/api/cases/{case_id}/workspace", json={"base_ref": base_ref}
-        )
+    def request_workspace(
+        self, case_id: str, base_ref: str = "HEAD", repository_id: str | None = None
+    ):
+        body: dict[str, Any] = {"base_ref": base_ref}
+        if repository_id is not None:
+            body["repository_id"] = repository_id
+        return self.client.post(f"/api/cases/{case_id}/workspace", json=body)
 
-    def prepare_workspace(self, case_id: str, base_ref: str = "HEAD") -> dict[str, Any]:
+    def prepare_workspace(
+        self, case_id: str, base_ref: str = "HEAD", repository_id: str | None = None
+    ) -> dict[str, Any]:
         """작업공간을 요청하고 Runner 가 실제로 만들게 한다."""
-        assert self.request_workspace(case_id, base_ref).status_code == 201
+        assert self.request_workspace(case_id, base_ref, repository_id).status_code == 201
         self.agent.prepare_workspaces()
-        return self.workspace(case_id)
+        return self.workspace(case_id, repository_id)
 
-    def workspace(self, case_id: str) -> dict[str, Any] | None:
+    def workspace_view(self, case_id: str) -> dict[str, Any] | None:
+        """저장소별 작업공간 전부와 조합·선택을 담은 조회 결과(P3-R2)."""
         response = self.client.get(f"/api/cases/{case_id}/workspace")
         assert response.status_code == 200, response.text
         return response.json()
+
+    def workspace(
+        self, case_id: str, repository_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """**한 저장소의** 작업공간.
+
+        P3-R2에서 조회가 저장소별 목록이 됐다. 단일 저장소 Case 의 동작을 보는
+        시험은 그 하나를 보면 되므로 여기서 골라 준다 — 저장소를 말하지 않았는데
+        여럿이면 **고르지 않는다**(`None`). 아무 것이나 돌려주면 시험이 어느
+        저장소를 봤는지 모르는 채로 통과한다.
+        """
+        view = self.workspace_view(case_id)
+        if view is None:
+            return None
+        spaces = view["workspaces"]
+        if repository_id is not None:
+            spaces = [w for w in spaces if w["repository_id"] == repository_id]
+        if len(spaces) != 1:
+            return None
+        workspace = dict(spaces[0])
+        # 목록이 아니라 하나를 볼 때도 격리 한계 문구는 같은 곳에서 온다.
+        workspace["isolation"] = view["isolation"]
+        workspace["isolation_note"] = view["isolation_note"]
+        return workspace
+
+    def project_repository_id(self, project_id: str) -> str:
+        """Project 의 등록 저장소 하나. 단일 저장소 시험이 대상을 밝힐 때 쓴다."""
+        view = self.client.get(f"/api/projects/{project_id}/repositories").json()
+        return view["repositories"][0]["id"]
+
+    def register_repository(
+        self, project_id: str, name: str, repo_path: str
+    ) -> dict[str, Any]:
+        response = self.client.post(
+            f"/api/projects/{project_id}/repositories",
+            json={"name": name, "repo_path": repo_path},
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    def select_repository(
+        self,
+        case_id: str,
+        repository_id: str,
+        code_write_allowed: bool = True,
+        publish_allowed: bool = False,
+        selection_source: str = "explicit",
+    ):
+        return self.client.put(
+            f"/api/cases/{case_id}/repositories",
+            json={
+                "repository_id": repository_id,
+                "selection_source": selection_source,
+                "code_write_allowed": code_write_allowed,
+                "publish_allowed": publish_allowed,
+                "selected_by": "owner",
+            },
+        )
 
     def run_commands(self, run_id: str) -> list[dict[str, Any]]:
         return self.client.get(f"/api/runs/{run_id}").json()["commands"]

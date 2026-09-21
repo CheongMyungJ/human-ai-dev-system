@@ -763,14 +763,25 @@ class RunnerAgent:
 
     # ------------------------------------------------------------ 작업공간
 
-    def worktree_for(self, case_id: str) -> Path:
-        """이 Runner 가 이 Case 의 worktree 를 두는 자리.
+    @staticmethod
+    def _safe_name(value: str) -> str:
+        return value.replace("/", "_").replace("\\", "_")
+
+    def worktree_for(self, case_id: str, repository_id: str | None = None) -> Path:
+        """이 Runner 가 이 (Case, 저장소)의 worktree 를 두는 자리.
 
         **저장소 안이 아니다.** 저장소 안에 두면 그 파일들이 원래 작업 트리의
         미추적 파일로 보이고, 사용자가 자기 변경과 구별할 수 없게 된다.
+
+        **저장소마다 다른 자리다**(P3-R2·D-39). 한 Case 가 두 저장소를 고치면 두
+        worktree 가 필요하고, 같은 경로를 쓰면 두 번째 준비가 첫 번째를 남의 것으로
+        보고 거부한다. `repository_id` 가 없으면 P3-03의 자리를 그대로 쓴다 — 이미
+        만들어진 작업공간이 거기 있다.
         """
-        safe = case_id.replace("/", "_").replace("\\", "_")
-        return self.config.worktrees_dir / safe
+        base = self.config.worktrees_dir / self._safe_name(case_id)
+        if repository_id is None:
+            return base
+        return base / self._safe_name(repository_id)
 
     def prepare_workspaces(self) -> list[dict[str, Any]]:
         """맡은 작업공간 준비 요청을 처리한다.
@@ -782,10 +793,18 @@ class RunnerAgent:
         results: list[dict[str, Any]] = []
         for request in self.client.pending_workspace_requests(self.config.runner_id):
             case_id = request["case_id"]
+            repository_id = request.get("repository_id")
+            # **이미 기록된 자리가 있으면 그 자리를 다시 쓴다.** 준비가 실패한 뒤
+            # 다시 요청했을 때 새 규칙으로 경로를 옮기면, 그 worktree 에서 이미 한
+            # 작업이 떨어져 나가고 남은 브랜치는 다음 준비에서 남의 것으로 보인다.
+            recorded = (request.get("worktree_path") or "").strip()
+            worktree_path = (
+                Path(recorded) if recorded else self.worktree_for(case_id, repository_id)
+            )
             try:
                 prepared = workspace.prepare(
                     repo_path=Path(request["repo_path"]),
-                    worktree_path=self.worktree_for(case_id),
+                    worktree_path=worktree_path,
                     branch=request["branch"],
                     base_ref=request.get("base_ref") or "HEAD",
                     known_base_commit=request.get("base_commit") or "",
@@ -793,15 +812,27 @@ class RunnerAgent:
             except (workspace.WorkspaceError, OSError, subprocess.SubprocessError) as exc:
                 self.client.report_workspace_failed(
                     case_id,
-                    {"runner_id": self.config.runner_id, "reason": f"{type(exc).__name__}: {exc}"[:200]},
+                    {
+                        "runner_id": self.config.runner_id,
+                        "repository_id": repository_id,
+                        "reason": f"{type(exc).__name__}: {exc}"[:200],
+                    },
                 )
-                results.append({"case_id": case_id, "action": "failed", "reason": str(exc)})
+                results.append(
+                    {
+                        "case_id": case_id,
+                        "repository_id": repository_id,
+                        "action": "failed",
+                        "reason": str(exc),
+                    }
+                )
                 continue
             user_tree = prepared.user_tree
             self.client.report_workspace_ready(
                 case_id,
                 {
                     "runner_id": self.config.runner_id,
+                    "repository_id": repository_id,
                     "repo_path": prepared.repo_path,
                     "worktree_path": prepared.worktree_path,
                     "branch": prepared.branch,
@@ -816,6 +847,7 @@ class RunnerAgent:
             results.append(
                 {
                     "case_id": case_id,
+                    "repository_id": repository_id,
                     "action": "reused" if prepared.reused else "created",
                     "branch": prepared.branch,
                     "base_commit": prepared.base_commit,

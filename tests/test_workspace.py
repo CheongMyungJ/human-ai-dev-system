@@ -160,9 +160,15 @@ def test_an_existing_branch_is_not_taken_over(harness):
 
 
 def test_a_non_empty_path_is_not_taken_over(harness):
-    """AC-3: 비어 있지 않은 경로도 마찬가지다. 소유를 확인할 수 없다."""
+    """AC-3: 비어 있지 않은 경로도 마찬가지다. 소유를 확인할 수 없다.
+
+    **경로는 P3-R2에서 `{case}/{repo}` 로 바뀌었다.** 자리를 직접 계산하지 않고
+    Runner 에게 물어 오는 이유는, 시험이 옛 자리를 붙잡고 있으면 실제 대상 경로가
+    비어 있게 되어 준비가 성공하고 "덮어쓰지 않는다"가 확인되지 않기 때문이다.
+    """
     case, _repo = _agreed_git_case(harness)
-    squatter = harness.runner_config.worktrees_dir / case["id"]
+    repository_id = harness.project_repository_id(case["project_id"])
+    squatter = harness.agent.worktree_for(case["id"], repository_id)
     squatter.mkdir(parents=True, exist_ok=True)
     (squatter / "someone-elses.txt").write_text("남의 파일\n", encoding="utf-8")
 

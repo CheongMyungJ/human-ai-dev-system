@@ -292,6 +292,27 @@ NEEDS_PREPARATION: frozenset[RunPurpose] = frozenset(
 )
 
 
+def _check_workspace_target(request: AdmissionRequest, refuse: Any) -> None:
+    """이 실행이 **어느 저장소의 작업공간에서 도는가**(P3-R2·D-39).
+
+    **쓰기에만 적용하지 않는다.** 읽기 전용 검토·조사도 "이 Case 가 실제로 만들고
+    있는 코드"를 봐야 하고(배정이 worktree 를 주는 이유가 그것이다), 대상을 모르는
+    채로 내보내면 배정이 조용히 사용자의 원래 저장소로 떨어진다 — 검토가 이 Case 의
+    작업이 아니라 사용자의 다른 작업을 읽게 된다.
+
+    **작업공간이 하나뿐이면 모호하지 않으므로 아무 것도 하지 않는다.** 이 검사가
+    무는 것은 저장소가 둘 이상인 Case 뿐이고, 그런 Case 는 R2 이전에 없었다.
+    """
+    workspace = request.workspace_state or {}
+    if workspace.get("present") and not workspace.get("target_recorded", True):
+        refuse(
+            AdmissionRefusal.WORKSPACE_TARGET_NOT_RECORDED,
+            f"이 업무에 작업공간이 {workspace.get('repository_count')}개 있는데 이"
+            " 실행의 대상 저장소가 기록되지 않았다. 어느 저장소를 보거나 고칠지"
+            " 모르는 채로 실행을 배정하지 않는다",
+        )
+
+
 def _check_workspace(request: AdmissionRequest, refuse: Any) -> None:
     """쓰기를 열기 전의 작업공간 조건(P3-03).
 
@@ -313,6 +334,11 @@ def _check_workspace(request: AdmissionRequest, refuse: Any) -> None:
             "이 업무의 전용 작업공간이 없다. 브랜치·worktree 와 기준 커밋을 먼저"
             " 준비한다 — 준비 없이 쓰기를 열면 사용자의 미커밋 변경을 보호할 수 없다",
         )
+    elif not workspace.get("target_recorded", True):
+        # 아래 `_check_workspace_target` 이 이미 같은 사유로 거부했다. 여기서 준비
+        # 상태를 더 따지지 않는 이유는, 어느 작업공간을 보는지 모르는 채로 "준비되지
+        # 않았다"를 말하면 사람이 엉뚱한 저장소를 고치러 가기 때문이다.
+        pass
     elif workspace.get("state") == WorkspaceState.FAILED.value:
         refuse(
             AdmissionRefusal.WORKSPACE_FAILED,
@@ -462,6 +488,10 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     elif request.permission in WRITE_PERMISSIONS:
         # 권한이 열린 목적이어도 **작업공간과 경합 조건을 따로 본다.**
         _check_workspace(request, refuse)
+
+    # 대상 저장소는 **권한과 무관하게** 본다(P3-R2). 읽기 전용 검토도 어느 코드를
+    # 보는지 정해져 있어야 한다.
+    _check_workspace_target(request, refuse)
 
     if not request.tool_installed:
         refuse(

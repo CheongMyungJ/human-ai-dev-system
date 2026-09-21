@@ -836,11 +836,22 @@ CREATE INDEX IF NOT EXISTS idx_task_case_key ON task(case_id, task_key);
 -- 실제 git 작업은 **저장소를 가진 Runner** 가 한다. 제어부가 직접 git 을 부르면
 -- 단일 호스트에서만 동작하고 서버+PC 배치(FR-27)에서 무너진다. 그래서 이 표는
 -- "요청"과 "Runner 가 보고한 결과"를 함께 담는다.
+-- **v9(P3-R2)에서 기본 키가 `(case_id, repository_id)` 로 바뀌었다.** Case 하나가
+-- 여러 저장소를 선택할 수 있고 저장소마다 브랜치·worktree·시작 기준이 따로 있다
+-- (D-39). 옛 행은 Project 의 이행된 저장소에 연결되며 브랜치·기준 커밋·worktree
+-- 경로는 그대로 남는다 — 옮기면 이미 한 작업이 떨어져 나간다.
 CREATE TABLE IF NOT EXISTS case_workspace (
-    case_id           TEXT PRIMARY KEY REFERENCES "case"(id),
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    -- 어느 저장소의 작업공간인가. v9 이전 행은 이행이 채운다.
+    repository_id     TEXT NOT NULL REFERENCES project_repository(id),
     project_id        TEXT NOT NULL REFERENCES project(id),
     state             TEXT NOT NULL,          -- requested | ready | failed
     branch            TEXT NOT NULL,          -- 전용 브랜치 이름(제어부가 정한다)
+    -- **무엇을 근거로 이 작업공간을 만들었는가**(P3-R2).
+    --   `case_repository`             Case 가 그 저장소를 선택하고 쓰기를 허용했다
+    --   `implicit_single_repository`  선택 기록이 없는 이행된 Case 다. 없던 선택을
+    --                                 지어내지 않고 허용의 출처를 그대로 남긴다
+    allowance_source  TEXT NOT NULL DEFAULT '',
     -- 아래는 Runner 가 실제로 만든 뒤 보고하는 값. 요청 시점에는 비어 있다.
     runner_id         TEXT REFERENCES runner(id),
     repo_path         TEXT NOT NULL DEFAULT '',  -- Runner 호스트에서 해석된 저장소
@@ -849,11 +860,15 @@ CREATE TABLE IF NOT EXISTS case_workspace (
     base_ref          TEXT NOT NULL DEFAULT '',  -- 그 커밋을 고른 근거 ref
     -- 준비 시점에 관측한 **사용자의 원래 작업 트리**. 건드리지 않았다는 사실을
     -- 남기기 위한 관측값이며 파일 경로는 넣지 않는다(수만 센다).
+    --
+    -- **저장소마다 따로 센다.** 한 Case 가 두 저장소를 쓰면 각 저장소의 사용자
+    -- 변경은 서로 다른 것이고, 하나로 합치면 어느 쪽을 보존했는지 말할 수 없다.
     user_tree_dirty   INTEGER NOT NULL DEFAULT 0,
     user_tree_entries INTEGER NOT NULL DEFAULT 0,
     failure_reason    TEXT NOT NULL DEFAULT '',
     requested_at      TEXT NOT NULL,
     ready_at          TEXT,
+    PRIMARY KEY (case_id, repository_id),
     CHECK (length(failure_reason) <= 200)
 );
 
@@ -1044,3 +1059,60 @@ CREATE INDEX IF NOT EXISTS idx_checkpoint_case ON controlled_checkpoint(case_id,
 CREATE INDEX IF NOT EXISTS idx_budget_case ON budget_setting(case_id, state);
 CREATE INDEX IF NOT EXISTS idx_project_repository ON project_repository(project_id);
 CREATE INDEX IF NOT EXISTS idx_case_repository_case ON case_repository(case_id, state);
+
+-- ===================================================================
+-- 스키마 v9 (P3-R2 Case × Repository 작업공간·코드 조합)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. **본문 컬럼은 없다.** 아래의
+-- `tree_digest` 는 그 시점 작업 트리 내용의 **지문(해시)** 이며
+-- `artifact_ref.content_hash` 와 같은 성격이다 — 파일 경로도 diff 본문도 아니다.
+--
+-- R2 가 강제하는 것과 강제하지 않는 것을 구별한다. 저장소 **선택·쓰기 허용**은 이제
+-- 작업공간을 만들 수 있는지를 실제로 정한다. **게시 허용**은 여전히 기록일 뿐이고
+-- 실제 push·PR·기록 이슈는 P5 다. 조합이 생겼다는 이유로 외부 반영을 지원한다고
+-- 표시하지 않는다.
+-- ===================================================================
+
+-- 이 Case 의 **코드 조합**(execution-workspace-review 2.1절).
+--
+-- 왜 필요한가. 저장소가 여럿이면 "무엇을 검증했는가"를 브랜치 이름이나 파일 경로로
+-- 말할 수 없다. 움직이는 이름이 아니라 `Repo ID → 정확한 스냅샷 참조` 의 벡터로
+-- 대상을 고정해야 나중에 그 근거가 아직 유효한지 답할 수 있다.
+--
+-- 조합은 **기존 기록에서 만든다.** 새 관측을 요구하지 않으며, 관측이 없는 저장소는
+-- 기준 커밋만 담고 `snapshot_incomplete` 로 표시한다 — 기준 커밋만으로 실제 입력을
+-- 설명할 수 없다는 사실을 값으로 남기는 것이다.
+CREATE TABLE IF NOT EXISTS code_composition (
+    id            TEXT PRIMARY KEY,
+    case_id       TEXT NOT NULL REFERENCES "case"(id),
+    revision      INTEGER NOT NULL,
+    -- 항목을 저장소 순으로 정렬해 만든 지문. 같은 상태면 같은 값이고, 그때는 새
+    -- revision 을 만들지 않는다.
+    composition_hash TEXT NOT NULL,
+    -- 이 조합이 이 Case 의 쓰기 허용 저장소를 **전부** 담았는가. 담지 않았다면
+    -- 개별 저장소 검사가 모두 통과해도 통합 조건을 충족했다고 보지 않는다.
+    covers_all_code_repositories INTEGER NOT NULL DEFAULT 0,
+    state         TEXT NOT NULL,          -- current | superseded
+    created_at    TEXT NOT NULL,
+    superseded_at TEXT,
+    UNIQUE (case_id, revision)
+);
+
+-- 조합의 저장소별 항목. **식별자와 수, 지문만 있다.**
+CREATE TABLE IF NOT EXISTS code_composition_entry (
+    composition_id TEXT NOT NULL REFERENCES code_composition(id),
+    repository_id  TEXT NOT NULL REFERENCES project_repository(id),
+    base_commit    TEXT NOT NULL,          -- 시작 기준. 커밋된 상태다
+    head_commit    TEXT NOT NULL DEFAULT '',   -- 관측된 HEAD. 없으면 빈 문자열
+    dirty_entries  INTEGER,                -- 미커밋·미추적 **수**. NULL 은 미관측
+    tree_digest    TEXT NOT NULL DEFAULT '',   -- 그 시점 트리 내용의 지문(해시)
+    -- 이 항목을 무엇으로 채웠는가.
+    --   `run_effect`      실행이 실제로 관측했다. HEAD·미커밋까지 고정된다
+    --   `workspace_base`  관측이 없다. 기준 커밋만 있고 지금 상태는 **모른다**
+    source         TEXT NOT NULL,
+    observed_run_id TEXT REFERENCES run(run_id),
+    observed_at    TEXT,
+    PRIMARY KEY (composition_id, repository_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_composition_case ON code_composition(case_id, state);

@@ -340,6 +340,13 @@ def compose_effect(
         "head_after": after.head,
         "entries_before": len(before.entries),
         "entries_after": len(after.entries),
+        # **트리 내용의 지문.** 코드 조합이 이 값으로 스냅샷을 고정한다(P3-R2,
+        # execution-workspace-review 2.1절). 해시이며 본문이 아니다 — 파일 경로도
+        # diff 도 들어 있지 않고, `artifact_ref.content_hash` 와 같은 성격이다.
+        # 이것이 없으면 HEAD 가 같은 두 시점의 미커밋 상태를 구별할 수 없어
+        # "무엇을 검증했는가"를 커밋 하나로만 말하게 된다.
+        "tree_digest_before": before.digest,
+        "tree_digest_after": after.digest,
         # **이 실행이 무엇인가 바꿨는가.** 아래 수와 다르다 — 수는 누적이다.
         "changed": changed,
         # 기준 커밋 대비 **누적** 변경. 이 실행만의 것이 아니다.

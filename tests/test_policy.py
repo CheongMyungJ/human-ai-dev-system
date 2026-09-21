@@ -716,20 +716,30 @@ def test_an_unselected_case_shows_the_implicit_single_repository(harness):
 
 
 def test_the_policy_view_says_who_enforces_each_axis(harness):
-    """AC-10 — 기록되지만 아직 강제되지 않는 축을 담당 작업과 함께 표시한다.
+    """AC-10 — 각 축을 **지금 누가 강제하는가**를 담당 작업과 함께 표시한다.
 
-    **이 시험은 R2~R4 에서 갱신된다.** 그때 이 표의 값이 바뀌어야 하고, 바뀌지
-    않으면 시험이 실패한다 — 그것이 의도다.
+    **P3-R2에서 갱신했다.** `repository_selection` 이 `recorded_not_enforced` 에서
+    `enforced` 로 바뀌었다 — R2 가 선택·쓰기 허용으로 실제 작업공간을 막기 때문이다.
+    바뀌지 않은 채 이 시험이 통과했다면 강제를 붙이지 않은 것이고, 그것이 이 시험을
+    남겨 두는 이유다(DEVELOPMENT.md 9절).
+
+    나머지 셋은 아직 기록뿐이다. R3·R4 가 붙일 때 이 시험이 다시 갱신돼야 한다.
     """
     project = harness.create_project()
     case = harness.create_case(project["id"])
     enforcement = _policy(harness, case["id"])["enforcement"]
     assert enforcement["autonomy"]["state"] == "recorded_not_enforced"
     assert enforcement["autonomy"]["enforced_by"] == "P3-R4"
+    assert enforcement["controlled_checkpoint"]["state"] == "recorded_not_enforced"
     assert enforcement["controlled_checkpoint"]["enforced_by"] == "P3-R4"
+    assert enforcement["budget"]["state"] == "recorded_not_enforced"
     assert enforcement["budget"]["enforced_by"] == "P3-R3"
+    # **P3-R2가 실제로 강제한다.**
+    assert enforcement["repository_selection"]["state"] == "enforced"
     assert enforcement["repository_selection"]["enforced_by"] == "P3-R2"
+    # 게시는 여전히 구현되지 않았다. 쓰기 허용이 게시 허용으로 번지지 않는다(D-64).
     assert enforcement["publish"]["state"] == "not_implemented"
+    assert enforcement["publish"]["enforced_by"] == "P5"
 
 
 def test_a_hard_budget_does_not_yet_change_admission(harness):

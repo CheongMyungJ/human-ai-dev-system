@@ -51,7 +51,9 @@ function EnforcementTag(props: { note: { state: string; enforced_by: string; det
     <span className="muted small" title={note.detail}>
       {note.state === 'recorded_not_enforced'
         ? `기록됨 · 아직 강제하지 않음 (${note.enforced_by})`
-        : `미구현 (${note.enforced_by})`}
+        : note.state === 'enforced'
+          ? `강제함 (${note.enforced_by})`
+          : `미구현 (${note.enforced_by})`}
     </span>
   )
 }
@@ -322,9 +324,20 @@ export function PolicyPanel(props: {
             </li>
           )}
         </ul>
+        {policy.repositories.excluded.length > 0 && (
+          <ul className="list">
+            {policy.repositories.excluded.map((row) => (
+              <li key={row.repository_id} className="small warn">
+                {row.repository_name} · <strong>명시 제외</strong> — 허용 내 자동 추가가
+                넘지 못하는 경계다(D-63)
+              </li>
+            ))}
+          </ul>
+        )}
         <p className="muted small">
-          쓰기 허용은 게시 허용이 아니다(D-64). 기록 저장소는 코드 대상에 자동으로
-          들어가지 않는다(D-17).
+          선택·쓰기 허용은 <strong>작업공간을 실제로 정한다</strong>(P3-R2). 쓰기 허용은
+          여전히 게시 허용이 아니고(D-64), 실제 push·PR 은 구현되지 않았다. 기록 저장소는
+          코드 대상에 자동으로 들어가지 않는다(D-17).
         </p>
       </div>
 

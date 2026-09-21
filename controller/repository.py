@@ -48,6 +48,7 @@ from domain.models import (
     CheckpointState,
     ClosureKind,
     CompletionMode,
+    CompositionEntrySource,
     ConfirmationState,
     ContentOrigin,
     ContextRefRole,
@@ -93,6 +94,7 @@ from domain.models import (
     WorkGraphSource,
     WorkGraphState,
     WorkLevel,
+    WorkspaceAllowanceSource,
     WorkspaceState,
 )
 
@@ -768,6 +770,7 @@ class Repository:
         instruction_artifact_id: str,
         instruction_artifact_rev: int,
         purpose: RunPurpose = RunPurpose.LIMITED_ANALYSIS,
+        repository_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
@@ -795,8 +798,8 @@ class Repository:
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
-                    " assignment_generation, created_at, purpose)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " assignment_generation, created_at, purpose, repository_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -811,6 +814,9 @@ class Repository:
                         1,
                         now,
                         purpose.value,
+                        # **어느 저장소의 작업공간에서 도는가.** NULL 은 "주 저장소"가
+                        # 아니라 기록되지 않음이다(P3-R2).
+                        repository_id,
                     ),
                 )
         except sqlite3.IntegrityError:
@@ -892,14 +898,18 @@ class Repository:
         run = self.get_run(run_id)
         case = self.get_case(run["case_id"])
         project = self.get_project(case["project_id"])
-        run["repo_path"] = project["repo_path"]
-        # **Case 작업공간이 준비돼 있으면 그 안에서 실행한다**(D-39·FR-08).
-        # 읽기 전용 실행도 같은 worktree 를 쓴다 — 그래야 검토·조사가 이 Case 가
-        # 실제로 만들고 있는 코드를 본다. 준비된 작업공간이 없으면 저장소 경로를
-        # 그대로 쓰며, 그 상태에서는 진입 검사가 쓰기를 이미 막았다.
-        workspace = self.get_workspace(run["case_id"])
+        # **Case × Repository 작업공간이 준비돼 있으면 그 안에서 실행한다**
+        # (D-39·FR-08). 읽기 전용 실행도 같은 worktree 를 쓴다 — 그래야 검토·조사가
+        # 이 Case 가 실제로 만들고 있는 코드를 본다.
+        #
+        # 어느 저장소인지는 `run.repository_id` 가 말한다. 기록되지 않은 실행
+        # (P3-R2 이전)은 작업공간이 하나뿐일 때만 그것으로 해석하고, 둘 이상이면
+        # 진입 검사가 이미 `workspace_target_not_recorded` 로 막았다.
+        workspace = self.get_workspace(run["case_id"], run.get("repository_id"))
         if workspace is not None and workspace["state"] == WorkspaceState.READY.value:
+            run["repo_path"] = workspace["repo_path"] or project["repo_path"]
             run["workspace"] = {
+                "repository_id": workspace["repository_id"],
                 "branch": workspace["branch"],
                 "worktree_path": workspace["worktree_path"],
                 "repo_path": workspace["repo_path"],
@@ -907,8 +917,18 @@ class Repository:
             }
             run["workspace_path"] = workspace["worktree_path"]
         else:
+            # 준비된 작업공간이 없다. 저장소 경로는 **정본인 `project_repository`**
+            # 에서 찾고, 찾지 못하면 v1의 `project.repo_path` 로 떨어진다(P3-R2).
+            # 이 상태에서는 진입 검사가 쓰기를 이미 막았다.
+            repo_path = project["repo_path"]
+            if run.get("repository_id"):
+                try:
+                    repo_path = self.get_project_repository(run["repository_id"])["repo_path"]
+                except NotFoundError:
+                    pass
+            run["repo_path"] = repo_path
             run["workspace"] = None
-            run["workspace_path"] = project["repo_path"]
+            run["workspace_path"] = repo_path
         run["case_title"] = case["title"]
         run["case_kind"] = case["kind"]
         # **P3-R1: Profile 과 그 정의판을 함께 준다.** Runner 가 초안 항목을 그
@@ -1993,6 +2013,7 @@ class Repository:
         instruction_artifact_rev: int,
         session: str = "new",
         target_intent_version_id: str | None = None,
+        repository_id: str | None = None,
     ) -> AdmissionResult:
         """진입 조건을 검사한다. **판단 근거를 전부 DB에서 다시 읽는다.**
 
@@ -2048,7 +2069,9 @@ class Repository:
             # 상태를 두지 않는다는 규칙이 선행 조건에도 그대로 적용된다(FR-29).
             preparation_state=self.preparation_state(case_id),
             # 작업공간과 쓰기 경합도 같은 규칙으로 지금 읽는다(P3-03).
-            workspace_state=self.workspace_state(case_id),
+            # **어느 저장소의 작업공간인가**도 함께 본다(P3-R2). 대상을 주지 않았고
+            # 작업공간이 둘 이상이면 고르지 않고 거부한다.
+            workspace_state=self.workspace_state(case_id, repository_id),
             case_write_runs=self.unfinished_write_runs(case_id=case_id),
         )
         return evaluate_admission(request)
@@ -2129,6 +2152,7 @@ class Repository:
         instruction_artifact_id: str,
         instruction_artifact_rev: int,
         session: str = "new",
+        repository_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, bool, AdmissionResult | None, dict[str, Any] | None]:
         """**Run을 만드는 유일한 경로.** 진입 검사를 통과해야 만들어진다.
 
@@ -2159,6 +2183,7 @@ class Repository:
             instruction_artifact_id=instruction_artifact_id,
             instruction_artifact_rev=instruction_artifact_rev,
             session=session,
+            repository_id=repository_id,
         )
         if not result.admitted:
             check = self.record_admission(
@@ -2177,6 +2202,7 @@ class Repository:
             instruction_artifact_id=instruction_artifact_id,
             instruction_artifact_rev=instruction_artifact_rev,
             purpose=purpose,
+            repository_id=repository_id,
         )
         if created:
             # **고정 컨텍스트를 여기서 정한다.** 배정 시점이 아니라 생성 시점에
@@ -2301,6 +2327,7 @@ class Repository:
         evidence_run_id: str | None = None,
         evidence_artifact_id: str | None = None,
         evidence_artifact_rev: int | None = None,
+        composition_id: str | None = None,
     ) -> dict[str, Any]:
         """기준별 판정을 기록한다.
 
@@ -2312,6 +2339,11 @@ class Repository:
 
         `needs_recheck` 는 사람이 직접 적는 값이 아니다 — 대상이 바뀌었을 때
         시스템이 전이시키는 값이므로 여기서는 거부한다.
+
+        **`composition_id` 는 그 근거가 어느 코드 조합 위에서 나왔는지다**(P3-R2).
+        움직이는 브랜치 이름이 아니라 고정된 조합으로 대상을 묶어야 나중에 그 근거가
+        아직 유효한지 답할 수 있다(execution-workspace-review 2.1절). 조회는 그
+        유효성을 **저장하지 않고 도출한다**.
         """
         criterion = self.get_success_criterion(criterion_id)
         self.guard_open_case(criterion["case_id"])
@@ -2357,12 +2389,18 @@ class Repository:
                 if ref["availability"] == Availability.LOST_BEFORE_PERSIST.value:
                     raise ConflictError("evidence original was lost before persistence")
 
+        if composition_id is not None:
+            composition = self.get_code_composition(composition_id)
+            if composition["case_id"] != criterion["case_id"]:
+                raise ConflictError("code composition belongs to a different case")
+
         now = utc_now()
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
                 " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
-                " summary = ?, recorded_by = ?, recorded_at = ? WHERE criterion_id = ?",
+                " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?"
+                " WHERE criterion_id = ?",
                 (
                     verdict.value,
                     evidence_kind.value,
@@ -2372,6 +2410,7 @@ class Repository:
                     _summary(summary),
                     recorded_by,
                     now,
+                    composition_id,
                     criterion_id,
                 ),
             )
@@ -2383,7 +2422,13 @@ class Repository:
         ).fetchone()
         if row is None:
             raise NotFoundError(f"criterion result not found: {criterion_id}")
-        return dict(row)
+        result = dict(row)
+        # **그 근거가 가리키는 조합이 아직 유효한가.** 저장하지 않고 도출한다 —
+        # 컬럼으로 두면 "누가 그 값을 적었는가"가 새 문제가 된다(P3-03과 같은 이유).
+        result["composition"] = self.composition_validity(
+            result["case_id"], result.get("composition_id")
+        )
+        return result
 
     # ----------------------------------------------------------- 완료 정책
 
@@ -4336,67 +4381,190 @@ class Repository:
         """
         return f"hads/{case_id}"
 
-    def request_workspace(self, case_id: str, base_ref: str = "HEAD") -> dict[str, Any]:
-        """이 Case 에 전용 작업공간이 필요하다고 기록한다.
+    def resolve_code_repository(
+        self, case_id: str, repository_id: str | None
+    ) -> tuple[dict[str, Any], WorkspaceAllowanceSource]:
+        """이 Case 가 **그 저장소에 코드 작업공간을 가질 수 있는가**(P3-R2).
+
+        R1 은 선택·쓰기 허용·게시 허용을 기록만 했다. 여기서부터 앞의 둘이 실제로
+        무엇을 막는다. 판정 순서는 [P3-PLAN-R2](../plans/P3-PLAN-R2.md) 5절이다.
+
+        **가장 조심할 갈래는 "선택 기록이 없다"** 이다. P3-03까지의 Case 는 선택
+        기록 없이 Project 의 단일 저장소에서 실제로 작업했고, 거기에 "선택 기록이
+        없으니 쓰기 금지"를 적용하면 새 정책을 기존 권한에 소급하는 것이 된다
+        (DEVELOPMENT.md 3절). 그래서 **허용하되 허용의 출처를 남긴다** — 없던
+        선택을 기록으로 지어내지 않는다.
+
+        반대로 선택 기록이 **하나라도** 있으면 그 Case 는 판단이 있었던 Case 이므로
+        없던 가정을 씌우지 않는다. R1 의 `case_repository_state` 가 암묵적 단일
+        저장소를 표시하는 규칙과 같다.
+        """
+        case = self.get_case(case_id)
+        project = self.get_project(case["project_id"])
+        registered = self.list_project_repositories(case["project_id"])
+        by_id = {r["id"]: r for r in registered}
+
+        rows = self.conn.execute(
+            "SELECT * FROM case_repository WHERE case_id = ? AND state = ?",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchall()
+        selections = {r["repository_id"]: dict(r) for r in rows}
+
+        if repository_id is None:
+            # 대상을 주지 않았다. **고르지 않는다** — 고르는 것은 사람 또는 허용 내
+            # 자동 추가의 일이다. 모호하지 않은 두 경우에만 해석한다.
+            writable = [
+                repo_id
+                for repo_id, sel in selections.items()
+                if sel["selection_source"] != RepositorySelectionSource.EXCLUDED.value
+                and sel["code_write_allowed"]
+            ]
+            if len(writable) == 1:
+                repository_id = writable[0]
+            elif not selections and len(registered) == 1:
+                repository_id = registered[0]["id"]
+            else:
+                raise PolicyRefused([PolicyRefusal.REPOSITORY_SELECTION_REQUIRED])
+
+        repo = by_id.get(repository_id)
+        if repo is None:
+            raise PolicyRefused([PolicyRefusal.REPOSITORY_NOT_IN_PROJECT])
+        if project.get("journal_repository_id") == repository_id:
+            # 기록 저장소는 **지정만으로** 어떤 Case 의 코드 대상에도 들어가지
+            # 않는다(D-17·D-34·FR-30).
+            raise PolicyRefused([PolicyRefusal.JOURNAL_REPOSITORY_NOT_A_CODE_TARGET])
+
+        selection = selections.get(repository_id)
+        if selection is not None:
+            if selection["selection_source"] == RepositorySelectionSource.EXCLUDED.value:
+                raise PolicyRefused([PolicyRefusal.REPOSITORY_EXPLICITLY_EXCLUDED])
+            if not selection["code_write_allowed"]:
+                raise PolicyRefused([PolicyRefusal.REPOSITORY_NOT_SELECTED_FOR_CODE])
+            return repo, WorkspaceAllowanceSource.CASE_REPOSITORY
+
+        if not selections and len(registered) == 1:
+            return repo, WorkspaceAllowanceSource.IMPLICIT_SINGLE_REPOSITORY
+        raise PolicyRefused([PolicyRefusal.REPOSITORY_SELECTION_REQUIRED])
+
+    def request_workspace(
+        self,
+        case_id: str,
+        repository_id: str | None = None,
+        base_ref: str = "HEAD",
+    ) -> dict[str, Any]:
+        """이 Case 에 그 저장소의 전용 작업공간이 필요하다고 기록한다.
 
         **여기서 git 을 부르지 않는다.** 저장소와 파일은 Runner 호스트에 있고
         (D-43·FR-27) 제어부가 직접 만들면 단일 호스트에서만 동작한다. 이 행은
         요청이며 `requested` 상태는 **준비됨이 아니다.**
 
-        이미 `ready` 인 Case 는 그대로 돌려준다. 같은 Case 에 두 번째 작업공간을
-        만들지 않는다 — 어느 쪽이 유효한지 알 수 없게 된다(D-38·D-39).
+        이미 `ready` 인 (Case, 저장소)는 그대로 돌려준다. 같은 조합에 두 번째
+        작업공간을 만들지 않는다 — 어느 쪽이 유효한지 알 수 없게 된다(D-39).
+        **저장소가 다르면 다른 작업공간이다**(P3-R2). 그것이 D-39 가 요구하는
+        `Case × Repository` 이며, 한 Case 가 두 저장소를 고치는 일은 각각의 브랜치·
+        기준 커밋 위에서 일어난다.
         """
         case = self.get_case(case_id)
-        row = self.get_workspace(case_id)
+        repo, allowance = self.resolve_code_repository(case_id, repository_id)
+        row = self.get_workspace(case_id, repo["id"])
         if row is not None and row["state"] == WorkspaceState.READY.value:
             return row
         now = utc_now()
         with transaction(self.conn):
             self.conn.execute(
                 "INSERT INTO case_workspace"
-                " (case_id, project_id, state, branch, base_ref, requested_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)"
-                " ON CONFLICT(case_id) DO UPDATE SET"
+                " (case_id, repository_id, project_id, state, branch, allowance_source,"
+                "  base_ref, requested_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id, repository_id) DO UPDATE SET"
                 "  state = excluded.state, base_ref = excluded.base_ref,"
+                "  allowance_source = excluded.allowance_source,"
                 "  failure_reason = '', requested_at = excluded.requested_at,"
                 "  ready_at = NULL",
                 (
                     case_id,
+                    repo["id"],
                     case["project_id"],
                     WorkspaceState.REQUESTED.value,
                     self.branch_for_case(case_id),
+                    allowance.value,
                     base_ref,
                     now,
                 ),
             )
-        return self.get_workspace(case_id)
+        return self.get_workspace(case_id, repo["id"])
 
-    def get_workspace(self, case_id: str) -> dict[str, Any] | None:
-        row = self.conn.execute(
-            "SELECT * FROM case_workspace WHERE case_id = ?", (case_id,)
-        ).fetchone()
+    def get_workspace(
+        self, case_id: str, repository_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """그 (Case, 저장소)의 작업공간 행.
+
+        `repository_id` 를 주지 않으면 **행이 정확히 하나일 때만** 돌려준다. 둘 이상
+        이면 어느 것인지 지어내지 않고 `None` 이며, 그 경우를 "작업공간 없음"으로
+        읽지 않도록 호출자는 `list_workspaces` 나 `workspace_state` 를 쓴다.
+        """
+        if repository_id is not None:
+            row = self.conn.execute(
+                "SELECT * FROM case_workspace WHERE case_id = ? AND repository_id = ?",
+                (case_id, repository_id),
+            ).fetchone()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM case_workspace WHERE case_id = ?", (case_id,)
+            ).fetchall()
+            row = rows[0] if len(rows) == 1 else None
         if row is None:
             return None
         workspace = dict(row)
         workspace["user_tree_dirty"] = bool(workspace["user_tree_dirty"])
         return workspace
 
+    def list_workspaces(self, case_id: str) -> list[dict[str, Any]]:
+        """이 Case 의 저장소별 작업공간 전부. 실패한 것도 포함한다.
+
+        **실패를 목록에서 빼지 않는다.** 빼면 "한 저장소는 준비되지 않았다"가
+        화면에서 사라지고, 부분 준비 상태가 완전 준비로 보인다.
+        """
+        rows = self.conn.execute(
+            "SELECT w.*, pr.name AS repository_name FROM case_workspace w"
+            " JOIN project_repository pr ON pr.id = w.repository_id"
+            " WHERE w.case_id = ? ORDER BY w.requested_at",
+            (case_id,),
+        ).fetchall()
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["user_tree_dirty"] = bool(item["user_tree_dirty"])
+            items.append(item)
+        return items
+
     def claim_workspace_requests(self, runner_id: str, limit: int = 5) -> list[dict[str, Any]]:
         """Runner 가 맡을 작업공간 준비 요청.
 
         아직 `requested` 인 것만 내려간다. **요청을 내려보내는 것이 준비 완료로
         표시하는 것은 아니다** — 상태는 Runner 가 실제 결과를 보고할 때 바뀐다.
+
+        저장소 경로는 **`project_repository` 에서 온다**(P3-R2). `project.repo_path`
+        는 남겨 두되 정본이 아니다 — 등록 저장소가 여럿이면 그 컬럼 하나로는 어느
+        경로인지 말할 수 없다.
+
+        이미 기록된 `worktree_path` 는 그대로 함께 내려보낸다. 준비가 실패한 뒤
+        다시 요청했을 때 Runner 가 **그때 쓰던 자리를 다시 쓰게** 하기 위해서다 —
+        새 규칙으로 경로를 옮기면 이미 그 worktree 에서 한 작업이 떨어져 나간다.
         """
         self.get_runner(runner_id)
         rows = self.conn.execute(
-            "SELECT case_id FROM case_workspace WHERE state = ? ORDER BY requested_at LIMIT ?",
+            "SELECT case_id, repository_id FROM case_workspace WHERE state = ?"
+            " ORDER BY requested_at LIMIT ?",
             (WorkspaceState.REQUESTED.value, limit),
         ).fetchall()
         payloads = []
         for row in rows:
-            workspace = self.get_workspace(row["case_id"])
+            workspace = self.get_workspace(row["case_id"], row["repository_id"])
             project = self.get_project(workspace["project_id"])
-            workspace["repo_path"] = project["repo_path"]
+            repo = self.get_project_repository(workspace["repository_id"])
+            workspace["repo_path"] = repo["repo_path"]
+            workspace["repository_name"] = repo["name"]
             workspace["project_name"] = project["name"]
             payloads.append(workspace)
         return payloads
@@ -4412,6 +4580,7 @@ class Repository:
         base_ref: str,
         user_tree_dirty: bool,
         user_tree_entries: int,
+        repository_id: str | None = None,
     ) -> dict[str, Any]:
         """Runner 가 실제로 만든 결과를 기록한다.
 
@@ -4420,10 +4589,10 @@ class Repository:
 
         `user_tree_dirty` 는 준비 시점에 관측한 **사용자의 원래 작업 트리** 상태다.
         시스템이 그것을 정리하지 않았다는 사실을 남기기 위한 값이며, 파일 경로는
-        올라오지 않고 수만 센다.
+        올라오지 않고 수만 센다. **저장소마다 따로 센다** — 한 Case 가 두 저장소를
+        쓰면 각 저장소의 사용자 변경은 서로 다른 것이다(P3-R2).
         """
-        if self.get_workspace(case_id) is None:
-            raise NotFoundError(f"workspace not requested for case: {case_id}")
+        repository_id = self._workspace_target(case_id, repository_id)
         self.get_runner(runner_id)
         if not base_commit:
             raise ConflictError("a workspace cannot be ready without a base commit")
@@ -4432,7 +4601,7 @@ class Repository:
                 "UPDATE case_workspace SET state = ?, runner_id = ?, repo_path = ?,"
                 " worktree_path = ?, branch = ?, base_commit = ?, base_ref = ?,"
                 " user_tree_dirty = ?, user_tree_entries = ?, failure_reason = '',"
-                " ready_at = ? WHERE case_id = ?",
+                " ready_at = ? WHERE case_id = ? AND repository_id = ?",
                 (
                     WorkspaceState.READY.value,
                     runner_id,
@@ -4445,38 +4614,90 @@ class Repository:
                     int(user_tree_entries),
                     utc_now(),
                     case_id,
+                    repository_id,
                 ),
             )
-        return self.get_workspace(case_id)
+        return self.get_workspace(case_id, repository_id)
 
     def report_workspace_failed(
-        self, case_id: str, runner_id: str, reason: str
+        self, case_id: str, runner_id: str, reason: str, repository_id: str | None = None
     ) -> dict[str, Any]:
         """만들 수 없었다. **실패를 준비됨으로 바꾸지 않는다.**
 
         사유를 남기는 이유는 사람이 무엇을 고쳐야 하는지 알아야 하기 때문이다 —
         저장소가 이 호스트에 없는 것과 브랜치가 이미 있는 것은 다른 조치를 부른다.
+
+        **한 저장소의 실패가 다른 저장소의 준비를 되돌리지 않는다**(P3-R2). 이
+        갱신은 그 한 행만 건드리며, 부분 준비 상태는 그대로 남아 화면에 드러난다.
         """
-        if self.get_workspace(case_id) is None:
-            raise NotFoundError(f"workspace not requested for case: {case_id}")
+        repository_id = self._workspace_target(case_id, repository_id)
         self.get_runner(runner_id)
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE case_workspace SET state = ?, runner_id = ?, failure_reason = ?,"
-                " ready_at = NULL WHERE case_id = ?",
-                (WorkspaceState.FAILED.value, runner_id, reason[:MAX_SUMMARY], case_id),
+                " ready_at = NULL WHERE case_id = ? AND repository_id = ?",
+                (
+                    WorkspaceState.FAILED.value,
+                    runner_id,
+                    reason[:MAX_SUMMARY],
+                    case_id,
+                    repository_id,
+                ),
             )
-        return self.get_workspace(case_id)
+        return self.get_workspace(case_id, repository_id)
 
-    def workspace_state(self, case_id: str) -> dict[str, Any]:
-        """진입 검사가 보는 작업공간 상태. **없음을 준비됨으로 읽지 않는다.**"""
-        workspace = self.get_workspace(case_id)
-        if workspace is None:
-            return {"present": False, "state": None, "ready": False}
+    def _workspace_target(self, case_id: str, repository_id: str | None) -> str:
+        """보고가 가리키는 작업공간 행을 정한다.
+
+        저장소를 밝히지 않은 보고는 **행이 하나뿐일 때만** 해석한다. 둘 이상이면
+        어느 저장소의 결과인지 지어내지 않는다 — 틀리게 짝지으면 한 저장소의 기준
+        커밋이 다른 저장소의 것으로 기록된다.
+        """
+        if repository_id is not None:
+            if self.get_workspace(case_id, repository_id) is None:
+                raise NotFoundError(
+                    f"workspace not requested for case: {case_id}/{repository_id}"
+                )
+            return repository_id
+        rows = self.list_workspaces(case_id)
+        if not rows:
+            raise NotFoundError(f"workspace not requested for case: {case_id}")
+        if len(rows) > 1:
+            raise ConflictError(
+                "this case has more than one workspace; the report must name a repository"
+            )
+        return rows[0]["repository_id"]
+
+    def workspace_state(
+        self, case_id: str, repository_id: str | None = None
+    ) -> dict[str, Any]:
+        """진입 검사가 보는 작업공간 상태. **없음을 준비됨으로 읽지 않는다.**
+
+        `repository_id` 가 없고 작업공간이 **둘 이상**이면 어느 것인지 고르지 않고
+        `target_recorded = False` 로 답한다. 진입 검사는 그것을
+        `workspace_target_not_recorded` 로 거부한다 — 어느 저장소를 고칠지 모르는
+        채로 쓰기를 여는 것이 이 단계에서 가장 비싼 실수다(P3-R2).
+        """
+        rows = self.list_workspaces(case_id)
+        if repository_id is not None:
+            rows = [r for r in rows if r["repository_id"] == repository_id]
+        if not rows:
+            return {"present": False, "state": None, "ready": False, "target_recorded": True}
+        if len(rows) > 1:
+            return {
+                "present": True,
+                "state": None,
+                "ready": False,
+                "target_recorded": False,
+                "repository_count": len(rows),
+            }
+        workspace = rows[0]
         return {
             "present": True,
             "state": workspace["state"],
             "ready": workspace["state"] == WorkspaceState.READY.value,
+            "target_recorded": True,
+            "repository_id": workspace["repository_id"],
             "branch": workspace["branch"],
             "base_commit": workspace["base_commit"],
             "worktree_path": workspace["worktree_path"],
@@ -4494,53 +4715,357 @@ class Repository:
         드러내기만 하고 **자동으로 되돌리거나 덮어쓰지 않는다.** 사용자가 직접
         worktree 를 고쳤을 수 있고, 그 변경을 보존하는 것이 FR-26의 요구다.
         """
-        workspace = self.get_workspace(case_id)
-        if workspace is None:
+        workspaces = self.list_workspaces(case_id)
+        if not workspaces:
             return None
+        by_repo = {w["repository_id"]: w for w in workspaces}
+        for workspace in workspaces:
+            workspace["run_effects"] = []
+
         rows = self.conn.execute(
             "SELECT run_id, task_id, purpose, permission, outcome, finished_at,"
-            " workspace_effect_json FROM run"
+            " repository_id, workspace_effect_json FROM run"
             " WHERE case_id = ? AND workspace_effect_json IS NOT NULL"
             " ORDER BY finished_at",
             (case_id,),
         ).fetchall()
-        effects: list[dict[str, Any]] = []
-        previous: dict[str, Any] | None = None
+        # **실행을 저장소별로 나눈다.** 한 Case 가 두 저장소를 고치면 "직전 실행이
+        # 남긴 상태"도 저장소마다 다르다. 한 줄로 이어 붙이면 A 저장소 실행 뒤에 온
+        # B 저장소 실행이 전부 `unexpected_external_change` 로 보인다.
+        previous: dict[str, dict[str, Any]] = {}
+        unattributed: list[dict[str, Any]] = []
         for row in rows:
             effect = json.loads(row["workspace_effect_json"])
-            unexpected = False
-            if previous is not None:
-                unexpected = (
-                    previous.get("head_after") != effect.get("head_before")
-                    or previous.get("entries_after") != effect.get("entries_before")
+            repository_id = row["repository_id"]
+            # 대상이 기록되지 않은 실행(P3-R2 이전)은 작업공간이 하나뿐일 때만
+            # 그 작업공간의 것으로 읽는다. 둘 이상이면 **어느 것인지 모른다** —
+            # 아무 데나 붙이면 그 저장소의 이력이 거짓이 된다.
+            if repository_id is None and len(workspaces) == 1:
+                repository_id = workspaces[0]["repository_id"]
+            item = {
+                "run_id": row["run_id"],
+                "task_id": row["task_id"],
+                "purpose": row["purpose"],
+                "permission": row["permission"],
+                "outcome": row["outcome"],
+                "finished_at": row["finished_at"],
+                "repository_id": repository_id,
+                "effect": effect,
+                "unexpected_external_change": False,
+            }
+            if repository_id is None or repository_id not in by_repo:
+                item["repository_recorded"] = False
+                unattributed.append(item)
+                continue
+            item["repository_recorded"] = True
+            last = previous.get(repository_id)
+            if last is not None:
+                # 직전 실행이 남긴 상태와 다른 자리에서 시작했다. 사람이 직접
+                # 고쳤을 수 있으며 **되돌리지 않고 드러낸다**(FR-26).
+                item["unexpected_external_change"] = (
+                    last.get("head_after") != effect.get("head_before")
+                    or last.get("entries_after") != effect.get("entries_before")
                 )
-            effects.append(
-                {
-                    "run_id": row["run_id"],
-                    "task_id": row["task_id"],
-                    "purpose": row["purpose"],
-                    "permission": row["permission"],
-                    "outcome": row["outcome"],
-                    "finished_at": row["finished_at"],
-                    "effect": effect,
-                    # 직전 실행이 남긴 상태와 다른 자리에서 시작했다. 사람이 직접
-                    # 고쳤을 수 있으며 **되돌리지 않고 드러낸다**(FR-26).
-                    "unexpected_external_change": unexpected,
-                }
+            previous[repository_id] = effect
+            by_repo[repository_id]["run_effects"].append(item)
+
+        for workspace in workspaces:
+            workspace["outside_workspace_changed"] = any(
+                e["effect"].get("outside_workspace_changed")
+                for e in workspace["run_effects"]
             )
-            previous = effect
-        workspace["run_effects"] = effects
-        workspace["outside_workspace_changed"] = any(
-            e["effect"].get("outside_workspace_changed") for e in effects
+
+        ready = [w for w in workspaces if w["state"] == WorkspaceState.READY.value]
+        return {
+            "case_id": case_id,
+            "workspaces": workspaces,
+            # 부분 준비를 완전 준비로 읽지 않는다. 하나라도 실패·대기면 이 값이 False 다.
+            "all_ready": len(ready) == len(workspaces),
+            "ready_count": len(ready),
+            "repository_count": len(workspaces),
+            # 대상 저장소가 기록되지 않은 실행. 숨기지 않고 따로 보인다.
+            "unattributed_run_effects": unattributed,
+            "composition": self.code_composition_view(case_id),
+            "selection": self.case_repository_state(case_id),
+            # 관측 한계를 값으로 남긴다. worktree 는 파일 배치의 분리이며 OS 격리가
+            # 아니다(D-44). 화면이 이 문장을 그대로 보여 준다.
+            "isolation": "worktree_file_layout_only",
+            "isolation_note": (
+                "worktree 는 파일 배치의 분리다. 다른 경로·자격증명 접근을 막는"
+                " OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
+            ),
+        }
+
+    # --------------------------------------------------------- 코드 조합 (P3-R2)
+    #
+    # `Repo ID → 정확한 스냅샷 참조` 의 벡터(execution-workspace-review 2.1절).
+    #
+    # **왜 필요한가.** 저장소가 여럿이면 "무엇을 검증했는가"를 브랜치 이름이나 파일
+    # 경로로 말할 수 없다. 움직이는 이름이 아니라 고정된 조합으로 대상을 묶어야
+    # 나중에 그 근거가 아직 유효한지 답할 수 있다.
+    #
+    # **관측을 새로 요구하지 않는다.** 조합은 이미 있는 기록 — 작업공간의 기준 커밋과
+    # 실행이 보고한 효과 — 에서 만든다. 관측이 없는 저장소는 기준 커밋만 담고
+    # `snapshot_incomplete` 로 표시한다. 기준 커밋만으로 실제 입력을 설명할 수 없다는
+    # 사실을 빈칸이 아니라 **값으로** 남기는 것이다.
+
+    def _compose_entries(self, case_id: str) -> list[dict[str, Any]]:
+        """지금 이 Case 의 저장소별 스냅샷. 준비된 작업공간만 본다."""
+        entries: list[dict[str, Any]] = []
+        for workspace in self.list_workspaces(case_id):
+            if workspace["state"] != WorkspaceState.READY.value:
+                # 준비되지 않은 작업공간은 조합의 항목이 아니다. 기준 커밋조차 없다.
+                continue
+            row = self.conn.execute(
+                "SELECT run_id, finished_at, workspace_effect_json FROM run"
+                " WHERE case_id = ? AND repository_id = ?"
+                " AND workspace_effect_json IS NOT NULL"
+                " ORDER BY finished_at DESC LIMIT 1",
+                (case_id, workspace["repository_id"]),
+            ).fetchone()
+            entry = {
+                "repository_id": workspace["repository_id"],
+                "repository_name": workspace["repository_name"],
+                "base_commit": workspace["base_commit"],
+                "head_commit": "",
+                "dirty_entries": None,
+                "tree_digest": "",
+                "source": CompositionEntrySource.WORKSPACE_BASE.value,
+                "observed_run_id": None,
+                "observed_at": None,
+            }
+            if row is not None:
+                effect = json.loads(row["workspace_effect_json"])
+                entry.update(
+                    {
+                        "head_commit": effect.get("head_after") or "",
+                        "dirty_entries": effect.get("entries_after"),
+                        "tree_digest": effect.get("tree_digest_after") or "",
+                        "source": CompositionEntrySource.RUN_EFFECT.value,
+                        "observed_run_id": row["run_id"],
+                        "observed_at": row["finished_at"],
+                    }
+                )
+            entries.append(entry)
+        entries.sort(key=lambda e: e["repository_id"])
+        return entries
+
+    @staticmethod
+    def _composition_hash(entries: Iterable[dict[str, Any]]) -> str:
+        """조합의 지문. 항목이 같으면 같은 값이다.
+
+        **지문이지 본문이 아니다.** 들어가는 것은 식별자·SHA·수와 트리 지문뿐이며
+        파일 경로도 diff 도 없다(D-43·NFR-12).
+        """
+        digest = hashlib.sha256()
+        for entry in entries:
+            digest.update(
+                "|".join(
+                    [
+                        entry["repository_id"],
+                        entry["base_commit"],
+                        entry["head_commit"],
+                        "" if entry["dirty_entries"] is None else str(entry["dirty_entries"]),
+                        entry["tree_digest"],
+                        entry["source"],
+                    ]
+                ).encode("utf-8")
+            )
+            digest.update(b"\x00")
+        return digest.hexdigest()
+
+    def _code_repository_ids(self, case_id: str) -> set[str]:
+        """이 Case 가 코드를 바꿔도 되는 저장소들.
+
+        선택 기록이 없는 이행된 Case 는 준비된 작업공간이 그 답이다 — 없던 선택을
+        지어내지 않고 실제로 열린 작업공간을 센다.
+        """
+        rows = self.conn.execute(
+            "SELECT repository_id FROM case_repository"
+            " WHERE case_id = ? AND state = ? AND code_write_allowed = 1"
+            " AND selection_source <> ?",
+            (case_id, PolicyState.CURRENT.value, RepositorySelectionSource.EXCLUDED.value),
+        ).fetchall()
+        selected = {r["repository_id"] for r in rows}
+        if selected:
+            return selected
+        return {
+            w["repository_id"]
+            for w in self.list_workspaces(case_id)
+            if w["state"] == WorkspaceState.READY.value
+        }
+
+    def build_code_composition(self, case_id: str) -> dict[str, Any] | None:
+        """지금 상태로 코드 조합을 **고정한다**. 없으면 `None`.
+
+        같은 상태에서 다시 부르면 **새 revision 을 만들지 않고** 현재 조합을 그대로
+        돌려준다. 상태가 달라졌으면 새 revision 이 생기고 이전 것은 `superseded` 가
+        된다 — 지우지 않는 이유는 "그때 무엇을 검증했는가"가 남아야 하기 때문이다.
+        """
+        self.get_case(case_id)
+        entries = self._compose_entries(case_id)
+        if not entries:
+            return None
+        composition_hash = self._composition_hash(entries)
+        current = self.conn.execute(
+            "SELECT * FROM code_composition WHERE case_id = ? AND state = ?",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchone()
+        covered = {e["repository_id"] for e in entries} >= self._code_repository_ids(case_id)
+        # **같음의 기준에 통합 범위가 들어간다.** 항목이 그대로여도 이 Case 가 코드를
+        # 바꿔도 되는 저장소가 늘면 이 조합은 더 이상 전부를 담지 않는다. 지문만
+        # 비교하면 그때 옛 조합이 `integration_verified = true` 인 채로 살아남아,
+        # 담지도 않은 저장소의 통합이 검증됐다고 말하게 된다(2.1절).
+        if (
+            current is not None
+            and current["composition_hash"] == composition_hash
+            and bool(current["covers_all_code_repositories"]) == covered
+        ):
+            return self.get_code_composition(current["id"])
+
+        composition_id = ids.new_id("comp")
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM code_composition WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        with transaction(self.conn):
+            if current is not None:
+                self.conn.execute(
+                    "UPDATE code_composition SET state = ?, superseded_at = ? WHERE id = ?",
+                    (PolicyState.SUPERSEDED.value, now, current["id"]),
+                )
+            self.conn.execute(
+                "INSERT INTO code_composition"
+                " (id, case_id, revision, composition_hash, covers_all_code_repositories,"
+                "  state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    composition_id,
+                    case_id,
+                    revision,
+                    composition_hash,
+                    1 if covered else 0,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+            for entry in entries:
+                self.conn.execute(
+                    "INSERT INTO code_composition_entry"
+                    " (composition_id, repository_id, base_commit, head_commit,"
+                    "  dirty_entries, tree_digest, source, observed_run_id, observed_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        composition_id,
+                        entry["repository_id"],
+                        entry["base_commit"],
+                        entry["head_commit"],
+                        entry["dirty_entries"],
+                        entry["tree_digest"],
+                        entry["source"],
+                        entry["observed_run_id"],
+                        entry["observed_at"],
+                    ),
+                )
+        return self.get_code_composition(composition_id)
+
+    def get_code_composition(self, composition_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM code_composition WHERE id = ?", (composition_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"code composition not found: {composition_id}")
+        composition = dict(row)
+        composition["covers_all_code_repositories"] = bool(
+            composition["covers_all_code_repositories"]
         )
-        # 관측 한계를 값으로 남긴다. worktree 는 파일 배치의 분리이며 OS 격리가
-        # 아니다(D-44). 화면이 이 문장을 그대로 보여 준다.
-        workspace["isolation"] = "worktree_file_layout_only"
-        workspace["isolation_note"] = (
-            "worktree 는 파일 배치의 분리다. 다른 경로·자격증명 접근을 막는"
-            " OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
+        rows = self.conn.execute(
+            "SELECT e.*, pr.name AS repository_name FROM code_composition_entry e"
+            " JOIN project_repository pr ON pr.id = e.repository_id"
+            " WHERE e.composition_id = ? ORDER BY e.repository_id",
+            (composition_id,),
+        ).fetchall()
+        entries = []
+        for entry in rows:
+            item = dict(entry)
+            # **기준 커밋만으로는 실제 입력을 설명할 수 없다.** 그 사실을 빈칸이
+            # 아니라 값으로 남긴다(execution-workspace-review 2.1절).
+            item["snapshot_incomplete"] = (
+                item["source"] == CompositionEntrySource.WORKSPACE_BASE.value
+            )
+            entries.append(item)
+        composition["entries"] = entries
+        composition["snapshot_complete"] = not any(e["snapshot_incomplete"] for e in entries)
+        # **개별 저장소 통과를 통합 통과로 자동 승격하지 않는다**(2.1절). 조합이 이
+        # Case 의 코드 대상을 전부 담지 않았다면 통합은 검증되지 않은 것이다.
+        composition["integration_verified"] = composition["covers_all_code_repositories"]
+        if not composition["integration_verified"]:
+            composition["integration_detail"] = (
+                "이 조합은 이 Case 의 코드 대상 저장소를 전부 담지 않았다."
+                " 개별 저장소 검사가 통과해도 통합 조건을 충족했다고 보지 않는다"
+            )
+        return composition
+
+    def code_composition_view(self, case_id: str) -> dict[str, Any] | None:
+        """현재 조합과 그 이력. **조회가 새 조합을 만들지 않는다.**"""
+        row = self.conn.execute(
+            "SELECT id FROM code_composition WHERE case_id = ? AND state = ?",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchone()
+        if row is None:
+            return None
+        composition = self.get_code_composition(row["id"])
+        # 기록된 조합과 **지금** 상태가 같은가. 다르면 다시 고정해야 한다는 뜻이며,
+        # 여기서 조용히 갱신하지 않는다 — 근거가 가리키는 조합이 손 없이 바뀌면
+        # "그때 무엇을 검증했는가"의 답이 사라진다.
+        composition["matches_current_state"] = composition["composition_hash"] == (
+            self._composition_hash(self._compose_entries(case_id))
         )
-        return workspace
+        return composition
+
+    def composition_validity(
+        self, case_id: str, composition_id: str | None
+    ) -> dict[str, Any]:
+        """그 근거가 가리키는 조합이 **아직 유효한가**. 저장하지 않고 도출한다.
+
+        핵심은 **저장소별로** 본다는 것이다. 조합에 들어 있지 않은 저장소가 바뀐 것은
+        이 근거와 무관하며, 그것으로 증거를 폐기하면 "무관한 Repo 변경으로 모든
+        증거를 폐기하지 않는다"(2.1절)가 깨진다. 실제 의존성이 바뀐 것만 재평가한다.
+        """
+        if composition_id is None:
+            return {
+                "composition_id": None,
+                "linked": False,
+                "detail": "이 근거는 코드 조합을 가리키지 않는다. 조합 개념이 없던"
+                " 시절의 기록이거나 코드와 무관한 근거다",
+            }
+        composition = self.get_code_composition(composition_id)
+        current = {e["repository_id"]: e for e in self._compose_entries(case_id)}
+        changed: list[str] = []
+        for entry in composition["entries"]:
+            now = current.get(entry["repository_id"])
+            if now is None:
+                changed.append(entry["repository_id"])
+                continue
+            if (
+                now["base_commit"] != entry["base_commit"]
+                or now["head_commit"] != entry["head_commit"]
+                or now["dirty_entries"] != entry["dirty_entries"]
+                or now["tree_digest"] != entry["tree_digest"]
+            ):
+                changed.append(entry["repository_id"])
+        return {
+            "composition_id": composition_id,
+            "linked": True,
+            "composition_hash": composition["composition_hash"],
+            "changed_repositories": changed,
+            "stale": bool(changed),
+            "integration_verified": composition["integration_verified"],
+            "snapshot_complete": composition["snapshot_complete"],
+            "detail": "이 조합에 든 저장소만 본다. 들어 있지 않은 저장소의 변경은"
+            " 이 근거를 무효로 만들지 않는다",
+        }
 
     # ------------------------------------------------------------ 쓰기 경합
 
@@ -4655,11 +5180,15 @@ class Repository:
             "enforced_by": "P3-R3",
             "detail": "한도는 기록된다. 예약·누적·hard 도달 시 배정 중지는 아직 없다",
         },
+        # **P3-R2에서 바뀐 축.** 선택과 쓰기 허용은 이제 작업공간을 만들 수 있는지를
+        # 실제로 정한다. 게시 허용은 아래 `publish` 가 따로 말하며 여전히 기록일
+        # 뿐이다 — 쓰기 허용이 게시 허용으로 번지지 않는다(D-64).
         "repository_selection": {
-            "state": "recorded_not_enforced",
+            "state": "enforced",
             "enforced_by": "P3-R2",
-            "detail": "선택·쓰기 허용·게시 허용은 기록된다. Case×Repo 작업공간과 허용 내"
-            " 자동 추가, 제외 차단은 아직 없다",
+            "detail": "선택·쓰기 허용이 Case×Repo 작업공간을 정한다. 미선택·명시 제외·"
+            "쓰기 미허용·기록 저장소는 작업공간이 만들어지지 않는다. 허용 내 자동 추가는"
+            " 기록되고 허용 밖은 사람 확인으로 되돌린다",
         },
         "publish": {
             "state": "not_implemented",
@@ -5230,12 +5759,24 @@ class Repository:
         return self.project_repository_view(project_id)
 
     def project_repository_view(self, project_id: str) -> dict[str, Any]:
+        """Project 의 등록 저장소.
+
+        **`project_repository` 가 경로의 정본이다**(P3-R2). `project.repo_path` 는
+        지우지 않고 남기되 여기서 정본과 어긋나는지 함께 보인다 — 조용히 어긋난
+        값을 남겨 두면 어느 경로에서 실제로 작업했는지 말할 수 없게 된다.
+        """
         project = self.get_project(project_id)
+        repositories = self.list_project_repositories(project_id)
+        paths = {r["repo_path"] for r in repositories}
         return {
             "project_id": project_id,
-            "repositories": self.list_project_repositories(project_id),
+            "repositories": repositories,
             "journal_repository_id": project.get("journal_repository_id"),
             "legacy_repo_path": project["repo_path"],
+            "canonical_source": "project_repository",
+            # v1의 컬럼이 등록 저장소 어느 것과도 맞지 않는다. 드러내되 고치지 않는다 —
+            # 어느 쪽이 맞는지는 사람이 안다.
+            "legacy_repo_path_matches_registry": project["repo_path"] in paths,
             "enforcement": {
                 "selection": self.ENFORCEMENT["repository_selection"],
                 "publish": self.ENFORCEMENT["publish"],
@@ -5263,8 +5804,15 @@ class Repository:
 
         기록 저장소를 코드 대상으로 선택하는 요청은 거부한다(D-17·FR-30).
 
-        R1 은 `auto_in_allowance` 를 발급하지 않는다. 허용 내 자동 추가는 R2 다.
+        **`auto_in_allowance` 는 이 경로로 기록하지 않는다**(P3-R2). 허용 내 자동
+        추가에는 "무엇이 이미 허용돼 있는가"를 보는 검사가 붙어 있고
+        (`auto_select_repository`), 여기서 출처만 바꿔 쓸 수 있으면 그 검사를 우회해
+        자동 추가가 새 권한을 만들어 낼 수 있다.
         """
+        if selection_source is RepositorySelectionSource.AUTO_IN_ALLOWANCE:
+            raise ConflictError(
+                "auto_in_allowance is recorded by the allowance check, not by explicit selection"
+            )
         self._guard_policy_change(case_id)
         case = self.get_case(case_id)
         repo = self.get_project_repository(repository_id)
@@ -5309,6 +5857,112 @@ class Repository:
                 ),
             )
         return self.case_repository_state(case_id)
+
+    def auto_select_repository(
+        self,
+        case_id: str,
+        repository_id: str,
+        selected_by: str,
+        code_write_allowed: bool = True,
+        publish_allowed: bool = False,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """**허용 안의** 저장소를 자동으로 추가한다(D-38·D-63, P3-R2).
+
+        D-38은 "기존 허용 쓰기 범위와 목표 안의 추가 저장소는 자동 선택한다"이고
+        같은 문장이 "명시적 제외·새 권한·제품/데이터 영향은 재판단한다"로 이어진다.
+        그래서 이 경로가 성립하는 조건은 하나다 — **이미 가진 것을 넓히지 않을 때.**
+
+        넓히는 세 경우는 각각 다른 사유로 거절한다. 거절은 **거절로 끝난다.** 질문을
+        자동으로 만들지 않는다 — 질문 생성과 누적 material delta 판단은 R4의 몫이고,
+        여기서 반쯤 만들면 R4가 붙일 자리가 이미 차 있게 된다. 대신 응답이
+        `requires_human_confirmation` 과 사유를 실어 화면이 그대로 말한다.
+
+        이미 `explicit` 로 선택된 저장소는 **바꾸지 않는다.** 사람의 선택을 자동
+        기록으로 덮으면 그 선택이 누구 것이었는지 남지 않는다.
+        """
+        self._guard_policy_change(case_id)
+        case = self.get_case(case_id)
+        repo = self.get_project_repository(repository_id)
+        if repo["project_id"] != case["project_id"]:
+            raise PolicyRefused([PolicyRefusal.REPOSITORY_NOT_IN_PROJECT])
+        project = self.get_project(case["project_id"])
+        if project.get("journal_repository_id") == repository_id:
+            raise PolicyRefused([PolicyRefusal.JOURNAL_REPOSITORY_NOT_A_CODE_TARGET])
+        if publish_allowed:
+            # **쓰기 허용 저장소 추가는 게시 허용 확대가 아니다**(D-64). 게시는
+            # 언제나 사람이 따로 허용한다.
+            raise PolicyRefused([PolicyRefusal.AUTO_ADD_CANNOT_GRANT_PUBLISH])
+
+        existing = self.conn.execute(
+            "SELECT * FROM case_repository WHERE case_id = ? AND repository_id = ?"
+            " AND state = ?",
+            (case_id, repository_id, PolicyState.CURRENT.value),
+        ).fetchone()
+        if existing is not None:
+            if existing["selection_source"] == RepositorySelectionSource.EXCLUDED.value:
+                # **자동 추가가 넘지 못하는 경계다.** 제외는 사람이 내린 판단이며
+                # 행이 없는 것(아직 판단하지 않음)과 다르다(D-63).
+                raise PolicyRefused([PolicyRefusal.REPOSITORY_EXPLICITLY_EXCLUDED])
+            if existing["selection_source"] == RepositorySelectionSource.EXPLICIT.value:
+                state = self.case_repository_state(case_id)
+                state["auto_selection"] = {
+                    "repository_id": repository_id,
+                    "changed": False,
+                    "detail": "이미 사람이 명시로 선택한 저장소다. 자동 기록으로 덮지 않는다",
+                }
+                return state
+
+        if code_write_allowed and not self._case_has_write_allowance(case_id):
+            # 쓰기 허용이 하나도 없는 Case 에 쓰기를 만들어 주는 것은 **새 권한**이다.
+            raise PolicyRefused([PolicyRefusal.AUTO_ADD_NEEDS_NEW_PERMISSION])
+
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_repository"
+                " (case_id, repository_id, selection_source, code_write_allowed,"
+                "  publish_allowed, selected_by, reason_summary, state, selected_at)"
+                " VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id, repository_id) DO UPDATE SET"
+                "   selection_source = excluded.selection_source,"
+                "   code_write_allowed = excluded.code_write_allowed,"
+                "   selected_by = excluded.selected_by,"
+                "   reason_summary = excluded.reason_summary,"
+                "   state = excluded.state,"
+                "   selected_at = excluded.selected_at,"
+                "   superseded_at = NULL",
+                (
+                    case_id,
+                    repository_id,
+                    RepositorySelectionSource.AUTO_IN_ALLOWANCE.value,
+                    1 if code_write_allowed else 0,
+                    selected_by,
+                    _summary(reason_summary) if reason_summary else None,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+        state = self.case_repository_state(case_id)
+        state["auto_selection"] = {
+            "repository_id": repository_id,
+            "changed": True,
+            "detail": "기존 허용 범위 안이라 자동으로 기록했다. 게시 허용은 따라오지 않는다",
+        }
+        return state
+
+    def _case_has_write_allowance(self, case_id: str) -> bool:
+        """이 Case 가 **이미** 코드 쓰기를 허용받은 저장소를 갖고 있는가.
+
+        자동 추가가 넓히는 것인지 아닌지를 가르는 값이다. 제외된 저장소는 세지 않는다.
+        """
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM case_repository"
+            " WHERE case_id = ? AND state = ? AND code_write_allowed = 1"
+            " AND selection_source <> ?",
+            (case_id, PolicyState.CURRENT.value, RepositorySelectionSource.EXCLUDED.value),
+        ).fetchone()
+        return bool(row["n"])
 
     def case_repository_state(self, case_id: str) -> dict[str, Any]:
         """이 Case 의 저장소 선택·허용과 아직 없는 기능의 표시.

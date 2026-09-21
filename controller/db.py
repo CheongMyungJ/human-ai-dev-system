@@ -11,12 +11,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 def utc_now() -> str:
@@ -130,6 +130,23 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     _migrate_v8_existing_rows(conn)
 
+    # v9: Case × Repository 작업공간과 코드 조합.
+    #
+    #     `run.repository_id`  이 실행이 **어느 저장소**의 작업공간에서 도는가.
+    #                          옛 행은 NULL 이며 그것은 "주 저장소"가 아니라
+    #                          **기록되지 않음**이다. 준비된 작업공간이 하나뿐이면
+    #                          모호하지 않아 그것으로 해석하고, 둘 이상이면
+    #                          `workspace_target_not_recorded` 로 거부한다 —
+    #                          어느 저장소를 고칠지 모르는 채로 쓰기를 열지 않는다.
+    #     `*.composition_id`   그 근거·후보가 **어느 코드 조합 위에서** 나왔는가.
+    #                          옛 행은 NULL 이고 그것은 "조합이 하나였다"가 아니라
+    #                          조합 개념이 없던 시절의 기록이라는 뜻이다.
+    _add_column_if_missing(conn, "run", "repository_id", "TEXT")
+    _add_column_if_missing(conn, "criterion_result", "composition_id", "TEXT")
+    _add_column_if_missing(conn, "completion_candidate", "composition_id", "TEXT")
+
+    _migrate_v9_case_workspace(conn)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -216,3 +233,113 @@ def _migrate_v8_existing_rows(conn: sqlite3.Connection) -> None:
                 now,
             ),
         )
+
+
+def _migrate_v9_case_workspace(conn: sqlite3.Connection) -> None:
+    """`case_workspace` 를 `(case_id, repository_id)` 키로 **다시 만든다**(P3-R2).
+
+    SQLite 에서는 기본 키를 바꿀 수 없어 표를 새로 만들고 옮겨야 한다. 이 이행이
+    지키는 것 둘.
+
+    1. **기존 행을 잃지 않는다.** 브랜치·기준 커밋·worktree 경로·사용자 트리 관측은
+       그대로 옮긴다. 경로를 새 규칙(`{case}/{repo}`)으로 바꾸지 않는다 — 옮기면
+       이미 그 worktree 에서 한 작업이 떨어져 나가고, 그 자리의 브랜치는 다음 준비
+       때 `FOREIGN` 으로 보여 거부된다.
+
+    2. **어느 저장소인지 지어내지 않는다.** 옛 행은 Project 의 등록 저장소가 정확히
+       하나일 때만 그 저장소에 연결한다. 둘 이상이면 그 Case 가 어느 것을 썼는지
+       기록이 없으므로 `repo_path` 가 같은 저장소를 찾고, 그것도 없으면 이행을
+       멈춘다 — 틀린 연결은 "어떤 코드 위에서 시작했는가"의 답을 거짓으로 만든다.
+
+    허용 출처는 `implicit_single_repository` 다. 이 Case 들은 선택 기록 없이 실제로
+    그 저장소에서 작업했고, 이행이 "선택했다"는 결정을 새로 만들지 않는다.
+
+    `migrate()` 는 매 연결마다 도므로 **옛 모양일 때만** 수행하고 여러 번 불려도
+    같은 결과여야 한다.
+    """
+    columns = {r["name"] for r in conn.execute('PRAGMA table_info("case_workspace")')}
+    if not columns or "repository_id" in columns:
+        return
+
+    rows = conn.execute("SELECT * FROM case_workspace").fetchall()
+    resolved: list[tuple[Any, ...]] = []
+    for row in rows:
+        repos = conn.execute(
+            "SELECT id, repo_path FROM project_repository WHERE project_id = ?"
+            " ORDER BY registered_at",
+            (row["project_id"],),
+        ).fetchall()
+        repository_id: str | None = None
+        if len(repos) == 1:
+            repository_id = repos[0]["id"]
+        else:
+            # 여러 개면 **경로가 일치하는 것만** 쓴다. Runner 가 보고한 저장소 경로는
+            # 그 작업공간이 실제로 어디에 있었는지에 대한 유일한 증거다.
+            for repo in repos:
+                if row["repo_path"] and repo["repo_path"] == row["repo_path"]:
+                    repository_id = repo["id"]
+                    break
+        if repository_id is None:
+            raise RuntimeError(
+                "v9 이행: 작업공간이 어느 저장소의 것인지 확인할 수 없다"
+                f" (case={row['case_id']}). 반쯤 옮긴 상태로 두지 않는다"
+            )
+        resolved.append(
+            (
+                row["case_id"],
+                repository_id,
+                row["project_id"],
+                row["state"],
+                row["branch"],
+                "implicit_single_repository",
+                row["runner_id"],
+                row["repo_path"],
+                row["worktree_path"],
+                row["base_commit"],
+                row["base_ref"],
+                row["user_tree_dirty"],
+                row["user_tree_entries"],
+                row["failure_reason"],
+                row["requested_at"],
+                row["ready_at"],
+            )
+        )
+
+    conn.execute("DROP INDEX IF EXISTS idx_case_workspace_project")
+    conn.execute('ALTER TABLE case_workspace RENAME TO case_workspace_v8')
+    conn.executescript(
+        """
+        CREATE TABLE case_workspace (
+            case_id           TEXT NOT NULL REFERENCES "case"(id),
+            repository_id     TEXT NOT NULL REFERENCES project_repository(id),
+            project_id        TEXT NOT NULL REFERENCES project(id),
+            state             TEXT NOT NULL,
+            branch            TEXT NOT NULL,
+            allowance_source  TEXT NOT NULL DEFAULT '',
+            runner_id         TEXT REFERENCES runner(id),
+            repo_path         TEXT NOT NULL DEFAULT '',
+            worktree_path     TEXT NOT NULL DEFAULT '',
+            base_commit       TEXT NOT NULL DEFAULT '',
+            base_ref          TEXT NOT NULL DEFAULT '',
+            user_tree_dirty   INTEGER NOT NULL DEFAULT 0,
+            user_tree_entries INTEGER NOT NULL DEFAULT 0,
+            failure_reason    TEXT NOT NULL DEFAULT '',
+            requested_at      TEXT NOT NULL,
+            ready_at          TEXT,
+            PRIMARY KEY (case_id, repository_id),
+            CHECK (length(failure_reason) <= 200)
+        );
+        """
+    )
+    conn.executemany(
+        "INSERT INTO case_workspace (case_id, repository_id, project_id, state, branch,"
+        " allowance_source, runner_id, repo_path, worktree_path, base_commit, base_ref,"
+        " user_tree_dirty, user_tree_entries, failure_reason, requested_at, ready_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        resolved,
+    )
+    conn.execute("DROP TABLE case_workspace_v8")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_case_workspace_project"
+        " ON case_workspace(project_id, state)"
+    )

@@ -1,0 +1,26 @@
+[시작] API HEAD=78f0b3ded3 dirty=['M reader.py', '?? scratch-api.txt']
+[시작] UI  HEAD=9fb1e5ceb4 dirty=['?? scratch-ui.txt']
+[등록] 정본=project_repository 이행컬럼일치=True
+[등록] 저장소 3개 (api/ui/journal), 기록 저장소 지정 완료
+[Case] case-4b113ef285993ade profile=feature
+[거부] 선택 기록 없음 → 409 ['repository_selection_required']
+[거부] 기록 저장소 → 409 ['journal_repository_not_a_code_target']
+[거부] 선택했으나 쓰기 미허용 → 409 ['repository_not_selected_for_code']
+[허용] API 저장소 → 201 state=requested 출처=case_repository
+[자동추가] UI 저장소 → 201 출처=auto_in_allowance 쓰기=1 게시=0
+[대기] 실제 Runner 프로세스가 worktree 를 만들 때까지…
+[worktree] api: branch=hads/case-4b113ef285993ade base=78f0b3ded3 dirty=True(2건) 출처=case_repository
+[worktree] api: path=C:\Users\USER\AppData\Local\Temp\hads-p3-r2-live\runner\worktrees\case-4b113ef285993ade\repo-e65da060a870236a
+[worktree] ui: branch=hads/case-4b113ef285993ade base=9fb1e5ceb4 dirty=True(1건) 출처=case_repository
+[worktree] ui: path=C:\Users\USER\AppData\Local\Temp\hads-p3-r2-live\runner\worktrees\case-4b113ef285993ade\repo-add0eb6477b25a8f
+[보존] API dirty 그대로=True · UI dirty 그대로=True
+[조합] revision=1 전체포함=True 통합검증=True 스냅샷완전=False
+[조합] ui: base=9fb1e5ceb4 source=workspace_base 미관측=True
+[조합] primary: base=78f0b3ded3 source=workspace_base 미관측=True
+[조합] 같은 상태 재고정 → 같은 revision=True
+[거부] 제외+기록 저장소 자동 추가 → 409 ['journal_repository_not_a_code_target']
+[강제표시] repository_selection: enforced (P3-R2)
+[강제표시] publish: not_implemented (P5)
+[강제표시] autonomy: recorded_not_enforced (P3-R4)
+[강제표시] budget: recorded_not_enforced (P3-R3)
+[결과] 라이브 확인 통과

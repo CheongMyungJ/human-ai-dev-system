@@ -1,0 +1,105 @@
+{
+  "case_id": "case-4b113ef285993ade",
+  "workspaces": [
+    {
+      "case_id": "case-4b113ef285993ade",
+      "repository_id": "repo-e65da060a870236a",
+      "project_id": "prj-b884fa762efc7028",
+      "state": "ready",
+      "branch": "hads/case-4b113ef285993ade",
+      "allowance_source": "case_repository",
+      "runner_id": "runner-live-r2",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\repo-api",
+      "worktree_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\runner\\worktrees\\case-4b113ef285993ade\\repo-e65da060a870236a",
+      "base_commit": "78f0b3ded309c1cfb14a341569a98589259c8940",
+      "base_ref": "HEAD",
+      "user_tree_dirty": true,
+      "user_tree_entries": 2,
+      "failure_reason": "",
+      "requested_at": "2026-09-21T13:32:14.139295+00:00",
+      "ready_at": "2026-09-21T13:32:15.179844+00:00",
+      "repository_name": "primary",
+      "run_effects": [],
+      "outside_workspace_changed": false
+    },
+    {
+      "case_id": "case-4b113ef285993ade",
+      "repository_id": "repo-add0eb6477b25a8f",
+      "project_id": "prj-b884fa762efc7028",
+      "state": "ready",
+      "branch": "hads/case-4b113ef285993ade",
+      "allowance_source": "case_repository",
+      "runner_id": "runner-live-r2",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\repo-ui",
+      "worktree_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\runner\\worktrees\\case-4b113ef285993ade\\repo-add0eb6477b25a8f",
+      "base_commit": "9fb1e5ceb44e1701093b047e3045b5bb4644f968",
+      "base_ref": "HEAD",
+      "user_tree_dirty": true,
+      "user_tree_entries": 1,
+      "failure_reason": "",
+      "requested_at": "2026-09-21T13:32:14.499168+00:00",
+      "ready_at": "2026-09-21T13:32:15.830056+00:00",
+      "repository_name": "ui",
+      "run_effects": [],
+      "outside_workspace_changed": false
+    }
+  ],
+  "all_ready": true,
+  "ready_count": 2,
+  "repository_count": 2,
+  "unattributed_run_effects": [],
+  "composition": null,
+  "selection": {
+    "case_id": "case-4b113ef285993ade",
+    "selected": [
+      {
+        "case_id": "case-4b113ef285993ade",
+        "repository_id": "repo-e65da060a870236a",
+        "selection_source": "explicit",
+        "code_write_allowed": 1,
+        "publish_allowed": 0,
+        "selected_by": "owner",
+        "reason_summary": null,
+        "state": "current",
+        "selected_at": "2026-09-21T13:32:13.979268+00:00",
+        "superseded_at": null,
+        "repository_name": "primary",
+        "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\repo-api",
+        "repository_source": "registered"
+      },
+      {
+        "case_id": "case-4b113ef285993ade",
+        "repository_id": "repo-add0eb6477b25a8f",
+        "selection_source": "auto_in_allowance",
+        "code_write_allowed": 1,
+        "publish_allowed": 0,
+        "selected_by": "ai",
+        "reason_summary": "같은 목표의 UI 저장소가 함께 바뀐다",
+        "state": "current",
+        "selected_at": "2026-09-21T13:32:14.328009+00:00",
+        "superseded_at": null,
+        "repository_name": "ui",
+        "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r2-live\\repo-ui",
+        "repository_source": "registered"
+      }
+    ],
+    "excluded": [],
+    "implicit_single_repository": null,
+    "journal_repository_id": "repo-22e4a2e5e9e5e605",
+    "write_allowance_implies_publish": false,
+    "enforcement": {
+      "selection": {
+        "state": "enforced",
+        "enforced_by": "P3-R2",
+        "detail": "선택·쓰기 허용이 Case×Repo 작업공간을 정한다. 미선택·명시 제외·쓰기 미허용·기록 저장소는 작업공간이 만들어지지 않는다. 허용 내 자동 추가는 기록되고 허용 밖은 사람 확인으로 되돌린다"
+      },
+      "publish": {
+        "state": "not_implemented",
+        "enforced_by": "P5",
+        "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+      }
+    }
+  },
+  "isolation": "worktree_file_layout_only",
+  "isolation_note": "worktree 는 파일 배치의 분리다. 다른 경로·자격증명 접근을 막는 OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
+}

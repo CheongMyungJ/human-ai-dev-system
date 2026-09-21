@@ -170,7 +170,11 @@ class RunIn(BaseModel):
     instruction_artifact_id: str
     instruction_artifact_rev: int = 1
     #: `new` 만 허용한다. 세션을 이어받는 검토는 별도 세션 요구를 어긴다(FR-29).
-    session: str = "new" 
+    session: str = "new"
+    #: **어느 저장소의 작업공간에서 도는가**(P3-R2·D-39). 작업공간이 하나뿐이면
+    #: 생략할 수 있다. 둘 이상인데 생략하면 `workspace_target_not_recorded` 로
+    #: 거부된다 — 어느 저장소를 고칠지 모르는 채로 쓰기를 열지 않는다.
+    repository_id: str | None = None
 
 
 class RunnerRegisterIn(BaseModel):
@@ -495,6 +499,7 @@ def create_run(
             instruction_artifact_id=payload.instruction_artifact_id,
             instruction_artifact_rev=payload.instruction_artifact_rev,
             session=payload.session,
+            repository_id=payload.repository_id,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -1390,6 +1395,9 @@ class CriterionResultIn(BaseModel):
     evidence_run_id: str | None = None
     evidence_artifact_id: str | None = None
     evidence_artifact_rev: int | None = None
+    #: **이 근거가 나온 코드 조합**(P3-R2). 움직이는 브랜치 이름이 아니라 고정된
+    #: 조합으로 대상을 묶어야 나중에 그 근거가 아직 유효한지 답할 수 있다.
+    composition_id: str | None = None
 
 
 class CompletionPolicyIn(BaseModel):
@@ -1471,6 +1479,7 @@ def record_criterion_result(
             evidence_run_id=payload.evidence_run_id,
             evidence_artifact_id=payload.evidence_artifact_id,
             evidence_artifact_rev=payload.evidence_artifact_rev,
+            composition_id=payload.composition_id,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2019,10 +2028,16 @@ class WorkspaceRequestIn(BaseModel):
     """
 
     base_ref: str = Field(default="HEAD", min_length=1, max_length=200)
+    #: **어느 저장소의 작업공간인가**(P3-R2·D-39). 주지 않으면 모호하지 않은 경우에만
+    #: 해석한다 — 쓰기 허용 저장소가 하나뿐이거나, 선택 기록이 없고 등록 저장소가
+    #: 하나뿐일 때다. 그 밖에는 `repository_selection_required` 로 거부한다.
+    repository_id: str | None = None
 
 
 class WorkspaceReadyIn(BaseModel):
     runner_id: str
+    #: 어느 저장소의 결과인가. 작업공간이 하나뿐이면 생략할 수 있다.
+    repository_id: str | None = None
     repo_path: str = Field(min_length=1)
     worktree_path: str = Field(min_length=1)
     branch: str = Field(min_length=1)
@@ -2037,6 +2052,7 @@ class WorkspaceReadyIn(BaseModel):
 
 class WorkspaceFailedIn(BaseModel):
     runner_id: str
+    repository_id: str | None = None
     reason: str = Field(min_length=1, max_length=200)
 
 
@@ -2069,10 +2085,16 @@ def request_workspace(
     만든 뒤에야 `ready` 가 된다. 그 전까지 쓰기 요청은 `workspace_not_ready` 로
     거부된다 — 요청을 준비됨으로 읽으면 CLI 가 사용자의 원래 저장소를 직접
     고치게 된다(FR-08·FR-26).
+
+    **선택·쓰기 허용을 여기서 실제로 검사한다**(P3-R2). 선택하지 않은 저장소,
+    명시 제외한 저장소, 쓰기를 허용하지 않은 저장소, 기록 저장소에는 작업공간이
+    만들어지지 않는다 — 각각 다른 사유 코드로 거부한다.
     """
     try:
-        return _repo(request).request_workspace(case_id, payload.base_ref)
-    except (NotFoundError, ConflictError) as exc:
+        return _repo(request).request_workspace(
+            case_id, payload.repository_id, payload.base_ref
+        )
+    except (NotFoundError, ConflictError, PolicyRefused) as exc:
         raise _handle(exc)
 
 
@@ -2114,6 +2136,7 @@ def runner_workspace_ready(
             base_ref=payload.base_ref,
             user_tree_dirty=payload.user_tree_dirty,
             user_tree_entries=payload.user_tree_entries,
+            repository_id=payload.repository_id,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2126,7 +2149,7 @@ def runner_workspace_failed(
     """만들지 못했다. **실패를 준비됨으로 바꾸지 않는다.**"""
     try:
         return _repo(request).report_workspace_failed(
-            case_id, payload.runner_id, payload.reason
+            case_id, payload.runner_id, payload.reason, payload.repository_id
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2236,6 +2259,20 @@ class CaseRepositoryIn(BaseModel):
     selection_source: RepositorySelectionSource = RepositorySelectionSource.EXPLICIT
     code_write_allowed: bool
     publish_allowed: bool
+    selected_by: str = Field(min_length=1, max_length=100)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+class AutoRepositoryIn(BaseModel):
+    """허용 **안의** 저장소를 자동으로 추가한다(D-38·D-63, P3-R2).
+
+    `publish_allowed` 가 없다. 게시 허용은 이 경로로 줄 수 없고, 요청에 실어 보내면
+    `auto_add_cannot_grant_publish` 로 거절된다 — 쓰기 허용 저장소 추가는 게시 허용
+    확대가 아니다(D-64).
+    """
+
+    repository_id: str = Field(min_length=1)
+    code_write_allowed: bool = True
     selected_by: str = Field(min_length=1, max_length=100)
     reason_summary: str | None = Field(default=None, max_length=200)
 
@@ -2466,4 +2503,79 @@ def select_case_repository(
             payload.reason_summary,
         )
     except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/repositories/auto", status_code=201)
+def auto_select_case_repository(
+    request: Request, case_id: str, payload: AutoRepositoryIn
+) -> dict[str, Any]:
+    """허용 **안의** 저장소를 자동으로 추가한다(D-38·D-63, P3-R2).
+
+    D-38의 "기존 허용 쓰기 범위와 목표 안의 추가 저장소는 자동 선택한다"가 여기다.
+    같은 문장의 뒷부분 — "명시적 제외·새 권한·제품/데이터 영향은 재판단한다" — 은
+    거절로 구현된다. 거절 응답은 사유 코드와 함께 `requires_human_confirmation` 을
+    실어 화면이 무엇을 물어야 하는지 말한다.
+
+    **질문을 자동으로 만들지 않는다.** 질문 생성과 누적 material delta 판단은 R4다.
+    """
+    try:
+        return _repo(request).auto_select_repository(
+            case_id,
+            payload.repository_id,
+            payload.selected_by,
+            payload.code_write_allowed,
+            False,
+            payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/composition")
+def get_code_composition(request: Request, case_id: str) -> dict[str, Any] | None:
+    """이 업무의 현재 코드 조합(execution-workspace-review 2.1절).
+
+    **조회가 새 조합을 만들지 않는다.** 기록된 조합과 지금 상태가 같은지는
+    `matches_current_state` 가 말하며, 다르다고 여기서 조용히 갱신하면 근거가
+    가리키는 조합이 손 없이 바뀐다.
+    """
+    try:
+        return _repo(request).code_composition_view(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/composition", status_code=201)
+def build_code_composition(request: Request, case_id: str) -> dict[str, Any] | None:
+    """지금 상태로 코드 조합을 **고정한다.**
+
+    같은 상태에서 다시 부르면 새 revision 을 만들지 않고 현재 조합을 돌려준다.
+    준비된 작업공간이 하나도 없으면 `null` 이다 — 빈 조합을 만들지 않는다.
+    """
+    try:
+        return _repo(request).build_code_composition(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/compositions/{composition_id}")
+def get_one_code_composition(
+    request: Request, case_id: str, composition_id: str
+) -> dict[str, Any]:
+    """특정 조합과 그것이 **아직 유효한가**(P3-R2).
+
+    유효성은 저장하지 않고 도출한다. 핵심은 **저장소별로** 본다는 것이다 — 이
+    조합에 들어 있지 않은 저장소가 바뀐 것은 이 조합과 무관하며, 그것으로 증거를
+    폐기하면 무관한 Repo 변경이 모든 근거를 쓸어버린다
+    (execution-workspace-review 2.1절).
+    """
+    repo = _repo(request)
+    try:
+        composition = repo.get_code_composition(composition_id)
+        if composition["case_id"] != case_id:
+            raise NotFoundError(f"code composition not found in case: {composition_id}")
+        composition["validity"] = repo.composition_validity(case_id, composition_id)
+        return composition
+    except NotFoundError as exc:
         raise _handle(exc)

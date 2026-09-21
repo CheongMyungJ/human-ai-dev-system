@@ -1,0 +1,40 @@
+{
+  "id": "comp-2496fe486bd8428b",
+  "case_id": "case-4b113ef285993ade",
+  "revision": 1,
+  "composition_hash": "9b9449689b10bdedb3b9dc004d13be6f315bcf73164837cc2091f1a9ac3fa21c",
+  "covers_all_code_repositories": true,
+  "state": "current",
+  "created_at": "2026-09-21T13:32:17.229145+00:00",
+  "superseded_at": null,
+  "entries": [
+    {
+      "composition_id": "comp-2496fe486bd8428b",
+      "repository_id": "repo-add0eb6477b25a8f",
+      "base_commit": "9fb1e5ceb44e1701093b047e3045b5bb4644f968",
+      "head_commit": "",
+      "dirty_entries": null,
+      "tree_digest": "",
+      "source": "workspace_base",
+      "observed_run_id": null,
+      "observed_at": null,
+      "repository_name": "ui",
+      "snapshot_incomplete": true
+    },
+    {
+      "composition_id": "comp-2496fe486bd8428b",
+      "repository_id": "repo-e65da060a870236a",
+      "base_commit": "78f0b3ded309c1cfb14a341569a98589259c8940",
+      "head_commit": "",
+      "dirty_entries": null,
+      "tree_digest": "",
+      "source": "workspace_base",
+      "observed_run_id": null,
+      "observed_at": null,
+      "repository_name": "primary",
+      "snapshot_incomplete": true
+    }
+  ],
+  "snapshot_complete": false,
+  "integration_verified": true
+}

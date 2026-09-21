@@ -46,7 +46,13 @@ def _refusals(response) -> list[str]:
     return response.json()["detail"]["admission"]["refusals"]
 
 
-def _prepare_both(harness, case_id, finish_first_task: bool = True, run_prefix: str = ""):
+def _prepare_both(
+    harness,
+    case_id,
+    finish_first_task: bool = True,
+    run_prefix: str = "",
+    repository_id: str | None = None,
+):
     """설계와 계획을 AI로 작성하고 둘 다 사람 검토한다.
 
     **P3-02부터 계획이 작업 그래프를 낳는다.** `FAKE_TASKS` 의 T2 는 T1 을
@@ -59,12 +65,16 @@ def _prepare_both(harness, case_id, finish_first_task: bool = True, run_prefix: 
     않는다(P2-01이 일부러 만든 멱등성이다).
     """
     prefix = run_prefix or "run"
-    assert harness.ai_prepare(case_id, "design", run_id=f"{prefix}-design").status_code == 201
+    assert harness.ai_prepare(
+        case_id, "design", run_id=f"{prefix}-design", repository_id=repository_id
+    ).status_code == 201
     assert harness.review_stage(case_id, "design").status_code == 201
-    assert harness.ai_prepare(case_id, "plan", run_id=f"{prefix}-plan").status_code == 201
+    assert harness.ai_prepare(
+        case_id, "plan", run_id=f"{prefix}-plan", repository_id=repository_id
+    ).status_code == 201
     assert harness.review_stage(case_id, "plan").status_code == 201
     if finish_first_task:
-        harness.complete_task(case_id, "T1", run_id=f"{prefix}-t1")
+        harness.complete_task(case_id, "T1", run_id=f"{prefix}-t1", repository_id=repository_id)
 
 
 # ------------------------------------------------------------------- AC-1
