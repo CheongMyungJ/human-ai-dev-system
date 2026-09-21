@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from domain import profiles
 from domain.models import (
     AuthoringMode,
     AxisWeight,
@@ -41,8 +42,12 @@ DOC_TYPE = "hads.intent-draft"
 #: 본문 API 로 받으면 데이터 경계가 뚫리고, 의도 버전이 바뀌었을 때 옛 근거가 새
 #: 의도에 그대로 붙는다. v1·v2 문서의 축은 **0건**이며 그 Case 는 수준 미결정이다.
 #: 0건을 "간소"로 읽지 않는다.
-DOC_VERSION = 3
-SUPPORTED_DOC_VERSIONS = (1, 2, 3)
+#: v4 에서 Profile 이 들어왔다(P3-R1). 문서는 자기 Profile 과 **항목 순서**를 함께
+#: 적는다 — 읽는 쪽이 현재 정의를 다시 조회하면, 정의가 새 버전으로 바뀐 뒤 옛 문서가
+#: 갑자기 항목이 빠진 문서로 읽힌다(D-62 "새 정의를 기존 Case 에 소급 적용하지
+#: 않는다"). v1~v3 문서의 항목은 공통 여섯 항목이며 Profile 은 **없음**이다.
+DOC_VERSION = 4
+SUPPORTED_DOC_VERSIONS = (1, 2, 3, 4)
 
 #: 필수 여섯 항목의 고정 순서. 줄이지 않는다.
 FIELD_ORDER: tuple[IntentField, ...] = (
@@ -89,8 +94,10 @@ def compose(
     author_run_id: str | None = None,
     criteria: list[dict[str, Any]] | None = None,
     sizing: dict[str, Any] | None = None,
+    profile: str | None = None,
+    profile_version: str | None = None,
 ) -> bytes:
-    """여섯 항목과 질문 목록을 정규 문서 바이트로 만든다.
+    """필수 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
     비어 있는 항목은 **삭제하지 않고** 본문 없이 `undecided` 로 남긴다
     (intent-artifacts.md 1절). 여기서 값을 추정해 채우지 않는다.
@@ -98,7 +105,12 @@ def compose(
     `authored_by` 와 `authoring_mode` 는 이 초안을 **실제로 쓴 주체**다.
     FR-03의 핵심은 여섯 항목이 기록되는 것이 아니라 AI가 제시하고 사람이 검토하는
     역할 분리이므로, 둘 중 어느 쪽이 썼는지를 문서가 스스로 말해야 한다.
+
+    `profile` 을 주면 공통 여섯 항목 **뒤에** 그 목적의 의미 항목이 붙는다(D-62).
+    주지 않으면 여섯 항목만 쓴다 — Profile 이 기록되지 않은 Case(R1 이전)의 문서
+    형식이며, 없는 Profile 을 기본값으로 채우지 않는다.
     """
+    field_order = profiles.field_order(profile, profile_version)
     body: dict[str, Any] = {
         "doc_type": DOC_TYPE,
         "doc_version": DOC_VERSION,
@@ -107,6 +119,11 @@ def compose(
         "authoring_mode": AuthoringMode(authoring_mode).value,
         "author_run_id": author_run_id,
         "authoring_note": AUTHORING_NOTE[AuthoringMode(authoring_mode)],
+        # Profile 과 항목 순서를 문서가 스스로 적는다(v4). 읽는 쪽은 이 목록으로
+        # 항목을 돌며, 현재 정의를 다시 조회하지 않는다.
+        "profile": profile,
+        "profile_version": profile_version,
+        "field_order": list(field_order),
         "fields": {},
         "questions": [],
         # 성공 기준은 **이 문서 안에** 있다. 기준마다 관련 의도 항목 → 확인 방법 →
@@ -118,20 +135,20 @@ def compose(
         "sizing": None,
     }
 
-    for field in FIELD_ORDER:
-        given = fields.get(field.value) or {}
+    for name in field_order:
+        given = fields.get(name) or {}
         text = str(given.get("text") or "").strip()
         if text:
             state = ConfirmationState(given.get("state") or ConfirmationState.PROPOSED.value)
             origin = ContentOrigin(given.get("origin") or ContentOrigin.AI_PROPOSAL.value)
             if origin is ContentOrigin.NONE:
                 # 내용이 있는데 출처가 없다고 적지 않는다.
-                raise ValueError(f"field {field.value} has text but origin 'none'")
+                raise ValueError(f"field {name} has text but origin 'none'")
         else:
             # 내용이 없으면 상태·출처를 추정하지 않는다.
             state = ConfirmationState.UNDECIDED
             origin = ContentOrigin.NONE
-        body["fields"][field.value] = {
+        body["fields"][name] = {
             "text": text,
             "state": state.value,
             "origin": origin.value,
@@ -187,11 +204,13 @@ def compose(
         if key in seen_criteria:
             raise ValueError(f"duplicate criterion key: {key}")
         seen_criteria.add(key)
-        relates_to = IntentField(raw.get("relates_to") or IntentField.EXPECTED_OUTCOME.value)
+        relates_to = _field_name(
+            raw.get("relates_to") or IntentField.EXPECTED_OUTCOME.value, field_order
+        )
         body["criteria"].append(
             {
                 "key": key,
-                "relates_to": relates_to.value,
+                "relates_to": relates_to,
                 "text": text,
                 "method": method,
                 "summary": summary,
@@ -203,6 +222,18 @@ def compose(
         body["sizing"] = _compose_sizing(sizing)
 
     return json.dumps(body, ensure_ascii=False, indent=2, sort_keys=False).encode("utf-8")
+
+
+def _field_name(value: Any, field_order: tuple[str, ...]) -> str:
+    """성공 기준이 가리키는 의도 항목 이름(P3-R1).
+
+    이 문서의 항목 목록 안에 있어야 한다. 밖의 이름을 받아 두면 기준이 존재하지
+    않는 항목에 걸려 "기준과 의도의 연결"이 끊긴다(intent-artifacts 1절).
+    """
+    name = str(value)
+    if name not in field_order:
+        raise ValueError(f"criterion relates_to is not a field of this document: {name}")
+    return name
 
 
 def _compose_sizing(sizing: dict[str, Any]) -> dict[str, Any]:
@@ -254,6 +285,11 @@ def parse(body: bytes) -> dict[str, Any]:
     # v1·v2 문서에는 수준 판단이 없다. `None` 으로 읽되 "판단 0건"과 "읽지 못함"을
     # 섞지 않기 위해 원본은 그대로 두고 읽는 쪽에서만 기본값을 쓴다.
     doc.setdefault("sizing", None)
+    # v1~v3 문서에는 Profile 이 없다. `None` 으로 읽고 항목 순서는 공통 여섯 항목이다.
+    # **현재 Profile 로 채우지 않는다** — 그러면 옛 문서가 항목이 빠진 문서로 읽힌다.
+    doc.setdefault("profile", None)
+    doc.setdefault("profile_version", None)
+    doc.setdefault("field_order", [f.value for f in FIELD_ORDER])
     return doc
 
 
@@ -269,12 +305,12 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
     prev_doc = parse(previous) if previous else None
 
     fields: list[dict[str, Any]] = []
-    for field in FIELD_ORDER:
-        current = doc["fields"][field.value]
+    for name in doc["field_order"]:
+        current = doc["fields"][name]
         if prev_doc is None:
             change = FieldChange.INITIAL
         else:
-            prev = prev_doc["fields"].get(field.value, {})
+            prev = prev_doc["fields"].get(name, {})
             same = (
                 prev.get("text") == current["text"]
                 and prev.get("state") == current["state"]
@@ -283,7 +319,7 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
             change = FieldChange.UNCHANGED if same else FieldChange.CHANGED
         fields.append(
             {
-                "field": field.value,
+                "field": name,
                 "state": current["state"],
                 "origin": current["origin"],
                 "change_from_prev": change.value,
@@ -333,6 +369,8 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
     prev_keys = {q["key"] for q in prev_doc["questions"]} if prev_doc else set()
     current_keys = {q["key"] for q in questions}
     return {
+        "profile": doc.get("profile"),
+        "profile_version": doc.get("profile_version"),
         "fields": fields,
         "questions": questions,
         "criteria": criteria,

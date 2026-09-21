@@ -20,30 +20,43 @@ from controller import work_graph as workgraph
 from controller.admission import AdmissionRequest, AdmissionResult
 from controller.admission import evaluate as evaluate_admission
 from controller.db import transaction, utc_now
-from domain import ids, prep_doc
+from domain import ids, prep_doc, profiles
 from domain.models import (
+    BUDGET_MEASUREMENT,
+    BUDGET_UNIT,
+    POLICY_VERSION,
     AcceptanceMode,
     AcceptanceRefusal,
     AdmissionOutcome,
     ArtifactKind,
     AuthoringMode,
+    Autonomy,
+    AutonomySource,
     Availability,
     AxisWeight,
+    BudgetEnforcement,
+    BudgetMeasurement,
+    BudgetMetric,
+    BudgetThreshold,
     CapabilityState,
     CandidateState,
     ClaimDeferral,
     CaseKind,
+    CaseProfile,
     CaseRelationKind,
     CaseStatus,
+    CheckpointState,
     ClosureKind,
     CompletionMode,
     ConfirmationState,
     ContentOrigin,
     ContextRefRole,
+    ControlledCheckpoint,
     CriterionState,
     CriterionVerdict,
     DecideAt,
     DecisionKind,
+    DelegationBasisKind,
     EvidenceKind,
     FeedbackState,
     FieldChange,
@@ -56,10 +69,15 @@ from domain.models import (
     IntentField,
     IntentStatus,
     Permission,
+    PolicyRefusal,
+    PolicyState,
     PreparationStage,
     PreparationState,
+    ProfileSource,
     QuestionState,
     ReadRequestState,
+    RepositorySelectionSource,
+    RepositorySource,
     ReviewMode,
     RunOutcome,
     RunPurpose,
@@ -98,6 +116,19 @@ class NotFoundError(Exception):
     """대상 기록이 없다. HTTP 404로 돌려준다."""
 
 
+class PolicyRefused(ConflictError):
+    """정책·Profile·저장소·예산 설정을 받을 수 없다(P3-R1).
+
+    **네 번째 독립 거절 목록이다**(`PolicyRefusal`). 동의를 기록할 수 있는가,
+    실행을 배정해도 되는가, 종료로 확정해도 되는가와 합치지 않는다 — 이쪽은
+    "이 설정을 받아도 되는가"이며 그 판단 근거가 다르다(FR-23).
+    """
+
+    def __init__(self, refusals: list[PolicyRefusal]) -> None:
+        self.refusals = refusals
+        super().__init__("policy refused: " + ", ".join(r.value for r in refusals))
+
+
 class AcceptanceRefused(ConflictError):
     """최종 인수·예외 수용을 기록할 수 없다.
 
@@ -127,6 +158,24 @@ def _summary(text: str) -> str:
     return one_line[: MAX_SUMMARY - 1] + "…"
 
 
+def _field_name(field: str) -> str:
+    """의도 항목 이름을 검증한다 — 공통 여섯 항목 또는 Profile 의미 항목(P3-R1).
+
+    `IntentField(...)` 하나로 검증하던 자리다. 모르는 이름을 그대로 저장하지 않는
+    이유는 그대로다: 오타가 새 항목이 되면 필수 항목 검사가 무의미해진다.
+    """
+    try:
+        return IntentField(field).value
+    except ValueError:
+        pass
+    try:
+        return profiles.ProfileField(field).value
+    except ValueError as exc:
+        # 거절 사유를 예외로 남긴다. 조용히 통과시키면 오타가 새 항목이 되고,
+        # 그대로 죽으면 화면이 "무엇이 잘못됐는가"를 말할 수 없다.
+        raise ConflictError(f"unknown intent field: {field}") from exc
+
+
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
@@ -152,6 +201,13 @@ class Repository:
     # ---------------------------------------------------------------- project
 
     def create_project(self, name: str, repo_path: str, default_tool_id: str) -> dict[str, Any]:
+        """Project 를 만든다.
+
+        **P3-R1: 만들면서 등록 저장소 한 건을 함께 넣는다**(D-38). `repo_path` 컬럼은
+        그대로 유지한다 — 기존 배정·작업공간 경로가 그 값을 쓰고, 컬럼을 지우면 이
+        단계의 범위(모델과 이행)를 넘어 실행 경로까지 바꾸게 된다. 두 곳의 값은
+        같으며 `project_repository` 가 정본이 되는 시점은 R2 다.
+        """
         owner_id = self.ensure_owner()
         project_id = ids.new_project_id()
         now = utc_now()
@@ -161,6 +217,20 @@ class Repository:
                     "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
                     " VALUES (?, ?, ?, ?, ?, ?)",
                     (project_id, owner_id, name, repo_path, default_tool_id, now),
+                )
+                self.conn.execute(
+                    "INSERT INTO project_repository"
+                    " (id, project_id, name, repo_path, source, registered_by, registered_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("repo"),
+                        project_id,
+                        "primary",
+                        repo_path,
+                        RepositorySource.REGISTERED.value,
+                        "owner",
+                        now,
+                    ),
                 )
         except sqlite3.IntegrityError as exc:
             raise ConflictError(f"project name already used: {name}") from exc
@@ -245,15 +315,72 @@ class Repository:
 
     # ------------------------------------------------------------------- case
 
-    def create_case(self, project_id: str, title: str, kind: CaseKind) -> dict[str, Any]:
+    def create_case(
+        self,
+        project_id: str,
+        title: str,
+        kind: CaseKind | None = None,
+        profile: CaseProfile | None = None,
+    ) -> dict[str, Any]:
+        """Case 를 만든다.
+
+        **P3-R1: Profile 과 기본 Autonomy 가 여기서 기록된다.**
+
+        Profile 과 `kind` 는 한쪽에서 다른 쪽을 유도한다. 요청에 Profile 이 있으면
+        `kind` 를 유도하고 출처는 `explicit` 이다. `kind` 만 있으면 Profile 을
+        유도하고 출처는 `derived_from_kind` — **사람의 선택이 아니라는 사실을 남긴다**
+        (FR-04). 둘 다 없으면 거부한다. 기본값을 지어내면 그 Case 의 목적이 시스템이
+        고른 것이 된다.
+
+        기본 Autonomy 는 `ask_on_decision` 이며 출처는 `system_default` 다(D-11·D-21).
+        **행을 만들어 두는 이유**는 "행이 없음"이 R1 이전 Case 의 미기록을 뜻해야
+        하기 때문이다 — 두 상태가 같은 모습이면 마이그레이션이 구별을 잃는다.
+        """
         self.get_project(project_id)
+        if profile is None and kind is None:
+            raise ConflictError("case needs a profile or a kind")
+        if profile is not None:
+            resolved_profile = CaseProfile(profile)
+            resolved_kind = profiles.KIND_FOR_PROFILE[resolved_profile]
+            source = ProfileSource.EXPLICIT
+        else:
+            resolved_kind = CaseKind(kind)
+            resolved_profile = profiles.PROFILE_FOR_KIND[resolved_kind]
+            source = ProfileSource.DERIVED_FROM_KIND
         case_id = ids.new_case_id()
         now = utc_now()
         with transaction(self.conn):
             self.conn.execute(
-                'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (case_id, project_id, _summary(title), kind.value, CaseStatus.RECEIVED.value, now, now),
+                'INSERT INTO "case" (id, project_id, title, kind, status, created_at,'
+                " updated_at, profile, profile_version, profile_source)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    case_id,
+                    project_id,
+                    _summary(title),
+                    resolved_kind.value,
+                    CaseStatus.RECEIVED.value,
+                    now,
+                    now,
+                    resolved_profile.value,
+                    profiles.CURRENT_PROFILE_VERSION,
+                    source.value,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO case_policy"
+                " (id, case_id, revision, autonomy, autonomy_source, policy_version,"
+                "  set_by, reason_summary, state, created_at)"
+                " VALUES (?, ?, 1, ?, ?, ?, 'system', NULL, ?, ?)",
+                (
+                    ids.new_id("pol"),
+                    case_id,
+                    Autonomy.ASK_ON_DECISION.value,
+                    AutonomySource.SYSTEM_DEFAULT.value,
+                    POLICY_VERSION,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
             )
         return self.get_case(case_id)
 
@@ -784,6 +911,11 @@ class Repository:
             run["workspace_path"] = project["repo_path"]
         run["case_title"] = case["title"]
         run["case_kind"] = case["kind"]
+        # **P3-R1: Profile 과 그 정의판을 함께 준다.** Runner 가 초안 항목을 그
+        # Profile 로 만든다. `None` 이면 R1 이전 Case 이고 공통 여섯 항목이다 —
+        # Runner 가 현재 정의로 채우지 않는다(D-62).
+        run["case_profile"] = case.get("profile")
+        run["case_profile_version"] = case.get("profile_version")
         # 의미 검토의 대상 의도 버전은 지시 원문에서 끌어낸다. 별도 컬럼을 두면
         # 지시와 대상이 어긋날 수 있다.
         target = self.intent_version_for_artifact(
@@ -956,18 +1088,24 @@ class Repository:
     ) -> dict[str, Any]:
         """Runner가 계산한 의도 구조를 반영한다.
 
-        여섯 항목이 모두 와야 한다. 하나라도 빠지면 거부한다 —
+        필수 항목이 모두 와야 한다. 하나라도 빠지면 거부한다 —
         "정보가 없으면 항목을 삭제한다"가 아니라 `undecided` 로 남기는 것이 규칙이다.
+
+        **P3-R1: 필수 항목은 Case 의 Profile 이 정한다.** 공통 여섯 항목 위에 그
+        목적의 의미 항목이 붙는다(D-62). Profile 이 기록되지 않은 Case(R1 이전)는
+        여섯 항목 그대로다 — 지금의 의미 항목을 요구하면 그 Case 의 기존 의도 버전이
+        갑자기 불완전한 문서가 된다.
         """
         intent = self.get_intent_version(intent_version_id)
         rows = list(fields)
         given = {row["field"] for row in rows}
-        required = {f.value for f in IntentField}
+        required = set(self.required_intent_fields(intent["case_id"]))
         if given != required:
             missing = sorted(required - given)
             extra = sorted(given - required)
             raise ConflictError(
-                f"intent structure must carry all six fields; missing={missing} extra={extra}"
+                "intent structure must carry exactly the required fields;"
+                f" missing={missing} extra={extra}"
             )
 
         now = utc_now()
@@ -982,7 +1120,7 @@ class Repository:
                     "   change_from_prev = excluded.change_from_prev",
                     (
                         intent_version_id,
-                        IntentField(row["field"]).value,
+                        _field_name(row["field"]),
                         ConfirmationState(row["state"]).value,
                         ContentOrigin(row["origin"]).value,
                         FieldChange(row["change_from_prev"]).value,
@@ -1023,7 +1161,20 @@ class Repository:
         return self.get_intent_detail(intent_version_id)
 
     def list_intent_fields(self, intent_version_id: str) -> list[dict[str, Any]]:
-        order = {f.value: i for i, f in enumerate(IntentField)}
+        """항목 목록. **Profile 이 정한 순서**로 돌려준다.
+
+        순서를 고정하는 이유는 화면·문서·지시문이 같은 순서를 보여야 사람이 버전
+        사이의 차이를 눈으로 볼 수 있기 때문이다. 목록에 없는 항목(옛 기록 등)은
+        뒤로 보내고 지우지 않는다.
+        """
+        intent = self.get_intent_version(intent_version_id)
+        case = self.get_case(intent["case_id"])
+        order = {
+            name: index
+            for index, name in enumerate(
+                profiles.field_order(case.get("profile"), case.get("profile_version"))
+            )
+        }
         rows = self.conn.execute(
             "SELECT * FROM intent_field WHERE intent_version_id = ?", (intent_version_id,)
         ).fetchall()
@@ -1098,6 +1249,15 @@ class Repository:
         intent["content_hash"] = ref["content_hash"]
         intent["availability"] = ref["availability"]
         intent["summary"] = ref["summary"]
+        # **P3-R1: 필수 항목 집합을 함께 실어 준다.** 게이트 규칙이 이 목록으로
+        # 검사한다 — 규칙이 스스로 Profile 을 조회하면 제어부의 두 곳이 같은 판단을
+        # 따로 하게 되고, 한쪽만 고치는 실수가 생긴다.
+        case = self.get_case(intent["case_id"])
+        intent["profile"] = case.get("profile")
+        intent["profile_version"] = case.get("profile_version")
+        intent["required_fields"] = list(
+            profiles.field_order(case.get("profile"), case.get("profile_version"))
+        )
         return intent
 
     def latest_intent_version(self, case_id: str) -> dict[str, Any] | None:
@@ -2067,7 +2227,12 @@ class Repository:
                         str(row["key"]),
                         _summary(row["summary"]),
                         _summary(row.get("method_summary", "")),
-                        IntentField(row["relates_to"]).value,
+                        # **P3-R1: Profile 의미 항목도 기준의 대상이 된다.**
+                        # `IntentField` 하나로 검증하면 `improvement_target` 같은
+                        # 목적별 항목에 걸린 기준이 거부된다 — 라이브에서 실제로
+                        # 그렇게 막혔다. 검증 자체는 유지한다(모르는 이름은 저장하지
+                        # 않는다).
+                        _field_name(row["relates_to"]),
                         CriterionState.PROPOSED.value,
                         now,
                     ),
@@ -2725,16 +2890,25 @@ class Repository:
             )
 
     def create_successor_case(
-        self, from_case_id: str, title: str, kind: CaseKind, reason_summary: str
+        self,
+        from_case_id: str,
+        title: str,
+        kind: CaseKind | None = None,
+        reason_summary: str = "",
+        profile: CaseProfile | None = None,
     ) -> dict[str, Any]:
         """종료된 업무의 후속 수정을 위한 새 Case를 만들고 출처로 연결한다.
 
         **이전 동의를 승계하지 않는다.** 새 Case는 의도 버전이 0개로 시작하므로
         기능 개발이면 새 초안·새 동의·새 게이트를 다시 거친다(D-33,
         completion-lifecycle 6절 "이전 인수나 의도 동의를 포괄 허용으로 쓰지 않는다").
+
+        **P3-R1: Profile·정책도 승계하지 않는다.** 새 Case 의 Autonomy 는 새 Case 의
+        기본값이고 Profile 은 요청이 지정하거나 `kind` 에서 유도한다. 원래 Case 가
+        controlled 였다는 사실이 새 Case 의 확인 기록을 만들지 않는다.
         """
         origin = self.get_case(from_case_id)
-        new_case = self.create_case(origin["project_id"], title, kind)
+        new_case = self.create_case(origin["project_id"], title, kind, profile)
         with transaction(self.conn):
             self.conn.execute(
                 "INSERT INTO case_relation"
@@ -4450,3 +4624,740 @@ class Repository:
             "SELECT * FROM run_command WHERE run_id = ? ORDER BY seq", (run_id,)
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # =================================================== P3-R1 정책·Profile
+    #
+    # **여기 있는 것은 기록이고 강제가 아니다.** 어떤 메서드도 실행을 열거나 막지
+    # 않는다. Autonomy 에 따른 진입 조건은 R4, 예산 예약·정지는 R3, Case×Repo
+    # 작업공간과 허용 내 자동 추가는 R2 다. 조회 결과가 그 사실을 말한다
+    # (`ENFORCEMENT` 표).
+
+    #: 각 정책 축을 **지금 누가 강제하는가.** 조회에 그대로 실려 나간다.
+    #:
+    #: 이 표가 필요한 이유는, 값이 저장된다는 사실과 값이 동작을 바꾼다는 사실이
+    #: 다르기 때문이다. hard 예산을 설정한 사람이 "이제 초과하지 않는다"고 믿으면
+    #: 그것은 우리가 지원하지 않는 보장을 표시한 것이다(DEVELOPMENT.md 3절).
+    ENFORCEMENT: dict[str, dict[str, str]] = {
+        "autonomy": {
+            "state": "recorded_not_enforced",
+            "enforced_by": "P3-R4",
+            "detail": "Autonomy 값은 기록된다. 목적별 진입 조건과 자동 실행 경로는 아직"
+            " v0.6 규칙대로 동작한다",
+        },
+        "controlled_checkpoint": {
+            "state": "recorded_not_enforced",
+            "enforced_by": "P3-R4",
+            "detail": "확인 지점과 확인 기록은 남지만 확인하지 않은 상태가 실행·게시를"
+            " 막지는 않는다",
+        },
+        "budget": {
+            "state": "recorded_not_enforced",
+            "enforced_by": "P3-R3",
+            "detail": "한도는 기록된다. 예약·누적·hard 도달 시 배정 중지는 아직 없다",
+        },
+        "repository_selection": {
+            "state": "recorded_not_enforced",
+            "enforced_by": "P3-R2",
+            "detail": "선택·쓰기 허용·게시 허용은 기록된다. Case×Repo 작업공간과 허용 내"
+            " 자동 추가, 제외 차단은 아직 없다",
+        },
+        "publish": {
+            "state": "not_implemented",
+            "enforced_by": "P5",
+            "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다",
+        },
+    }
+
+    # ------------------------------------------------------------ Profile
+
+    def case_profile(self, case_id: str) -> dict[str, Any]:
+        """이 Case 의 Profile 기록과 그 정의.
+
+        **기록되지 않은 Case 를 `kind` 에서 유도해 채우지 않는다.** 유도는 사람의
+        선택이 아니고, 채우면 그 Case 의 기존 의도 버전이 갑자기 Profile 필수 항목을
+        빠뜨린 문서가 된다(D-62).
+        """
+        case = self.get_case(case_id)
+        profile = case.get("profile")
+        version = case.get("profile_version")
+        if profile is None or version is None:
+            return {
+                "profile": None,
+                "version": None,
+                "source": ProfileSource.NOT_RECORDED.value,
+                "definition": None,
+                "required_fields": sorted(profiles.required_fields(None, None)),
+                "kind": case["kind"],
+                "detail": "R1 이전에 만들어진 Case 다. Profile 이 기록되지 않았으며"
+                " 의도 초안은 공통 여섯 항목을 쓴다",
+            }
+        definition = profiles.resolve(profile, version)
+        return {
+            "profile": profile,
+            "version": version,
+            "source": case.get("profile_source") or ProfileSource.EXPLICIT.value,
+            "definition": definition.to_dict(),
+            "required_fields": list(definition.required_fields),
+            "kind": case["kind"],
+            "detail": None,
+        }
+
+    def required_intent_fields(self, case_id: str) -> frozenset[str]:
+        """그 Case 의 구조 보고가 가져야 하는 항목. 게이트와 구조 검사가 함께 쓴다."""
+        case = self.get_case(case_id)
+        return profiles.required_fields(case.get("profile"), case.get("profile_version"))
+
+    # ------------------------------------------------------------ Autonomy
+
+    def _current_policy_row(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM case_policy WHERE case_id = ? AND state = ?"
+            " ORDER BY revision DESC LIMIT 1",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchone()
+        return _row_to_dict(row)
+
+    def effective_policy(self, case_id: str) -> dict[str, Any]:
+        """이 Case 에 **지금 적용되는** 정책과 그 출처.
+
+        우선순위는 `Case 명시 → 시스템 기본값` 이다. Task·Project 단위 조정은 아직
+        없으므로 출처 값으로도 만들지 않는다 — 조회에 "Project 기본값에서 왔다"가
+        나타나면 사람이 없는 설정 화면을 찾게 된다(autonomy-budget-policy 5절).
+
+        **`autonomy = None` 을 기본값으로 바꾸지 않는다.** R1 이전 Case 는 미기록이며
+        그 상태로 표시된다.
+        """
+        case = self.get_case(case_id)
+        row = self._current_policy_row(case_id)
+        if row is None:
+            # R1 이후에 만든 Case 는 생성 시점에 행을 받는다. 그래도 없을 수 있는
+            # 경우(직접 SQL 삽입 등)를 기본값으로 답하되 출처를 시스템 기본값으로 둔다.
+            autonomy: str | None = Autonomy.ASK_ON_DECISION.value
+            source = AutonomySource.SYSTEM_DEFAULT.value
+            policy_version = POLICY_VERSION
+            revision = 0
+            recorded = False
+        else:
+            autonomy = row["autonomy"]
+            source = row["autonomy_source"]
+            policy_version = row["policy_version"]
+            revision = row["revision"]
+            recorded = autonomy is not None
+        return {
+            "case_id": case_id,
+            "revision": revision,
+            "autonomy": autonomy,
+            "autonomy_source": source,
+            "autonomy_recorded": recorded,
+            "policy_version": policy_version,
+            "default_autonomy": Autonomy.ASK_ON_DECISION.value,
+            # WorkDepth 는 별도 축이며 수준 판단이 만든다(P3-01). 여기서 복제하지
+            # 않고 참조만 한다 — 두 곳에 두면 한쪽만 바뀐다.
+            "work_depth": (lambda level: level.value if level else None)(
+                self.current_level(case_id)
+            ),
+            "work_depth_source": "sizing_assessment",
+            "completion_mode": self.completion_mode(case_id).value,
+            "profile": self.case_profile(case_id),
+            "checkpoints": self.list_checkpoints(case_id),
+            "budget": self.budget_state(case_id),
+            "delegation_basis": self.list_delegation_basis(case_id),
+            "repositories": self.case_repository_state(case_id),
+            "enforcement": self.ENFORCEMENT,
+            "case_status": case["status"],
+        }
+
+    def set_autonomy(
+        self,
+        case_id: str,
+        autonomy: Autonomy,
+        set_by: str,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Autonomy 를 명시로 설정한다. **이전 값은 지우지 않고 대체한다.**
+
+        종료된 Case 는 거부한다. 종료 뒤 정책을 바꾸면 그 Case 의 종료 기록이 어떤
+        규칙으로 확정됐는지 알 수 없게 된다(D-33).
+
+        controlled 로 바꾸면 확인 지점이 `required` 로 생긴다. ask-on-decision 으로
+        되돌리면 **이미 확인한 기록은 남고** 남은 `required` 만 정리한다 — 사람이
+        실제로 확인한 사실은 설정 변경으로 없어지지 않는다.
+        """
+        self._guard_policy_change(case_id)
+        now = utc_now()
+        current = self._current_policy_row(case_id)
+        revision = (current["revision"] + 1) if current else 1
+        policy_id = ids.new_id("pol")
+        with transaction(self.conn):
+            if current is not None:
+                self.conn.execute(
+                    "UPDATE case_policy SET state = ?, superseded_at = ? WHERE id = ?",
+                    (PolicyState.SUPERSEDED.value, now, current["id"]),
+                )
+            self.conn.execute(
+                "INSERT INTO case_policy"
+                " (id, case_id, revision, autonomy, autonomy_source, policy_version,"
+                "  set_by, reason_summary, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    policy_id,
+                    case_id,
+                    revision,
+                    autonomy.value,
+                    AutonomySource.CASE_EXPLICIT.value,
+                    POLICY_VERSION,
+                    set_by,
+                    _summary(reason_summary) if reason_summary else None,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+            if autonomy is Autonomy.CONTROLLED:
+                for checkpoint in ControlledCheckpoint:
+                    existing = self.conn.execute(
+                        "SELECT id FROM controlled_checkpoint"
+                        " WHERE case_id = ? AND checkpoint = ? AND state IN (?, ?)",
+                        (
+                            case_id,
+                            checkpoint.value,
+                            CheckpointState.REQUIRED.value,
+                            CheckpointState.CONFIRMED.value,
+                        ),
+                    ).fetchone()
+                    if existing is not None:
+                        continue
+                    self.conn.execute(
+                        "INSERT INTO controlled_checkpoint"
+                        " (id, case_id, policy_id, checkpoint, state, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            ids.new_id("chk"),
+                            case_id,
+                            policy_id,
+                            checkpoint.value,
+                            CheckpointState.REQUIRED.value,
+                            now,
+                        ),
+                    )
+            else:
+                # 요구가 사라졌다. **확인한 기록은 건드리지 않는다.**
+                self.conn.execute(
+                    "DELETE FROM controlled_checkpoint WHERE case_id = ? AND state = ?",
+                    (case_id, CheckpointState.REQUIRED.value),
+                )
+        return self.effective_policy(case_id)
+
+    def list_policy_revisions(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM case_policy WHERE case_id = ? ORDER BY revision",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _guard_policy_change(self, case_id: str) -> None:
+        if self.case_is_closed(case_id):
+            raise PolicyRefused([PolicyRefusal.CASE_ALREADY_CLOSED])
+
+    # -------------------------------------------------------- 위임 근거
+
+    def record_delegation_basis(
+        self,
+        case_id: str,
+        basis_kind: DelegationBasisKind,
+        summary: str,
+        artifact_id: str | None = None,
+        artifact_rev: int | None = None,
+        decision_id: str | None = None,
+    ) -> dict[str, Any]:
+        """자동 진행의 근거를 기록한다(D-60).
+
+        원문 참조를 주면 그 시점의 해시를 함께 남긴다. 나중에 원문이 바뀌면 근거가
+        바뀐 것이고, 그 비교가 누적 material delta 판단의 입력이다(R4).
+
+        이전 근거는 `superseded` 로 남는다. **지우지 않는 이유**는 "마지막 유효
+        위임과 비교한다"가 D-60의 규칙이고, 그러려면 그 이전 값들이 있어야 한다.
+        """
+        self._guard_policy_change(case_id)
+        self.get_case(case_id)
+        content_hash: str | None = None
+        if artifact_id is not None and artifact_rev is not None:
+            ref = self.get_artifact_ref(artifact_id, artifact_rev)
+            content_hash = ref["content_hash"]
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT * FROM delegation_basis WHERE case_id = ? ORDER BY revision DESC LIMIT 1",
+            (case_id,),
+        ).fetchone()
+        revision = (row["revision"] + 1) if row is not None else 1
+        basis_id = ids.new_id("deleg")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE delegation_basis SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND state = ?",
+                (PolicyState.SUPERSEDED.value, now, case_id, PolicyState.CURRENT.value),
+            )
+            self.conn.execute(
+                "INSERT INTO delegation_basis"
+                " (id, case_id, revision, basis_kind, artifact_id, artifact_rev,"
+                "  content_hash, decision_id, summary, state, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    basis_id,
+                    case_id,
+                    revision,
+                    basis_kind.value,
+                    artifact_id,
+                    artifact_rev,
+                    content_hash,
+                    decision_id,
+                    _summary(summary),
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+        return self.list_delegation_basis(case_id)
+
+    def list_delegation_basis(self, case_id: str) -> dict[str, Any]:
+        rows = self.conn.execute(
+            "SELECT * FROM delegation_basis WHERE case_id = ? ORDER BY revision",
+            (case_id,),
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        current = [i for i in items if i["state"] == PolicyState.CURRENT.value]
+        return {
+            "current": current[-1] if current else None,
+            "history": items,
+            "detail": "AI 초안은 근거가 아니다. 누적 material delta 판단은 P3-R4 다",
+        }
+
+    # ------------------------------------------------ controlled 체크포인트
+
+    def list_checkpoints(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM controlled_checkpoint WHERE case_id = ? ORDER BY created_at",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def confirm_checkpoint(
+        self,
+        case_id: str,
+        checkpoint: ControlledCheckpoint,
+        confirmed_by: str,
+        explicit: bool,
+        subject_type: str,
+        subject_id: str,
+        subject_hash: str | None = None,
+        note_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """사람이 그 확인 지점을 **실제로** 확인했다고 기록한다(D-65).
+
+        네 가지를 거부한다.
+
+            종료된 Case                     설정과 같은 이유다
+            명시적 확인이 아닌 요청         "진행하라"가 아닌 것을 확인으로 적지 않는다
+            controlled 가 아닌 Case         요구되지 않은 확인을 만들지 않는다
+            이미 확인한 대상과 다른 대상    새 대상은 새 확인이다(FR-23)
+
+        **이 기록이 권한을 만들지 않는다.** push·게시 허용은 `decision`,
+        최종 인수는 `final_acceptance` 의 별도 기록이다(D-32·D-65).
+        """
+        self._guard_policy_change(case_id)
+        if not explicit:
+            raise PolicyRefused([PolicyRefusal.NOT_EXPLICIT])
+        row = self.conn.execute(
+            "SELECT * FROM controlled_checkpoint"
+            " WHERE case_id = ? AND checkpoint = ? AND state = ?",
+            (case_id, checkpoint.value, CheckpointState.REQUIRED.value),
+        ).fetchone()
+        if row is None:
+            raise PolicyRefused([PolicyRefusal.CHECKPOINT_NOT_REQUIRED])
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE controlled_checkpoint SET state = ?, subject_type = ?,"
+                " subject_id = ?, subject_hash = ?, confirmed_by = ?, confirmed_at = ?,"
+                " note_summary = ? WHERE id = ?",
+                (
+                    CheckpointState.CONFIRMED.value,
+                    subject_type,
+                    subject_id,
+                    subject_hash,
+                    confirmed_by,
+                    now,
+                    _summary(note_summary) if note_summary else None,
+                    row["id"],
+                ),
+            )
+        return self.list_checkpoints(case_id)
+
+    def supersede_checkpoint(
+        self, case_id: str, checkpoint: ControlledCheckpoint, reason_summary: str
+    ) -> list[dict[str, Any]]:
+        """확인한 대상이 바뀌었다. 확인 기록을 남기고 새 요구를 만든다(D-65·FR-23).
+
+        확인 기록을 지우고 다시 `required` 로 돌리지 않는 이유는 "무엇을 보고
+        확인했는가"가 남아야 하기 때문이다. 같은 내용의 재전송에는 이 함수를 쓰지
+        않는다 — 그 경우는 재확인을 요구하지 않는다.
+        """
+        self._guard_policy_change(case_id)
+        policy = self._current_policy_row(case_id)
+        if policy is None or policy["autonomy"] != Autonomy.CONTROLLED.value:
+            raise PolicyRefused([PolicyRefusal.CHECKPOINT_NOT_REQUIRED])
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE controlled_checkpoint SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND checkpoint = ? AND state = ?",
+                (
+                    CheckpointState.SUPERSEDED.value,
+                    now,
+                    case_id,
+                    checkpoint.value,
+                    CheckpointState.CONFIRMED.value,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO controlled_checkpoint"
+                " (id, case_id, policy_id, checkpoint, state, note_summary, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("chk"),
+                    case_id,
+                    policy["id"],
+                    checkpoint.value,
+                    CheckpointState.REQUIRED.value,
+                    _summary(reason_summary),
+                    now,
+                ),
+            )
+        return self.list_checkpoints(case_id)
+
+    # ---------------------------------------------------------------- 예산
+
+    def set_budget_limit(
+        self,
+        case_id: str,
+        metric: BudgetMetric,
+        threshold_kind: BudgetThreshold,
+        limit_value: float,
+        set_by: str,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """예산 한도를 설정한다. **설정이 없으면 무제한이다**(D-56).
+
+        **강제할 수 없는 정확한 hard 한도는 받지 않는다**(D-61 "정확한 hard 한도를
+        요구했는데 보장할 수 없다면 해당 설정/실행을 허용하지 않는다"). 토큰·비용은
+        어댑터가 사용량을 주지 않거나 사후에만 주므로 정확한 상한을 약속할 수 없다.
+        거부하지 않고 저장하면, 설정한 사람은 상한이 있다고 믿는데 시스템은 그것을
+        지킬 방법이 없는 상태가 된다.
+
+        경고선(`warn`)은 추정 지표에도 받는다. 경고는 표시이며 보장이 아니다.
+        """
+        self._guard_policy_change(case_id)
+        self.get_case(case_id)
+        refusals: list[PolicyRefusal] = []
+        if limit_value <= 0:
+            refusals.append(PolicyRefusal.LIMIT_NOT_POSITIVE)
+        measurement = BUDGET_MEASUREMENT[metric]
+        if (
+            threshold_kind is BudgetThreshold.HARD
+            and measurement is not BudgetMeasurement.EXACT
+        ):
+            refusals.append(PolicyRefusal.HARD_LIMIT_NOT_ENFORCEABLE)
+        if refusals:
+            raise PolicyRefused(refusals)
+
+        now = utc_now()
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM budget_setting WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        with transaction(self.conn):
+            # 같은 지표·같은 경계의 이전 설정만 대체한다. 다른 지표의 한도는 그대로다.
+            self.conn.execute(
+                "UPDATE budget_setting SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND metric = ? AND threshold_kind = ? AND state = ?",
+                (
+                    PolicyState.SUPERSEDED.value,
+                    now,
+                    case_id,
+                    metric.value,
+                    threshold_kind.value,
+                    PolicyState.CURRENT.value,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO budget_setting"
+                " (id, case_id, revision, metric, threshold_kind, limit_value, unit,"
+                "  measurement, enforcement, enforced_by, policy_version, set_by,"
+                "  reason_summary, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("budget"),
+                    case_id,
+                    revision,
+                    metric.value,
+                    threshold_kind.value,
+                    float(limit_value),
+                    BUDGET_UNIT[metric],
+                    measurement.value,
+                    BudgetEnforcement.RECORDED_NOT_ENFORCED.value,
+                    self.ENFORCEMENT["budget"]["enforced_by"],
+                    POLICY_VERSION,
+                    set_by,
+                    _summary(reason_summary) if reason_summary else None,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+        return self.budget_state(case_id)
+
+    def clear_budget_limit(
+        self, case_id: str, metric: BudgetMetric, threshold_kind: BudgetThreshold
+    ) -> dict[str, Any]:
+        """한도를 해제한다. **이력은 남는다.**"""
+        self._guard_policy_change(case_id)
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE budget_setting SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND metric = ? AND threshold_kind = ? AND state = ?",
+                (
+                    PolicyState.SUPERSEDED.value,
+                    now,
+                    case_id,
+                    metric.value,
+                    threshold_kind.value,
+                    PolicyState.CURRENT.value,
+                ),
+            )
+        return self.budget_state(case_id)
+
+    def budget_state(self, case_id: str) -> dict[str, Any]:
+        """지금 걸려 있는 한도와 그 강제 상태.
+
+        `unlimited` 를 따로 두는 이유는 "한도 0건"과 "한도 0"이 다르기 때문이다.
+        측정·집계는 R3 이므로 **사용량을 여기서 0으로 보고하지 않는다** — 미측정을
+        0으로 적으면 잔여량이 항상 가득한 것처럼 보인다(D-61).
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM budget_setting WHERE case_id = ? ORDER BY revision", (case_id,)
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        current = [i for i in items if i["state"] == PolicyState.CURRENT.value]
+        return {
+            "unlimited": not current,
+            "limits": current,
+            "history": items,
+            "usage": None,
+            "usage_detail": "사용량 누적·예약·정산은 P3-R3 이다. 미측정을 0으로 적지 않는다",
+            "measurement_contract": {
+                m.value: BUDGET_MEASUREMENT[m].value for m in BudgetMetric
+            },
+            "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며"
+            " 아직 모델이 없다(P4-01)",
+            "enforcement": self.ENFORCEMENT["budget"],
+        }
+
+    # --------------------------------------------------- Project 저장소
+
+    def register_project_repository(
+        self,
+        project_id: str,
+        name: str,
+        repo_path: str,
+        registered_by: str = "owner",
+    ) -> dict[str, Any]:
+        """Project 에 저장소를 등록한다(D-38·FR-01).
+
+        등록은 **선택도 허용도 아니다.** Case 가 무엇을 선택했는지는
+        `case_repository`, 쓰기·게시 허용도 그 표에 따로 있다.
+        """
+        self.get_project(project_id)
+        repo_id = ids.new_id("repo")
+        now = utc_now()
+        try:
+            with transaction(self.conn):
+                self.conn.execute(
+                    "INSERT INTO project_repository"
+                    " (id, project_id, name, repo_path, source, registered_by, registered_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        repo_id,
+                        project_id,
+                        name[:100],
+                        repo_path,
+                        RepositorySource.REGISTERED.value,
+                        registered_by,
+                        now,
+                    ),
+                )
+        except sqlite3.IntegrityError as exc:
+            raise ConflictError(f"repository name already used in project: {name}") from exc
+        return self.get_project_repository(repo_id)
+
+    def get_project_repository(self, repository_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM project_repository WHERE id = ?", (repository_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"repository not found: {repository_id}")
+        return dict(row)
+
+    def list_project_repositories(self, project_id: str) -> list[dict[str, Any]]:
+        self.get_project(project_id)
+        rows = self.conn.execute(
+            "SELECT * FROM project_repository WHERE project_id = ? ORDER BY registered_at",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_journal_repository(self, project_id: str, repository_id: str) -> dict[str, Any]:
+        """Case 기록 이슈를 만들 저장소를 지정한다(D-17·D-34·FR-30).
+
+        **코드 대상이 아니다.** 지정만으로 어떤 Case 의 코드 변경 집합에도 들어가지
+        않으며, 코드 대상으로 선택하려는 요청은 거부한다(`select_case_repository`).
+        """
+        repo = self.get_project_repository(repository_id)
+        if repo["project_id"] != project_id:
+            raise PolicyRefused([PolicyRefusal.REPOSITORY_NOT_IN_PROJECT])
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE project SET journal_repository_id = ? WHERE id = ?",
+                (repository_id, project_id),
+            )
+        return self.project_repository_view(project_id)
+
+    def project_repository_view(self, project_id: str) -> dict[str, Any]:
+        project = self.get_project(project_id)
+        return {
+            "project_id": project_id,
+            "repositories": self.list_project_repositories(project_id),
+            "journal_repository_id": project.get("journal_repository_id"),
+            "legacy_repo_path": project["repo_path"],
+            "enforcement": {
+                "selection": self.ENFORCEMENT["repository_selection"],
+                "publish": self.ENFORCEMENT["publish"],
+            },
+        }
+
+    # ----------------------------------------------------- Case 저장소 선택
+
+    def select_case_repository(
+        self,
+        case_id: str,
+        repository_id: str,
+        selection_source: RepositorySelectionSource,
+        code_write_allowed: bool,
+        publish_allowed: bool,
+        selected_by: str,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Case 의 저장소 선택과 허용 범위를 기록한다(D-63·D-64).
+
+        **세 집합을 분리한다.** 선택했다는 것, 코드를 바꿔도 된다는 것, 외부에 게시해도
+        된다는 것. 호출자가 쓰기만 허용하면 게시는 허용되지 않는다 — 기본값으로
+        따라오게 만들면 D-64("쓰기 허용 저장소 추가는 게시 허용 확대가 아니다")가
+        코드 한 줄로 깨진다.
+
+        기록 저장소를 코드 대상으로 선택하는 요청은 거부한다(D-17·FR-30).
+
+        R1 은 `auto_in_allowance` 를 발급하지 않는다. 허용 내 자동 추가는 R2 다.
+        """
+        self._guard_policy_change(case_id)
+        case = self.get_case(case_id)
+        repo = self.get_project_repository(repository_id)
+        if repo["project_id"] != case["project_id"]:
+            raise PolicyRefused([PolicyRefusal.REPOSITORY_NOT_IN_PROJECT])
+        project = self.get_project(case["project_id"])
+        if (
+            code_write_allowed
+            and project.get("journal_repository_id") == repository_id
+        ):
+            raise PolicyRefused([PolicyRefusal.JOURNAL_REPOSITORY_NOT_A_CODE_TARGET])
+        if selection_source is RepositorySelectionSource.EXCLUDED and (
+            code_write_allowed or publish_allowed
+        ):
+            raise ConflictError("excluded repository cannot carry write or publish allowance")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_repository"
+                " (case_id, repository_id, selection_source, code_write_allowed,"
+                "  publish_allowed, selected_by, reason_summary, state, selected_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(case_id, repository_id) DO UPDATE SET"
+                "   selection_source = excluded.selection_source,"
+                "   code_write_allowed = excluded.code_write_allowed,"
+                "   publish_allowed = excluded.publish_allowed,"
+                "   selected_by = excluded.selected_by,"
+                "   reason_summary = excluded.reason_summary,"
+                "   state = excluded.state,"
+                "   selected_at = excluded.selected_at,"
+                "   superseded_at = NULL",
+                (
+                    case_id,
+                    repository_id,
+                    selection_source.value,
+                    1 if code_write_allowed else 0,
+                    1 if publish_allowed else 0,
+                    selected_by,
+                    _summary(reason_summary) if reason_summary else None,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+        return self.case_repository_state(case_id)
+
+    def case_repository_state(self, case_id: str) -> dict[str, Any]:
+        """이 Case 의 저장소 선택·허용과 아직 없는 기능의 표시.
+
+        선택 기록이 없을 때 **"저장소가 없다"고 답하지 않는다.** P3-03까지의 Case 는
+        Project 의 단일 저장소에서 실제로 작업했고 그 사실이 작업공간 기록에 있다.
+        다만 그것은 "선택했다"는 기록이 아니므로 `implicit_single_repository` 로
+        따로 표시한다 — 이행이 만들지 않은 결정을 조회가 만들어 내지 않는다.
+        """
+        case = self.get_case(case_id)
+        rows = self.conn.execute(
+            "SELECT r.*, pr.name AS repository_name, pr.repo_path AS repo_path,"
+            " pr.source AS repository_source"
+            " FROM case_repository r JOIN project_repository pr ON pr.id = r.repository_id"
+            " WHERE r.case_id = ? ORDER BY r.selected_at",
+            (case_id,),
+        ).fetchall()
+        recorded = [dict(r) for r in rows]
+        current = [r for r in recorded if r["state"] == PolicyState.CURRENT.value]
+        excluded = [
+            r
+            for r in current
+            if r["selection_source"] == RepositorySelectionSource.EXCLUDED.value
+        ]
+        # **제외된 저장소를 선택 목록에 넣지 않는다.** 한 목록에 함께 두면 화면이
+        # 제외를 선택으로 보여 주고, R2 의 자동 추가가 제외 경계를 읽을 근거가 흐려진다.
+        selected = [r for r in current if r not in excluded]
+        project = self.get_project(case["project_id"])
+        implicit: dict[str, Any] | None = None
+        # **기록이 하나도 없을 때만** 암묵적 단일 저장소를 표시한다. 제외만 기록된
+        # Case 는 판단이 있었던 Case 이므로 없던 가정을 씌우지 않는다.
+        if not recorded:
+            registered = self.list_project_repositories(case["project_id"])
+            if len(registered) == 1:
+                implicit = {
+                    "repository_id": registered[0]["id"],
+                    "repo_path": registered[0]["repo_path"],
+                    "detail": "선택이 기록되지 않았다. 이 Case 는 Project 의 단일 저장소에서"
+                    " 동작하며 그것은 이행된 가정이지 기록된 선택이 아니다",
+                }
+        return {
+            "case_id": case_id,
+            "selected": selected,
+            "excluded": excluded,
+            "implicit_single_repository": implicit,
+            "journal_repository_id": project.get("journal_repository_id"),
+            "write_allowance_implies_publish": False,
+            "enforcement": {
+                "selection": self.ENFORCEMENT["repository_selection"],
+                "publish": self.ENFORCEMENT["publish"],
+            },
+        }

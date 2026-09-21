@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
 
+from domain import ids
+
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 def utc_now() -> str:
@@ -108,6 +110,26 @@ def migrate(conn: sqlite3.Connection) -> None:
     #     옛 행은 NULL 로 남고 그것은 "변경이 없었다"가 아니라 **관측하지 않았다**는
     #     뜻이다. 지금 와서 값을 지어내지 않는다.
 
+    # v8: 정책·Profile·저장소·예산. **새 표와 컬럼 세 개**다.
+    #
+    #     `case.profile`        여섯 Profile 중 무엇인가. 기존 행은 NULL 이며 그것은
+    #                           "기능 개발"이 아니라 **기록되지 않음**이다. `kind` 에서
+    #                           유도해 채우지 않는다 — 유도는 사람의 선택이 아니고,
+    #                           지금 채우면 그 Case 의 의도 버전이 갑자기 Profile 필수
+    #                           항목을 빠뜨린 문서가 된다.
+    #     `case.profile_version` 어느 정의판으로 기록됐는가. 새 정의를 기존 Case 에
+    #                           소급하지 않기 위해 필요하다(D-62).
+    #     `project.journal_repository_id` 기록 이슈를 만들 저장소. **코드 대상이
+    #                           아니다**(D-17·D-34·FR-30). 기본값은 NULL(미지정)이며
+    #                           미지정을 "기록하지 않는다"로 읽지 않는다 — 게시 자체가
+    #                           P5 범위다.
+    _add_column_if_missing(conn, "case", "profile", "TEXT")
+    _add_column_if_missing(conn, "case", "profile_version", "TEXT")
+    _add_column_if_missing(conn, "case", "profile_source", "TEXT")
+    _add_column_if_missing(conn, "project", "journal_repository_id", "TEXT")
+
+    _migrate_v8_existing_rows(conn)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -132,3 +154,65 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
         conn.execute("ROLLBACK")
         raise
     conn.execute("COMMIT")
+
+
+def _migrate_v8_existing_rows(conn: sqlite3.Connection) -> None:
+    """R1 이전에 만들어진 Project·Case 를 v8 모델로 **이행한다.**
+
+    두 가지를 한다. 둘 다 "없던 결정을 지어내지 않는다"는 같은 규칙을 따른다.
+
+    1. **등록 저장소.** Project 의 `repo_path` 를 `project_repository` 한 건으로
+       옮긴다. 같은 값이고 출처는 `migrated_from_project` 다. `repo_path` 컬럼은
+       지우지 않는다 — 기존 배정·작업공간이 그 값을 쓴다.
+
+    2. **정책 미기록 표시.** 기존 Case 에 `case_policy` 행을 **명시로** 넣되
+       `autonomy` 는 NULL 이다. 여기서 `ask_on_decision` 을 적으면 v0.6에서 사람이
+       검토·인수하기로 하고 진행한 업무가 조용히 자동 진행 대상이 된다. 가장 가까운
+       값인 `controlled` 로 적는 것도 안 된다 — v0.6에는 controlled 의 시작·결과
+       확인 체크포인트가 없었고, 있지도 않은 사람의 확인을 기록하는 일이 된다.
+       `policy_version` 은 당시 규칙판인 `"0.6"` 으로 남는다.
+
+    **Case 의 저장소 선택은 만들지 않는다.** 선택했다는 기록은 사람 또는 R2 의 자동
+    추가가 만드는 것이고, 이행 시점에 "이 Case 는 그 저장소를 선택했다"고 적을 근거가
+    없다. 조회는 그 상태를 `implicit_single_repository` 로 따로 표시한다.
+
+    이 함수는 **여러 번 불려도 같은 결과**다(`migrate()` 는 매 연결마다 돈다).
+    이미 있는 행은 건드리지 않는다.
+    """
+    now = utc_now()
+
+    projects = conn.execute(
+        "SELECT p.id, p.name, p.repo_path FROM project p"
+        " WHERE NOT EXISTS (SELECT 1 FROM project_repository r WHERE r.project_id = p.id)"
+    ).fetchall()
+    for project in projects:
+        conn.execute(
+            "INSERT INTO project_repository"
+            " (id, project_id, name, repo_path, source, registered_by, registered_at)"
+            " VALUES (?, ?, ?, ?, 'migrated_from_project', 'migration', ?)",
+            (
+                ids.new_id("repo"),
+                project["id"],
+                "primary",
+                project["repo_path"],
+                now,
+            ),
+        )
+
+    cases = conn.execute(
+        'SELECT c.id FROM "case" c'
+        " WHERE NOT EXISTS (SELECT 1 FROM case_policy p WHERE p.case_id = c.id)"
+    ).fetchall()
+    for case in cases:
+        conn.execute(
+            "INSERT INTO case_policy"
+            " (id, case_id, revision, autonomy, autonomy_source, policy_version, set_by,"
+            "  reason_summary, state, created_at)"
+            " VALUES (?, ?, 1, NULL, 'migrated_unknown', '0.6', 'migration', ?, 'current', ?)",
+            (
+                ids.new_id("pol"),
+                case["id"],
+                "R1 이전 Case. Autonomy 가 기록되지 않았다",
+                now,
+            ),
+        )

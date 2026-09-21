@@ -1,0 +1,312 @@
+{
+  "current_version": "1",
+  "profiles": [
+    {
+      "profile": "feature",
+      "version": "1",
+      "purpose": "새 기능·동작을 만든다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "need",
+          "label": "해결할 필요·문제"
+        },
+        {
+          "field": "usage_context",
+          "label": "대상 사용자 또는 사용 상황"
+        },
+        {
+          "field": "desired_behavior",
+          "label": "원하는 동작·결과"
+        },
+        {
+          "field": "acceptance_cases",
+          "label": "주요 수용 사례"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "need",
+        "usage_context",
+        "desired_behavior",
+        "acceptance_cases"
+      ],
+      "minimum_evidence": "합의한 사용자 동작·결과와 실제 확인의 연결",
+      "conditional_evidence": "영향받는 회귀·권한·성능·다중 Repo 통합",
+      "completion_meaning": "합의한 기능·수용 기준을 충족한다",
+      "not_fixed_in_draft": "구현 구조·세부 알고리즘. UI 가 없는 기능에 화면 설계를 요구하지 않는다"
+    },
+    {
+      "profile": "defect_fix",
+      "version": "1",
+      "purpose": "기대 동작을 복원한다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "observed_behavior",
+          "label": "관찰된 동작"
+        },
+        {
+          "field": "expected_behavior",
+          "label": "기대 동작"
+        },
+        {
+          "field": "expectation_basis",
+          "label": "기대 동작의 근거"
+        },
+        {
+          "field": "occurrence_conditions",
+          "label": "발생 조건·영향"
+        },
+        {
+          "field": "restore_scope",
+          "label": "복원할 범위"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "observed_behavior",
+        "expected_behavior",
+        "expectation_basis",
+        "occurrence_conditions",
+        "restore_scope"
+      ],
+      "minimum_evidence": "증상·정상 동작의 근거와 수정 후 비교",
+      "conditional_evidence": "관련 회귀·반례. 재현이 어려우면 대체 검증 근거와 한계",
+      "completion_meaning": "기존 기대 동작 복원과 필요한 검증을 충족한다. 미재현만으로 해결을 선언하지 않는다",
+      "not_fixed_in_draft": "아직 확인하지 않은 원인을 확정하거나 수정 방법을 먼저 고정하지 않는다"
+    },
+    {
+      "profile": "root_cause_analysis",
+      "version": "1",
+      "purpose": "현상의 원인을 설명한다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "phenomenon",
+          "label": "설명할 현상"
+        },
+        {
+          "field": "observations",
+          "label": "관찰 근거"
+        },
+        {
+          "field": "cause_questions",
+          "label": "답할 원인 질문"
+        },
+        {
+          "field": "conclusion_requirement",
+          "label": "결론의 요구 범위·증거 수준"
+        },
+        {
+          "field": "analysis_end_condition",
+          "label": "분석 종료조건"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "phenomenon",
+        "observations",
+        "cause_questions",
+        "conclusion_requirement",
+        "analysis_end_condition"
+      ],
+      "minimum_evidence": "관찰·가설·결론의 구분과 지지·기각 근거, 남은 대안",
+      "conditional_evidence": "인과 주장에 필요한 재현·대조·개입 증거",
+      "completion_meaning": "요청한 원인 분석의 종료조건을 충족한다. 원인 확정이 필수면 미확정은 성공이 아니다",
+      "not_fixed_in_draft": "작업 가설·계측·실험 방법은 별도 조사 산출물로 발전시킨다"
+    },
+    {
+      "profile": "research",
+      "version": "1",
+      "purpose": "판단에 필요한 사실을 조사한다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "research_questions",
+          "label": "조사 질문"
+        },
+        {
+          "field": "decision_purpose",
+          "label": "판단 목적"
+        },
+        {
+          "field": "evaluation_criteria",
+          "label": "비교·평가 기준"
+        },
+        {
+          "field": "required_evidence",
+          "label": "필요한 근거"
+        },
+        {
+          "field": "research_end_condition",
+          "label": "조사 종료조건"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "research_questions",
+        "decision_purpose",
+        "evaluation_criteria",
+        "required_evidence",
+        "research_end_condition"
+      ],
+      "minimum_evidence": "질문별 출처·비교·관찰과 결론·한계",
+      "conditional_evidence": "성능·실현가능성 주장에 필요한 실험 조건·결과",
+      "completion_meaning": "합의한 조사·판단 조건을 충족한다. 그 조건이 허용하면 판단 불가도 정상 결과다",
+      "not_fixed_in_draft": "후보가 미정인 탐색을 허용한다. 전체 후보·세부 실험을 시작 전에 확정하지 않는다"
+    },
+    {
+      "profile": "refactoring",
+      "version": "1",
+      "purpose": "외부 동작을 보존하면서 구조를 개선한다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "improvement_target",
+          "label": "개선할 구조·품질"
+        },
+        {
+          "field": "improvement_reason",
+          "label": "개선하는 이유"
+        },
+        {
+          "field": "target_boundary",
+          "label": "대상 경계"
+        },
+        {
+          "field": "preserved_contracts",
+          "label": "보존할 외부 동작·인터페이스·데이터 계약"
+        },
+        {
+          "field": "improvement_criteria",
+          "label": "개선 판단 기준"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "improvement_target",
+        "improvement_reason",
+        "target_boundary",
+        "preserved_contracts",
+        "improvement_criteria"
+      ],
+      "minimum_evidence": "구조 개선 목표와 보존 조건 각각에 대한 근거",
+      "conditional_evidence": "영향받는 인터페이스·데이터·성능·통합 증거",
+      "completion_meaning": "개선과 보존 조건을 함께 충족한다. 테스트 통과만으로 모든 보존을 증명하지 않는다",
+      "not_fixed_in_draft": "구체적인 해결 구조는 필요한 설계에서 결정한다"
+    },
+    {
+      "profile": "maintenance",
+      "version": "1",
+      "purpose": "특정 대상을 목표 상태로 유지한다",
+      "common_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions"
+      ],
+      "semantic_fields": [
+        {
+          "field": "maintenance_target",
+          "label": "유지 대상"
+        },
+        {
+          "field": "current_state",
+          "label": "현재 상태"
+        },
+        {
+          "field": "target_state",
+          "label": "목표 상태"
+        },
+        {
+          "field": "work_reason",
+          "label": "작업 이유"
+        },
+        {
+          "field": "preserved_conditions",
+          "label": "보존할 호환성·운영 조건"
+        }
+      ],
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "maintenance_target",
+        "current_state",
+        "target_state",
+        "work_reason",
+        "preserved_conditions"
+      ],
+      "minimum_evidence": "유지 대상의 목표 상태와 필요한 확인",
+      "conditional_evidence": "대상에 따른 링크·예제, 의존성 해결·빌드·실행, 호환성 검증",
+      "completion_meaning": "특정한 유지 목표와 보존 조건을 충족한다",
+      "not_fixed_in_draft": "의존성·문서·빌드 설정 등 대상과 무관한 항목을 일괄 요구하지 않는다"
+    }
+  ]
+}

@@ -25,6 +25,7 @@ import {
   type RunPurpose,
 } from './api'
 import { IntentPanel } from './IntentPanel'
+import { PolicyPanel } from './PolicyPanel'
 import { PreparationPanel } from './PreparationPanel'
 import { ResultPanel } from './ResultPanel'
 import { WorkGraphPanel } from './WorkGraphPanel'
@@ -433,6 +434,11 @@ function CaseDetailPanel(props: {
           </li>
         ))}
       </ul>
+
+      {/* 어떤 목적·깊이·확인 경계·한도로 진행하는가. 게이트 판정과 **다른 기록**
+          이므로 패널을 나눈다 — 정책은 "언제 사람을 부르는가"이고 게이트는
+          "결과를 채택할 수 있는가"다(D-59). */}
+      <PolicyPanel detail={detail} onChanged={props.onChanged} />
 
       <GatePanel detail={detail} onChanged={props.onChanged} />
 

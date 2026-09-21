@@ -41,7 +41,14 @@ def test_ai_writes_the_draft_and_it_becomes_an_intent_version(harness):
 
     # 여섯 항목이 모두 보고됐고, 사람이 쓴 것이 아니라는 사실이 출처에 드러난다.
     fields = {f["field"]: f for f in latest["fields"]}
-    assert len(fields) == 6
+    # **P3-R1: 항목 수는 Profile 이 정한다.** 여섯으로 고정하면 목적별 의미 항목이
+    # 생긴 뒤 이 시험이 "항목을 줄이지 않는다"가 아니라 "여섯이어야 한다"를 지킨다.
+    required = set(
+        harness.client.get(f"/api/cases/{case['id']}/policy").json()["profile"][
+            "required_fields"
+        ]
+    )
+    assert set(fields) == required
     assert fields["goal"]["origin"] == "user_requirement"
     assert fields["open_questions"]["origin"] == "ai_assumption"
     # AI가 스스로 사용자 확정을 적지 않는다.

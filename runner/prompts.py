@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from domain import profiles
 from domain.intent_doc import FIELD_ORDER
 from domain.models import PreparationStage, WorkLevel
 from domain.prep_doc import SECTION_LABEL, SECTION_ORDER, required_sections
@@ -35,7 +36,40 @@ REVIEW_CRITERIA = (
 
 _FIELD_LIST = "\n".join(f"  - {f.value}" for f in FIELD_ORDER)
 
-INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 초안**을 작성한다.
+def _intent_field_list(profile: str | None, profile_version: str | None) -> str:
+    """이 Case 가 채워야 하는 항목 목록(P3-R1).
+
+    공통 여섯 항목 다음에 그 목적의 의미 항목이 온다. **Profile 이 없으면 여섯
+    항목이다** — R1 이전 Case 의 형식이며, 여기서 현재 Profile 을 기본값으로 채우면
+    문서 형식과 제어부의 필수 항목 검사가 어긋난다.
+    """
+    if profile is None or profile_version is None:
+        return _FIELD_LIST
+    definition = profiles.resolve(profile, profile_version)
+    lines = [f"  - {f.value}" for f in FIELD_ORDER]
+    lines.append(f"  (아래는 {profile} 업무에서 반드시 구별해 적을 내용이다)")
+    for field in definition.semantic_fields:
+        lines.append(f"  - {field.value} — {profiles.FIELD_LABEL[field.value]}")
+    return "\n".join(lines)
+
+
+def _intent_profile_note(profile: str | None, profile_version: str | None) -> str:
+    """그 목적의 의미와 **초안에서 고정하지 않는 것.**
+
+    뒤쪽이 중요하다. 목적에 맞지 않는 내용을 요구하면 AI 가 빈칸을 채우려고 없는
+    사실을 만든다(case-profiles 2절 "사용자에게 빈칸을 채우게 하지 않는다").
+    """
+    if profile is None or profile_version is None:
+        return ""
+    d = profiles.resolve(profile, profile_version)
+    return (
+        f"\n이 업무의 대표 목적은 **{profile}** 이다: {d.purpose}.\n"
+        f"정상 완료의 의미: {d.completion_meaning}\n"
+        f"이 초안에서 고정하지 않는 것: {d.not_fixed_in_draft}\n"
+    )
+
+
+INTENT_AUTHORING_PROMPT = f"""당신은 개발 요청을 읽고 **의도 초안**을 작성한다.
 지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라. 읽기만 하고 답을 JSON으로
 출력한다.
 
@@ -43,8 +77,9 @@ INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 
 않는다"를 의도 문서의 constraints 나 exclusions 에 적지 마라 — 개발하려는 기능은
 코드를 바꾸는 일이고, 그렇게 적으면 목표와 정면으로 충돌하는 문서가 된다.
 
-다음 여섯 항목을 모두 포함한다.
-{_FIELD_LIST}
+다음 항목을 **모두** 포함한다.
+{{FIELD_LIST}}
+{{PROFILE_NOTE}}
 
 규칙:
 1. 요청에 없는 내용을 지어내지 않는다. 모르는 항목은 text 를 빈 문자열로 두고
@@ -89,6 +124,7 @@ INTENT_AUTHORING_PROMPT = f"""당신은 기능 개발 요청을 읽고 **의도 
     "exclusions": {{"text": "...", "origin": "..."}},
     "constraints": {{"text": "...", "origin": "..."}},
     "open_questions": {{"text": "...", "origin": "..."}}
+    (위 목록의 나머지 항목도 같은 형태로 **모두** 넣는다)
   }},
   "questions": [
     {{"key": "q1", "text": "질문 본문", "summary": "짧은 요약", "decide_at": "intent"}}
@@ -380,6 +416,8 @@ def build(
     instruction: bytes,
     context: list[dict[str, Any]] | None = None,
     level: str | None = None,
+    profile: str | None = None,
+    profile_version: str | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문.
 
@@ -399,6 +437,13 @@ def build(
         head = PROMPT_BY_PURPOSE.get(purpose)
         if head is None:
             raise ValueError(f"프롬프트가 정의되지 않은 목적: {purpose}")
+    if purpose == "intent_authoring":
+        # **P3-R1: 항목 목록과 목적 설명을 Profile 로 채운다.** 지시문을 Profile 마다
+        # 따로 두지 않는 이유는 규칙(출처·미정·기준·수준)이 같기 때문이고, 다른 것은
+        # "무엇을 구별해 적는가"뿐이다(case-profiles 2절).
+        head = head.replace(
+            "{FIELD_LIST}", _intent_field_list(profile, profile_version)
+        ).replace("{PROFILE_NOTE}", _intent_profile_note(profile, profile_version))
     return head + build_context_block(context or []) + instruction.decode(
         "utf-8", errors="replace"
     )
@@ -449,8 +494,10 @@ def extract_json(text: str) -> dict[str, Any]:
 
 def parse_intent_draft(
     text: str,
+    profile: str | None = None,
+    profile_version: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
-    """AI가 쓴 초안을 여섯 항목·질문·성공 기준·수준 판단으로 바꾼다.
+    """AI가 쓴 초안을 필수 항목·질문·성공 기준·수준 판단으로 바꾼다.
 
     **비운 항목을 채우지 않는다.** 항목이 통째로 빠져 있어도 여기서 만들어 내지
     않고, `domain.intent_doc.compose` 가 `undecided`/`none` 으로 남긴다.
@@ -464,8 +511,11 @@ def parse_intent_draft(
         raise ValueError("fields 가 객체가 아니다")
 
     fields: dict[str, Any] = {}
-    for field in FIELD_ORDER:
-        given = raw_fields.get(field.value) or {}
+    # **P3-R1: 항목 목록은 Profile 이 정한다.** 빠진 항목은 여기서 만들어 내지 않고
+    # 빈 항목으로 남겨 `compose` 가 `undecided` 로 적는다 — 그래야 QG-01 이 "무엇이
+    # 비었는가"를 볼 수 있다.
+    for name in profiles.field_order(profile, profile_version):
+        given = raw_fields.get(name) or {}
         if isinstance(given, str):  # 문자열만 준 경우도 받아들이되 출처는 추정하지 않는다
             given = {"text": given}
         body = str(given.get("text") or "").strip()
@@ -475,7 +525,7 @@ def parse_intent_draft(
             # 사실**이다 — 이 문서를 쓴 것은 AI이고, 요청에 있었다는 근거는 없다.
             entry["origin"] = str(given.get("origin") or "ai_proposal")
             entry["state"] = "proposed"
-        fields[field.value] = entry
+        fields[name] = entry
 
     questions: list[dict[str, Any]] = []
     for index, raw in enumerate(doc.get("questions") or [], start=1):

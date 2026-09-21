@@ -276,3 +276,137 @@ def test_a_v2_database_upgrades_without_inventing_the_new_columns(tmp_path):
     db.migrate(conn)
     assert conn.execute("SELECT COUNT(*) c FROM schema_version").fetchone()["c"] == versions
     conn.close()
+
+
+def _v7_schema() -> str:
+    """v8 표가 없는 가장 최근 커밋 스키마를 찾는다(P3-R1).
+
+    **커밋된 것을 그대로 꺼내 쓴다.** 시험 안에 스키마를 베껴 두면 그 사본이 실제
+    과거와 달라져도 시험이 통과해 버린다.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "case_policy" not in schema and "case_workspace" in schema:
+            return schema
+    pytest.skip("v7 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v7_database_keeps_its_records_and_marks_the_policy_as_unrecorded(tmp_path):
+    """v7 → v8 (P3-R1 AC-5·AC-8·AC-13).
+
+    **이 시험이 R1의 가장 중요한 경계를 지킨다.** v0.6에서 사람이 설계·계획을
+    검토하고 결과를 인수하기로 하고 진행한 Case 에 "기본 ask-on-decision"을 적용하면,
+    새 정책이 기존 승인·동의·권한에 소급 적용된다(DEVELOPMENT.md 3절).
+
+    그래서 이행은 두 가지만 한다.
+
+        Project 의 `repo_path` 를 등록 저장소 한 건으로 옮긴다(같은 값)
+        기존 Case 에 **미기록** 정책 행을 명시로 넣는다(`autonomy` 는 NULL)
+
+    그리고 **하지 않는 것**을 함께 확인한다. Profile 을 `kind` 에서 유도해 채우지
+    않고, Case 의 저장소 선택을 만들지 않고, 예산·확인 지점을 만들지 않는다.
+    """
+    schema = _v7_schema()
+    path = tmp_path / "controller.sqlite3"
+
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(schema)
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (7, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project VALUES ('prj-1','own-1','old','C:/tmp/old-repo','codex',?)",
+        (now,),
+    )
+    old.execute(
+        'INSERT INTO "case" VALUES (?,?,?,?,?,?,?)',
+        ("case-1", "prj-1", "v7 시절 Case", "feature", "in_progress", now, now),
+    )
+    # v0.6에서 사람이 실제로 한 결정들. 이행이 이 기록을 건드리면 안 된다.
+    old.execute(
+        "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+        " subject_revision, actor, decided_at) VALUES ('dec-1','case-1',"
+        " 'intent_agreement','intent_version','iv-1',1,'owner',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO completion_policy (case_id, mode, set_by, set_at)"
+        " VALUES ('case-1','human_acceptance','owner',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO stage_review_setting (case_id, stage, mode, set_by,"
+        " reason_summary, set_at) VALUES ('case-1','design','human_review','owner',"
+        " '사람이 검토하기로 했다',?)",
+        (now,),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    # --- 기존 기록은 그대로다 ------------------------------------------
+    assert conn.execute('SELECT title FROM "case"').fetchone()["title"] == "v7 시절 Case"
+    assert conn.execute("SELECT COUNT(*) c FROM decision").fetchone()["c"] == 1
+    assert (
+        conn.execute("SELECT mode FROM completion_policy").fetchone()["mode"]
+        == "human_acceptance"
+    )
+    assert (
+        conn.execute("SELECT mode FROM stage_review_setting").fetchone()["mode"]
+        == "human_review"
+    )
+
+    # --- Profile 은 기록되지 않은 채 남는다 -----------------------------
+    case = conn.execute('SELECT * FROM "case"').fetchone()
+    assert case["profile"] is None, "kind 에서 유도해 채우면 새 규칙의 소급 적용이다"
+    assert case["profile_version"] is None
+    assert case["kind"] == "feature", "기존 유형 기록은 보존한다"
+
+    # --- 정책은 **미기록**이다. 기본값으로 읽지 않는다 ------------------
+    policy = conn.execute("SELECT * FROM case_policy WHERE case_id = 'case-1'").fetchone()
+    assert policy is not None, "이행은 미기록을 명시로 남긴다"
+    assert policy["autonomy"] is None
+    assert policy["autonomy_source"] == "migrated_unknown"
+    assert policy["policy_version"] == "0.6", "당시 규칙판을 남긴다"
+    assert policy["set_by"] == "migration", "사람이 결정한 것으로 적지 않는다"
+
+    # --- 등록 저장소는 같은 값으로 옮겨진다 -----------------------------
+    repo = conn.execute("SELECT * FROM project_repository").fetchone()
+    assert repo["repo_path"] == "C:/tmp/old-repo"
+    assert repo["source"] == "migrated_from_project"
+    assert repo["registered_by"] == "migration"
+    # 기존 컬럼은 지우지 않는다. 배정·작업공간 경로가 그 값을 쓴다.
+    assert (
+        conn.execute("SELECT repo_path FROM project").fetchone()["repo_path"]
+        == "C:/tmp/old-repo"
+    )
+    # 기록 저장소는 **미지정**이다. 하나뿐인 저장소를 기록용으로 만들지 않는다.
+    assert conn.execute("SELECT journal_repository_id FROM project").fetchone()[0] is None
+
+    # --- 만들지 않는 것 -------------------------------------------------
+    for table in ("case_repository", "budget_setting", "controlled_checkpoint",
+                  "delegation_basis"):
+        count = conn.execute(f"SELECT COUNT(*) c FROM {table}").fetchone()["c"]
+        assert count == 0, f"{table} 에 이행이 만든 행이 있다"
+
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
+
+    # 다시 돌려도 행이 늘지 않는다. `migrate()` 는 연결마다 돈다.
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM project_repository").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM case_policy").fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) c FROM decision").fetchone()["c"] == 1
+    conn.close()

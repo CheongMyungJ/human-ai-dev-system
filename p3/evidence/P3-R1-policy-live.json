@@ -1,0 +1,450 @@
+{
+  "case": {
+    "id": "case-780ae44f48246930",
+    "project_id": "prj-a108c384aef10e5e",
+    "title": "reader.py 의 중복 로더 정리",
+    "kind": "refactoring",
+    "status": "received",
+    "created_at": "2026-09-21T12:15:39.771708+00:00",
+    "updated_at": "2026-09-21T12:15:39.771708+00:00",
+    "profile": "refactoring",
+    "profile_version": "1",
+    "profile_source": "explicit"
+  },
+  "policy": {
+    "case_id": "case-780ae44f48246930",
+    "revision": 1,
+    "autonomy": "ask_on_decision",
+    "autonomy_source": "system_default",
+    "autonomy_recorded": true,
+    "policy_version": "0.7",
+    "default_autonomy": "ask_on_decision",
+    "work_depth": null,
+    "work_depth_source": "sizing_assessment",
+    "completion_mode": "human_acceptance",
+    "profile": {
+      "profile": "refactoring",
+      "version": "1",
+      "source": "explicit",
+      "definition": {
+        "profile": "refactoring",
+        "version": "1",
+        "purpose": "외부 동작을 보존하면서 구조를 개선한다",
+        "common_fields": [
+          "goal",
+          "expected_outcome",
+          "scope",
+          "exclusions",
+          "constraints",
+          "open_questions"
+        ],
+        "semantic_fields": [
+          {
+            "field": "improvement_target",
+            "label": "개선할 구조·품질"
+          },
+          {
+            "field": "improvement_reason",
+            "label": "개선하는 이유"
+          },
+          {
+            "field": "target_boundary",
+            "label": "대상 경계"
+          },
+          {
+            "field": "preserved_contracts",
+            "label": "보존할 외부 동작·인터페이스·데이터 계약"
+          },
+          {
+            "field": "improvement_criteria",
+            "label": "개선 판단 기준"
+          }
+        ],
+        "required_fields": [
+          "goal",
+          "expected_outcome",
+          "scope",
+          "exclusions",
+          "constraints",
+          "open_questions",
+          "improvement_target",
+          "improvement_reason",
+          "target_boundary",
+          "preserved_contracts",
+          "improvement_criteria"
+        ],
+        "minimum_evidence": "구조 개선 목표와 보존 조건 각각에 대한 근거",
+        "conditional_evidence": "영향받는 인터페이스·데이터·성능·통합 증거",
+        "completion_meaning": "개선과 보존 조건을 함께 충족한다. 테스트 통과만으로 모든 보존을 증명하지 않는다",
+        "not_fixed_in_draft": "구체적인 해결 구조는 필요한 설계에서 결정한다"
+      },
+      "required_fields": [
+        "goal",
+        "expected_outcome",
+        "scope",
+        "exclusions",
+        "constraints",
+        "open_questions",
+        "improvement_target",
+        "improvement_reason",
+        "target_boundary",
+        "preserved_contracts",
+        "improvement_criteria"
+      ],
+      "kind": "refactoring",
+      "detail": null
+    },
+    "checkpoints": [],
+    "budget": {
+      "unlimited": true,
+      "limits": [],
+      "history": [],
+      "usage": null,
+      "usage_detail": "사용량 누적·예약·정산은 P3-R3 이다. 미측정을 0으로 적지 않는다",
+      "measurement_contract": {
+        "run_count": "exact",
+        "review_run_count": "exact",
+        "input_tokens": "estimated",
+        "output_tokens": "estimated",
+        "context_bytes": "exact",
+        "execution_seconds": "exact",
+        "elapsed_seconds": "exact",
+        "estimated_cost": "estimated"
+      },
+      "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며 아직 모델이 없다(P4-01)",
+      "enforcement": {
+        "state": "recorded_not_enforced",
+        "enforced_by": "P3-R3",
+        "detail": "한도는 기록된다. 예약·누적·hard 도달 시 배정 중지는 아직 없다"
+      }
+    },
+    "delegation_basis": {
+      "current": null,
+      "history": [],
+      "detail": "AI 초안은 근거가 아니다. 누적 material delta 판단은 P3-R4 다"
+    },
+    "repositories": {
+      "case_id": "case-780ae44f48246930",
+      "selected": [],
+      "excluded": [],
+      "implicit_single_repository": {
+        "repository_id": "repo-1a68fd2607a018f1",
+        "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r1-live\\workspace",
+        "detail": "선택이 기록되지 않았다. 이 Case 는 Project 의 단일 저장소에서 동작하며 그것은 이행된 가정이지 기록된 선택이 아니다"
+      },
+      "journal_repository_id": null,
+      "write_allowance_implies_publish": false,
+      "enforcement": {
+        "selection": {
+          "state": "recorded_not_enforced",
+          "enforced_by": "P3-R2",
+          "detail": "선택·쓰기 허용·게시 허용은 기록된다. Case×Repo 작업공간과 허용 내 자동 추가, 제외 차단은 아직 없다"
+        },
+        "publish": {
+          "state": "not_implemented",
+          "enforced_by": "P5",
+          "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+        }
+      }
+    },
+    "enforcement": {
+      "autonomy": {
+        "state": "recorded_not_enforced",
+        "enforced_by": "P3-R4",
+        "detail": "Autonomy 값은 기록된다. 목적별 진입 조건과 자동 실행 경로는 아직 v0.6 규칙대로 동작한다"
+      },
+      "controlled_checkpoint": {
+        "state": "recorded_not_enforced",
+        "enforced_by": "P3-R4",
+        "detail": "확인 지점과 확인 기록은 남지만 확인하지 않은 상태가 실행·게시를 막지는 않는다"
+      },
+      "budget": {
+        "state": "recorded_not_enforced",
+        "enforced_by": "P3-R3",
+        "detail": "한도는 기록된다. 예약·누적·hard 도달 시 배정 중지는 아직 없다"
+      },
+      "repository_selection": {
+        "state": "recorded_not_enforced",
+        "enforced_by": "P3-R2",
+        "detail": "선택·쓰기 허용·게시 허용은 기록된다. Case×Repo 작업공간과 허용 내 자동 추가, 제외 차단은 아직 없다"
+      },
+      "publish": {
+        "state": "not_implemented",
+        "enforced_by": "P5",
+        "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+      }
+    },
+    "case_status": "received"
+  },
+  "run": {
+    "run_id": "run-live-r1-draft",
+    "case_id": "case-780ae44f48246930",
+    "task_id": "task-intent",
+    "role": "author",
+    "tool_id": "codex",
+    "mode": "exec",
+    "permission": "read_only",
+    "instruction_artifact_id": "art-81509a61af9f33e4",
+    "instruction_artifact_rev": 1,
+    "status": "finished",
+    "assignment_generation": 1,
+    "assigned_runner_id": "runner-live-r1",
+    "outcome": "completed",
+    "exit_code": 0,
+    "output_artifact_id": "art-bc530c49f2d1fda0",
+    "output_artifact_rev": 1,
+    "session_ref": "01a0c3e4-bb2c-7d11-8435-f0e6dc9bd119",
+    "residual_activity": "unknown",
+    "observed_tool_version": "codex-cli 0.154.0",
+    "created_at": "2026-09-21T12:15:41.800597+00:00",
+    "assigned_at": "2026-09-21T12:15:42.044106+00:00",
+    "finished_at": "2026-09-21T12:17:30.074364+00:00",
+    "purpose": "intent_authoring",
+    "usage": {
+      "tokens": {
+        "input_tokens": 17505,
+        "cached_input_tokens": 13184,
+        "cache_write_input_tokens": 0,
+        "output_tokens": 3377,
+        "reasoning_output_tokens": 1552
+      },
+      "cost_usd": "not_reported"
+    },
+    "workspace_effect": null,
+    "events": [
+      {
+        "run_id": "run-live-r1-draft",
+        "seq": 1,
+        "ts": "2026-09-21T12:17:30.042773+00:00",
+        "type": "session_identified",
+        "native_type": "thread.started",
+        "raw_ref": null,
+        "received_at": "2026-09-21T12:17:30.067141+00:00"
+      },
+      {
+        "run_id": "run-live-r1-draft",
+        "seq": 2,
+        "ts": "2026-09-21T12:17:30.042773+00:00",
+        "type": "run_started",
+        "native_type": "turn.started",
+        "raw_ref": null,
+        "received_at": "2026-09-21T12:17:30.067141+00:00"
+      },
+      {
+        "run_id": "run-live-r1-draft",
+        "seq": 3,
+        "ts": "2026-09-21T12:17:30.042773+00:00",
+        "type": "assistant_message",
+        "native_type": "item.completed",
+        "raw_ref": null,
+        "received_at": "2026-09-21T12:17:30.067141+00:00"
+      },
+      {
+        "run_id": "run-live-r1-draft",
+        "seq": 4,
+        "ts": "2026-09-21T12:17:30.042773+00:00",
+        "type": "usage_reported",
+        "native_type": "turn.completed",
+        "raw_ref": null,
+        "received_at": "2026-09-21T12:17:30.067141+00:00"
+      },
+      {
+        "run_id": "run-live-r1-draft",
+        "seq": 5,
+        "ts": "2026-09-21T12:17:30.042773+00:00",
+        "type": "run_finished",
+        "native_type": "turn.completed",
+        "raw_ref": null,
+        "received_at": "2026-09-21T12:17:30.067141+00:00"
+      }
+    ],
+    "commands": []
+  },
+  "fields": [
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "goal",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "expected_outcome",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "scope",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "exclusions",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "constraints",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "open_questions",
+      "state": "proposed",
+      "origin": "ai_proposal",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "improvement_target",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "improvement_reason",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "target_boundary",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "preserved_contracts",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    },
+    {
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "field": "improvement_criteria",
+      "state": "proposed",
+      "origin": "user_requirement",
+      "change_from_prev": "initial"
+    }
+  ],
+  "questions": [
+    {
+      "id": "q-2d05e4e71203babc",
+      "case_id": "case-780ae44f48246930",
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "question_key": "q1",
+      "summary": "결과 동일성의 적용 범위",
+      "decide_at": "intent",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-21T12:17:30.062169+00:00",
+      "raised_in_stage": null,
+      "preparation_id": null
+    }
+  ],
+  "criteria": [
+    {
+      "id": "crit-f7fe04859ccf91e7",
+      "case_id": "case-780ae44f48246930",
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "criterion_key": "C-01",
+      "summary": "중복 처리 감소",
+      "method_summary": "변경 전후 구현 대조",
+      "relates_to": "improvement_target",
+      "state": "proposed",
+      "created_at": "2026-09-21T12:17:30.062169+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "아직 확인하지 않음",
+      "recorded_by": "system",
+      "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+    },
+    {
+      "id": "crit-a1d593d5a82677b4",
+      "case_id": "case-780ae44f48246930",
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "criterion_key": "C-02",
+      "summary": "공개 계약 유지",
+      "method_summary": "계약 검토와 기존 동작 비교",
+      "relates_to": "preserved_contracts",
+      "state": "proposed",
+      "created_at": "2026-09-21T12:17:30.062169+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "아직 확인하지 않음",
+      "recorded_by": "system",
+      "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+    },
+    {
+      "id": "crit-e2e409d5574f2a50",
+      "case_id": "case-780ae44f48246930",
+      "intent_version_id": "intent-2142eb6b1cf8b6bb",
+      "criterion_key": "C-03",
+      "summary": "두 함수의 결과 일치",
+      "method_summary": "동일 조건 비교와 회귀 검증",
+      "relates_to": "expected_outcome",
+      "state": "proposed",
+      "created_at": "2026-09-21T12:17:30.062169+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "아직 확인하지 않음",
+      "recorded_by": "system",
+      "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+    }
+  ],
+  "gate": {
+    "id": "gate-dc6d04b6848ef0f9",
+    "case_id": "case-780ae44f48246930",
+    "gate": "QG-01",
+    "intent_version_id": "intent-2142eb6b1cf8b6bb",
+    "subject_content_hash": "sha256:a65301fb622aa469cd3c6e5b1ea9ae44de586bd40336694090f7927fbc970b7f",
+    "verdict": "not_run",
+    "rule_verdict": "pass",
+    "ai_verdict": "not_run",
+    "ai_run_id": null,
+    "ai_session_ref": null,
+    "author_session_ref": null,
+    "evaluated_at": "2026-09-21T12:17:30.067141+00:00",
+    "reviewed_at": null,
+    "superseded_at": null,
+    "findings": [
+      {
+        "id": "finding-f7c466c74793e65c",
+        "gate_result_id": "gate-dc6d04b6848ef0f9",
+        "source": "rule",
+        "criterion": "open_intent_questions_present",
+        "severity": "advisory",
+        "blocking": 0,
+        "certainty": "confirmed",
+        "target": "questions",
+        "summary": "의도 단계에서 결정할 질문이 1건 남아 있다 (게이트를 막지 않는다)",
+        "evidence_artifact_id": null,
+        "created_at": "2026-09-21T12:17:30.067141+00:00"
+      }
+    ]
+  },
+  "missing_required_fields": []
+}

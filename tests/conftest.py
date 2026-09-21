@@ -461,7 +461,11 @@ class Harness:
         return response.json()
 
     def create_case(
-        self, project_id: str, title: str = "첫 Case", kind: str = "feature"
+        self,
+        project_id: str,
+        title: str = "첫 Case",
+        kind: str | None = "feature",
+        profile: str | None = None,
     ) -> dict[str, Any]:
         """Case를 만든다.
 
@@ -469,12 +473,58 @@ class Harness:
         때문이다(FR-29: 비기능 조사에 기능 개발 문서 전체를 일괄 요구하지 않는다).
         실행 배관 자체를 보는 시험은 기능 Case가 아닌 유형을 쓰고, 기능 Case의
         진입 조건은 `test_admission.py` 가 따로 본다.
+
+        `profile` 은 P3-R1의 축이다. 주지 않으면 `kind` 에서 유도되며 그 사실이
+        `profile_source` 에 남는다.
         """
-        response = self.client.post(
-            f"/api/projects/{project_id}/cases", json={"title": title, "kind": kind}
-        )
+        body: dict[str, Any] = {"title": title}
+        if profile is not None:
+            body["profile"] = profile
+        else:
+            body["kind"] = kind
+        response = self.client.post(f"/api/projects/{project_id}/cases", json=body)
         assert response.status_code == 201, response.text
         return response.json()
+
+    def create_pre_r1_case(
+        self, project_id: str, title: str = "R1 이전 Case", kind: str = "feature"
+    ) -> dict[str, Any]:
+        """**Profile 이 기록되지 않은 Case** 를 만든다(P3-R1 이행 대상의 모습).
+
+        마이그레이션이 만드는 상태를 그대로 재현한다 — `case.profile` 이 NULL 이고
+        `case_policy` 는 `migrated_unknown` 이다. 새 Case 경로로는 이 상태를 만들
+        수 없으므로(기본값이 붙는다) DB에 직접 넣는다. 이 Case 가 새 정책·새 필수
+        항목을 소급으로 받지 않는지 보는 것이 목적이다.
+        """
+        import sqlite3
+
+        from controller.db import utc_now
+
+        case_id = f"case-legacy{len(title):02d}{project_id[-6:]}"
+        now = utc_now()
+        conn = sqlite3.connect(self.controller_config.db_path)
+        try:
+            conn.execute(
+                'INSERT INTO "case" (id, project_id, title, kind, status, created_at,'
+                " updated_at) VALUES (?, ?, ?, ?, 'received', ?, ?)",
+                (case_id, project_id, title, kind, now, now),
+            )
+            conn.execute(
+                "INSERT INTO case_policy (id, case_id, revision, autonomy, autonomy_source,"
+                " policy_version, set_by, reason_summary, state, created_at)"
+                " VALUES (?, ?, 1, NULL, 'migrated_unknown', '0.6', 'migration', ?,"
+                " 'current', ?)",
+                (
+                    f"pol-legacy{case_id[-8:]}",
+                    case_id,
+                    "R1 이전 Case. Autonomy 가 기록되지 않았다",
+                    now,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return self.client.get(f"/api/cases/{case_id}").json()
 
     def submit_artifact(
         self, case_id: str, content: str, kind: str = "instruction", summary: str = "지시 원문"

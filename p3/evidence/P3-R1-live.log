@@ -1,0 +1,191 @@
+health: {"status": "ok", "schema_version": 8, "relay_buffered": 0}
+project repositories: {
+  "project_id": "prj-a108c384aef10e5e",
+  "repositories": [
+    {
+      "id": "repo-1a68fd2607a018f1",
+      "project_id": "prj-a108c384aef10e5e",
+      "name": "primary",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r1-live\\workspace",
+      "source": "registered",
+      "registered_by": "owner",
+      "registered_at": "2026-09-21T12:15:39.443745+00:00"
+    }
+  ],
+  "journal_repository_id": null,
+  "legacy_repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-r1-live\\workspace",
+  "enforcement": {
+    "selection": {
+      "state": "recorded_not_enforced",
+      "enforced_by": "P3-R2",
+      "detail": "선택·쓰기 허용·게시 허용은 기록된다. Case×Repo 작업공간과 허용 내 자동 추가, 제외 차단은 아직 없다"
+    },
+    "publish": {
+      "state": "not_implemented",
+      "enforced_by": "P5",
+      "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+    }
+  }
+}
+case: case-780ae44f48246930 refactoring explicit refactoring
+policy autonomy: ask_on_decision system_default
+required fields: ['goal', 'expected_outcome', 'scope', 'exclusions', 'constraints', 'open_questions', 'improvement_target', 'improvement_reason', 'target_boundary', 'preserved_contracts', 'improvement_criteria']
+run create: 201 {"run": {"run_id": "run-live-r1-draft", "case_id": "case-780ae44f48246930", "task_id": "task-intent", "role": "author", "tool_id": "codex", "mode": "exec", "permission": "read_only", "instruction_artifact_id": "art-81509a61af9f33e4", "instruction_artifact_rev": 1, "status": "pending", "assignment_generation": 1, "assigned_runner_id": null, "outcome": null, "exit_code": null, "output_artifact_id": 
+run outcome: completed exit 0
+observed tool version: codex-cli 0.154.0
+session: 01a0c3e4-bb2c-7d11-8435-f0e6dc9bd119
+usage: None
+recorded fields: {
+  "goal": [
+    "proposed",
+    "user_requirement"
+  ],
+  "expected_outcome": [
+    "proposed",
+    "user_requirement"
+  ],
+  "scope": [
+    "proposed",
+    "user_requirement"
+  ],
+  "exclusions": [
+    "proposed",
+    "user_requirement"
+  ],
+  "constraints": [
+    "proposed",
+    "user_requirement"
+  ],
+  "open_questions": [
+    "proposed",
+    "ai_proposal"
+  ],
+  "improvement_target": [
+    "proposed",
+    "user_requirement"
+  ],
+  "improvement_reason": [
+    "proposed",
+    "user_requirement"
+  ],
+  "target_boundary": [
+    "proposed",
+    "user_requirement"
+  ],
+  "preserved_contracts": [
+    "proposed",
+    "user_requirement"
+  ],
+  "improvement_criteria": [
+    "proposed",
+    "user_requirement"
+  ]
+}
+questions: [
+  {
+    "id": "q-2d05e4e71203babc",
+    "case_id": "case-780ae44f48246930",
+    "intent_version_id": "intent-2142eb6b1cf8b6bb",
+    "question_key": "q1",
+    "summary": "결과 동일성의 적용 범위",
+    "decide_at": "intent",
+    "state": "open",
+    "answered_by": null,
+    "answered_at": null,
+    "answer_artifact_id": null,
+    "created_at": "2026-09-21T12:17:30.062169+00:00",
+    "raised_in_stage": null,
+    "preparation_id": null
+  }
+]
+criteria: [
+  {
+    "id": "crit-f7fe04859ccf91e7",
+    "case_id": "case-780ae44f48246930",
+    "intent_version_id": "intent-2142eb6b1cf8b6bb",
+    "criterion_key": "C-01",
+    "summary": "중복 처리 감소",
+    "method_summary": "변경 전후 구현 대조",
+    "relates_to": "improvement_target",
+    "state": "proposed",
+    "created_at": "2026-09-21T12:17:30.062169+00:00",
+    "verdict": "unverified",
+    "evidence_kind": "none",
+    "evidence_run_id": null,
+    "evidence_artifact_id": null,
+    "evidence_artifact_rev": null,
+    "result_summary": "아직 확인하지 않음",
+    "recorded_by": "system",
+    "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+  },
+  {
+    "id": "crit-a1d593d5a82677b4",
+    "case_id": "case-780ae44f48246930",
+    "intent_version_id": "intent-2142eb6b1cf8b6bb",
+    "criterion_key": "C-02",
+    "summary": "공개 계약 유지",
+    "method_summary": "계약 검토와 기존 동작 비교",
+    "relates_to": "preserved_contracts",
+    "state": "proposed",
+    "created_at": "2026-09-21T12:17:30.062169+00:00",
+    "verdict": "unverified",
+    "evidence_kind": "none",
+    "evidence_run_id": null,
+    "evidence_artifact_id": null,
+    "evidence_artifact_rev": null,
+    "result_summary": "아직 확인하지 않음",
+    "recorded_by": "system",
+    "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+  },
+  {
+    "id": "crit-e2e409d5574f2a50",
+    "case_id": "case-780ae44f48246930",
+    "intent_version_id": "intent-2142eb6b1cf8b6bb",
+    "criterion_key": "C-03",
+    "summary": "두 함수의 결과 일치",
+    "method_summary": "동일 조건 비교와 회귀 검증",
+    "relates_to": "expected_outcome",
+    "state": "proposed",
+    "created_at": "2026-09-21T12:17:30.062169+00:00",
+    "verdict": "unverified",
+    "evidence_kind": "none",
+    "evidence_run_id": null,
+    "evidence_artifact_id": null,
+    "evidence_artifact_rev": null,
+    "result_summary": "아직 확인하지 않음",
+    "recorded_by": "system",
+    "recorded_at": "2026-09-21T12:17:30.062169+00:00"
+  }
+]
+gate: {
+  "id": "gate-dc6d04b6848ef0f9",
+  "case_id": "case-780ae44f48246930",
+  "gate": "QG-01",
+  "intent_version_id": "intent-2142eb6b1cf8b6bb",
+  "subject_content_hash": "sha256:a65301fb622aa469cd3c6e5b1ea9ae44de586bd40336694090f7927fbc970b7f",
+  "verdict": "not_run",
+  "rule_verdict": "pass",
+  "ai_verdict": "not_run",
+  "ai_run_id": null,
+  "ai_session_ref": null,
+  "author_session_ref": null,
+  "evaluated_at": "2026-09-21T12:17:30.067141+00:00",
+  "reviewed_at": null,
+  "superseded_at": null,
+  "findings": [
+    {
+      "id": "finding-f7c466c74793e65c",
+      "gate_result_id": "gate-dc6d04b6848ef0f9",
+      "source": "rule",
+      "criterion": "open_intent_questions_present",
+      "severity": "advisory",
+      "blocking": 0,
+      "certainty": "confirmed",
+      "target": "questions",
+      "summary": "의도 단계에서 결정할 질문이 1건 남아 있다 (게이트를 막지 않는다)",
+      "evidence_artifact_id": null,
+      "created_at": "2026-09-21T12:17:30.067141+00:00"
+    }
+  ]
+}
+MISSING REQUIRED FIELDS: []

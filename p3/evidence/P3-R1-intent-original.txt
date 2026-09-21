@@ -1,0 +1,170 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 4,
+  "case_id": "case-780ae44f48246930",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-live-r1-draft",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "refactoring",
+  "profile_version": "1",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "improvement_target",
+    "improvement_reason",
+    "target_boundary",
+    "preserved_contracts",
+    "improvement_criteria"
+  ],
+  "fields": {
+    "goal": {
+      "text": "reader.py의 load와 load_strict가 공개 함수 이름과 기존 동작을 유지하면서 내부 중복을 정리한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "두 함수의 내부 중복이 줄어들고, 기존 외부 동작이 보존되며 두 함수가 앞으로도 같은 결과를 낸다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "reader.py의 load와 load_strict에 있는 동일 작업의 내부 중복.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "공개 함수 이름 변경과 기존 외부 동작 변경.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "구조 개선과 동작 보존 조건을 함께 충족해야 한다. 테스트 통과만으로 모든 동작 보존이 증명되었다고 판단하지 않는다. 구체적인 해결 구조는 필요한 설계에서 결정한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "두 함수의 결과 동일성을 판단할 입력 범위와 오류·예외 처리의 포함 여부를 확인해야 한다.",
+      "state": "proposed",
+      "origin": "ai_proposal"
+    },
+    "improvement_target": {
+      "text": "load와 load_strict 사이에 중복된 내부 처리.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "improvement_reason": {
+      "text": "같은 일을 하는 두 함수에 내부 중복이 있기 때문이다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "target_boundary": {
+      "text": "reader.py의 load와 load_strict 내부 구현을 대상으로 하며, 두 공개 함수의 이름과 외부 동작은 보존 경계로 둔다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "preserved_contracts": {
+      "text": "load와 load_strict의 공개 함수 이름 및 기존 동작을 보존한다. 두 함수는 앞으로도 같은 결과를 내야 한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "improvement_criteria": {
+      "text": "동일 작업의 내부 중복이 정리되고, 공개 함수 이름과 기존 동작 및 두 함수의 결과 동일성이 함께 유지된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "두 함수가 같은 결과를 내야 하는 입력 범위는 무엇이며, 결과 동일성에 정상 반환값뿐 아니라 오류·예외 처리도 포함하나요?",
+      "summary": "결과 동일성의 적용 범위",
+      "decide_at": "intent",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "improvement_target",
+      "text": "load와 load_strict에서 같은 일을 수행하던 내부 중복이 줄어든다. 구체적인 해결 구조와 수치 목표는 고정하지 않는다.",
+      "method": "변경 전 두 함수의 중복 처리 구간을 식별하고 변경 후 구현과 대조하여, 중복이 실제로 줄었는지 코드 검토로 확인한다.",
+      "summary": "중복 처리 감소",
+      "method_summary": "변경 전후 구현 대조"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "preserved_contracts",
+      "text": "두 공개 함수의 이름과 각 함수의 기존 외부 동작이 유지된다.",
+      "method": "변경 전 공개 정의와 구현에서 보존할 동작을 식별한다. 변경 후 정의 및 변경 코드를 검토하고 정상·경계·오류 사례의 변경 전후 동작을 비교한다. 기존 테스트가 있으면 함께 확인하되 테스트 통과만으로 보존을 단정하지 않는다.",
+      "summary": "공개 계약 유지",
+      "method_summary": "계약 검토와 기존 동작 비교"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "expected_outcome",
+      "text": "q1에서 확정한 범위에서 두 함수가 같은 결과를 낸다. 적용할 입력 범위와 오류·예외의 비교 기대값은 q1 결정 전까지 미정이다.",
+      "method": "q1에서 확정한 범위에 따라 비교 사례를 마련하고, 같은 입력과 조건에서 두 함수를 실행하여 결과를 대조한다. 해당 비교를 이후에도 반복할 수 있는 회귀 검증으로 남긴다.",
+      "summary": "두 함수의 결과 일치",
+      "method_summary": "동일 조건 비교와 회귀 검증"
+    }
+  ],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "medium",
+        "evidence": "내부 중복 제거, 공개 이름과 기존 동작 보존, 두 함수의 결과 동일성이 요청에 명시되어 있다.",
+        "judgement": "개선 목적은 명확하지만 결과 동일성의 구체적인 적용 범위는 확인이 필요하다.",
+        "unconfirmed": "동일성을 요구하는 입력 범위와 오류·예외 포함 여부."
+      },
+      {
+        "axis": "change_scope",
+        "weight": "low",
+        "evidence": "요청 대상은 reader.py의 load와 load_strict 내부 중복으로 한정되어 있다.",
+        "judgement": "요청상 변경 범위는 국소적이다. 실제 구현과 의존성은 확인되지 않았다.",
+        "unconfirmed": "중복 구간의 크기, 내부 의존성, 다른 코드에 미치는 영향."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "medium",
+        "evidence": "두 공개 함수 각각의 기존 동작과 두 함수 사이의 결과 동일성을 함께 보존해야 한다.",
+        "judgement": "호환성 보존은 핵심 조건이다. 구체적인 데이터 계약과 생명주기 영향은 아직 판단할 수 없다.",
+        "unconfirmed": "함수의 입력·출력 계약, 예외, 부수 효과와 데이터 처리 방식."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "요청 원문에 권한·보안·민감 데이터 관련 정보가 없고 구현을 확인하지 않았다.",
+        "judgement": "권한이나 보안에 미치는 영향을 판단할 근거가 부족하다.",
+        "unconfirmed": "두 함수가 접근하는 자원, 권한 검사와 민감 데이터 처리 여부."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "insufficient_evidence",
+        "evidence": "내부 리팩터링이라는 요청 외에 실행 부수 효과나 복구 방식에 대한 정보가 없다.",
+        "judgement": "변경의 가역성과 실패 비용을 확정할 수 없다.",
+        "unconfirmed": "외부 상태 변경 여부, 실패 시 영향과 복구 가능성."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "insufficient_evidence",
+        "evidence": "현재 구현, 실행 환경과 프로젝트 규칙을 확인하지 않았다. 해결 구조는 설계에서 결정하도록 되어 있다.",
+        "judgement": "설계 선택의 여지는 있으나 실제 구현 난도와 환경 불확실성은 아직 평가할 수 없다.",
+        "unconfirmed": "현재 중복 구조, 두 함수의 실제 차이와 프로젝트 제약."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "insufficient_evidence",
+        "evidence": "구조 개선과 기존 동작 보존을 함께 확인해야 하지만 기존 테스트와 동작 기준은 제공되지 않았다.",
+        "judgement": "검증 방향은 제시할 수 있으나 충분한 검증에 필요한 노력은 판단하기 어렵다.",
+        "unconfirmed": "기존 테스트 범위, 재현 가능한 기준 동작, 외부 의존성과 비결정적 동작 여부."
+      }
+    ]
+  }
+}

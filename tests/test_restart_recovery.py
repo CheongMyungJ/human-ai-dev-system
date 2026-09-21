@@ -397,7 +397,15 @@ def test_intent_agreement_and_structure_survive_a_forced_kill(controller):
     assert state["agreed_version"]["subject_content_hash"] == draft["content_hash"]
 
     latest = state["latest_intent_version"]
-    assert {f["field"] for f in latest["fields"]} == {f.value for f in IntentField}
+    # **P3-R1: 필수 항목은 Case 의 Profile 이 정한다.** 재시작 후에도 그 목록이
+    # 그대로 복원되는지를 본다 — 개수를 고정하지 않는다(D-62).
+    required = set(
+        httpx.get(f"{base}/api/cases/{case['id']}/policy", timeout=10.0).json()["profile"][
+            "required_fields"
+        ]
+    )
+    assert {f.value for f in IntentField} <= required
+    assert {f["field"] for f in latest["fields"]} == required
     assert [q["question_key"] for q in latest["questions"]] == ["later"]
 
     stored_feedback = httpx.get(f"{base}/api/cases/{case['id']}/feedback", timeout=10.0).json()
@@ -1094,3 +1102,104 @@ def test_workspace_and_execution_effects_survive_a_forced_kill(controller):
     assert restored["workspace_effect"]["changed"] is True
     # **종료 코드 1 이 그대로다.** 실패한 시험을 복원 과정에서 성공으로 바꾸지 않는다.
     assert [c["exit_code"] for c in restored["commands"]] == [1]
+
+
+def test_policy_profile_budget_and_repositories_survive_a_forced_kill(controller, tmp_path):
+    """P3-R1 AC-13 — 정책·Profile·확인 지점·예산·저장소가 강제 종료 후에도 남는다.
+
+    **판정을 메모리에 두지 않는다**는 P2-03의 규칙이 정책에도 적용된다. 재시작한
+    프로세스가 Autonomy 를 기본값으로 되돌리면, 사람이 controlled 로 바꾼 사실이
+    조용히 사라진다.
+    """
+    base = controller.base_url
+    _register_runner(base)
+
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "policy-restart", "repo_path": "C:/tmp/policy", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+    case = httpx.post(
+        f"{base}/api/projects/{project['id']}/cases",
+        json={"title": "정책 복원 Case", "profile": "refactoring"},
+        timeout=10.0,
+    ).json()
+
+    httpx.put(
+        f"{base}/api/cases/{case['id']}/autonomy",
+        json={
+            "autonomy": "controlled",
+            "set_by": "owner",
+            "reason_summary": "외부 반영이 있는 업무다",
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(
+        f"{base}/api/cases/{case['id']}/controlled-checkpoints/start_scope/confirmation",
+        json={
+            "confirmed_by": "owner",
+            "explicit": True,
+            "subject_type": "case",
+            "subject_id": case["id"],
+            "subject_hash": "d" * 64,
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.put(
+        f"{base}/api/cases/{case['id']}/budget",
+        json={
+            "metric": "run_count",
+            "threshold_kind": "hard",
+            "limit_value": 4,
+            "set_by": "owner",
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    extra = httpx.post(
+        f"{base}/api/projects/{project['id']}/repositories",
+        json={"name": "docs", "repo_path": "C:/tmp/policy-docs"},
+        timeout=10.0,
+    ).json()
+    httpx.put(
+        f"{base}/api/cases/{case['id']}/repositories",
+        json={
+            "repository_id": extra["id"],
+            "code_write_allowed": True,
+            "publish_allowed": False,
+            "selected_by": "owner",
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(
+        f"{base}/api/cases/{case['id']}/delegation-basis",
+        json={"basis_kind": "original_request", "summary": "최초 요청"},
+        timeout=10.0,
+    ).raise_for_status()
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    policy = httpx.get(f"{base}/api/cases/{case['id']}/policy", timeout=10.0).json()
+    assert policy["autonomy"] == "controlled"
+    assert policy["autonomy_source"] == "case_explicit"
+    assert policy["profile"]["profile"] == "refactoring"
+    assert policy["profile"]["version"] == "1"
+
+    points = {p["checkpoint"]: p for p in policy["checkpoints"]}
+    assert points["start_scope"]["state"] == "confirmed"
+    assert points["start_scope"]["subject_hash"] == "d" * 64
+    assert points["result_candidate"]["state"] == "required"
+
+    assert policy["budget"]["unlimited"] is False
+    limit = policy["budget"]["limits"][0]
+    assert (limit["metric"], limit["limit_value"]) == ("run_count", 4.0)
+    # **강제 상태도 그대로 복원된다.** 재시작이 "이제 강제한다"로 바뀌지 않는다.
+    assert limit["enforcement"] == "recorded_not_enforced"
+
+    selected = policy["repositories"]["selected"]
+    assert [s["repository_id"] for s in selected] == [extra["id"]]
+    assert selected[0]["code_write_allowed"] == 1
+    assert selected[0]["publish_allowed"] == 0
+
+    assert policy["delegation_basis"]["current"]["basis_kind"] == "original_request"

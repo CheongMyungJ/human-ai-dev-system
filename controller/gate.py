@@ -107,7 +107,15 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
     `detail` 은 `Repository.get_intent_detail()` 의 결과다. 항목 구조가 아직
     보고되지 않았으면 **통과도 실패도 아니다** — 판단 보류(`hold`)로 남긴다.
     검사하지 못한 것을 통과로 적지 않기 위해서다.
+
+    **P3-R1: 필수 항목 목록은 `detail["required_fields"]` 에서 온다.** Profile 이
+    목적별 의미 항목을 더하기 때문이다(D-62). 목록이 없는 호출(옛 기록·직접 호출)은
+    공통 여섯 항목으로 검사한다 — 없는 목록을 현재 Profile 의 것으로 채우면 그
+    Case 의 과거 판정이 새 규칙으로 바뀐다.
     """
+    required_fields: tuple[str, ...] = tuple(
+        detail.get("required_fields") or [f.value for f in FIELD_ORDER]
+    )
     findings: list[Finding] = []
 
     fields = {f["field"]: f for f in detail.get("fields", [])}
@@ -122,19 +130,19 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
         )
         return GateVerdict.HOLD, findings
 
-    # 1. 여섯 항목이 모두 있어야 한다. 정보가 없는 항목도 행으로 남아야 한다.
-    for field in FIELD_ORDER:
-        if field.value not in fields:
+    # 1. 필수 항목이 모두 있어야 한다. 정보가 없는 항목도 행으로 남아야 한다.
+    for name in required_fields:
+        if name not in fields:
             findings.append(
                 _required(
                     "required_field_missing",
-                    field.value,
-                    f"필수 항목 {field.value} 이(가) 문서에 없다",
+                    name,
+                    f"필수 항목 {name} 이(가) 문서에 없다",
                 )
             )
 
-    for field in FIELD_ORDER:
-        row = fields.get(field.value)
+    for name in required_fields:
+        row = fields.get(name)
         if row is None:
             continue
         state = row["state"]
@@ -145,8 +153,8 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
             findings.append(
                 _required(
                     "origin_missing",
-                    field.value,
-                    f"{field.value} 에 내용이 있는데 출처가 none 으로 표시돼 있다",
+                    name,
+                    f"{name} 에 내용이 있는데 출처가 none 으로 표시돼 있다",
                 )
             )
 
@@ -155,8 +163,8 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
             findings.append(
                 _required(
                     "undecided_mark_inconsistent",
-                    field.value,
-                    f"{field.value} 는 미정인데 출처가 {origin} 로 붙어 있다",
+                    name,
+                    f"{name} 는 미정인데 출처가 {origin} 로 붙어 있다",
                 )
             )
 
@@ -170,8 +178,8 @@ def rule_check(detail: dict[str, Any], is_latest: bool) -> tuple[GateVerdict, li
             findings.append(
                 _advisory(
                     "assumption_marked_confirmed",
-                    field.value,
-                    f"{field.value} 는 AI 가정인데 사용자 확정 상태로 표시돼 있다",
+                    name,
+                    f"{name} 는 AI 가정인데 사용자 확정 상태로 표시돼 있다",
                     FindingCertainty.SUSPECTED,
                 )
             )

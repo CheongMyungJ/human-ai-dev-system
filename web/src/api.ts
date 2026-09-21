@@ -113,6 +113,9 @@ export interface CaseDetail extends Case {
   // P3-03: 어떤 코드 위에서 어디에 만들고 있는가. `null` 은 **아직 준비되지
   // 않았다**는 뜻이며 그 Case 의 쓰기는 `workspace_not_ready` 로 막힌다.
   workspace: WorkspaceView | null
+  // P3-R1: 이 업무에 적용되는 목적·깊이·확인 경계·한도·저장소와 **각 축을 지금
+  // 누가 강제하는가.** 화면이 기록과 강제를 구별해 보여야 한다(FR-14).
+  policy?: CasePolicy
 }
 
 export interface RunnerCapability {
@@ -1405,5 +1408,198 @@ export const workspaceApi = {
     request<WorkspaceView>(`/api/cases/${caseId}/workspace`, {
       method: 'POST',
       body: JSON.stringify({ base_ref: baseRef }),
+    }),
+}
+
+// --------------------------------------------------------------- P3-R1 정책
+
+export type Autonomy = 'ask_on_decision' | 'controlled'
+
+export const AUTONOMY_LABEL: Record<Autonomy, string> = {
+  ask_on_decision: '기본 자율 진행 (판단이 필요할 때 사람 호출)',
+  controlled: '확인 경계 (시작 범위·결과 후보를 사람이 확인)',
+}
+
+export const AUTONOMY_SOURCE_LABEL: Record<string, string> = {
+  system_default: '시스템 기본값',
+  case_explicit: '이 업무에 명시 설정',
+  // **기본값으로 읽지 않는다.** R1 이전 Case 는 이 축이 기록되지 않았다.
+  migrated_unknown: '기록되지 않음 (v0.6 기준으로 진행한 업무)',
+}
+
+export interface ProfileFieldInfo {
+  field: string
+  label: string
+}
+
+export interface ProfileDefinition {
+  profile: string
+  version: string
+  purpose: string
+  common_fields: string[]
+  semantic_fields: ProfileFieldInfo[]
+  required_fields: string[]
+  minimum_evidence: string
+  conditional_evidence: string
+  completion_meaning: string
+  not_fixed_in_draft: string
+}
+
+export interface CaseProfileState {
+  profile: string | null
+  version: string | null
+  source: string
+  definition: ProfileDefinition | null
+  required_fields: string[]
+  kind: string
+  detail: string | null
+}
+
+export interface EnforcementNote {
+  state: string
+  enforced_by: string
+  detail: string
+}
+
+export interface BudgetLimit {
+  id: string
+  metric: string
+  threshold_kind: string
+  limit_value: number
+  unit: string
+  measurement: string
+  enforcement: string
+  enforced_by: string
+  state: string
+  set_by: string
+  reason_summary: string | null
+  created_at: string
+}
+
+export interface BudgetState {
+  unlimited: boolean
+  limits: BudgetLimit[]
+  history: BudgetLimit[]
+  // `null` 은 **아직 측정하지 않는다**는 뜻이며 0이 아니다(D-61).
+  usage: null | Record<string, unknown>
+  usage_detail: string
+  measurement_contract: Record<string, string>
+  repair_limit_note: string
+  enforcement: EnforcementNote
+}
+
+export interface ControlledCheckpointRow {
+  id: string
+  checkpoint: string
+  state: string
+  subject_type: string | null
+  subject_id: string | null
+  subject_hash: string | null
+  confirmed_by: string | null
+  confirmed_at: string | null
+  note_summary: string | null
+}
+
+export interface CaseRepositoryRow {
+  repository_id: string
+  repository_name: string
+  repo_path: string
+  selection_source: string
+  code_write_allowed: number
+  publish_allowed: number
+  selected_by: string
+  state: string
+}
+
+export interface CaseRepositoryState {
+  selected: CaseRepositoryRow[]
+  excluded: CaseRepositoryRow[]
+  // 선택 기록이 없는 Case. **"선택했다"로 적지 않는다**(이행된 가정이다).
+  implicit_single_repository: { repository_id: string; repo_path: string; detail: string } | null
+  journal_repository_id: string | null
+  write_allowance_implies_publish: boolean
+}
+
+export interface DelegationBasisRow {
+  revision: number
+  basis_kind: string
+  summary: string
+  content_hash: string | null
+  state: string
+  recorded_at: string
+}
+
+export interface CasePolicy {
+  case_id: string
+  revision: number
+  // `null` 은 기록되지 않음이다. 화면이 기본값으로 채우지 않는다.
+  autonomy: Autonomy | null
+  autonomy_source: string
+  autonomy_recorded: boolean
+  policy_version: string
+  default_autonomy: Autonomy
+  work_depth: string | null
+  work_depth_source: string
+  completion_mode: string
+  profile: CaseProfileState
+  checkpoints: ControlledCheckpointRow[]
+  budget: BudgetState
+  delegation_basis: { current: DelegationBasisRow | null; history: DelegationBasisRow[]; detail: string }
+  repositories: CaseRepositoryState
+  enforcement: Record<string, EnforcementNote>
+  case_status: string
+}
+
+export const CHECKPOINT_LABEL: Record<string, string> = {
+  start_scope: '시작 범위 확인 (목표·범위·기준·허용 행동)',
+  result_candidate: '결과 후보 확인 (게시 전)',
+}
+
+export const policyApi = {
+  get: (caseId: string) => request<CasePolicy>(`/api/cases/${caseId}/policy`),
+
+  profiles: () =>
+    request<{ current_version: string; profiles: ProfileDefinition[]; note: string }>(
+      '/api/profiles',
+    ),
+
+  // **설정이 실행 경로를 바꾸지 않는다**(P3-R1). 값과 출처가 기록될 뿐이며 화면은
+  // 그 사실을 `enforcement` 로 함께 보인다.
+  setAutonomy: (caseId: string, autonomy: Autonomy, reason: string) =>
+    request<CasePolicy>(`/api/cases/${caseId}/autonomy`, {
+      method: 'PUT',
+      body: JSON.stringify({ autonomy, set_by: 'owner', reason_summary: reason || null }),
+    }),
+
+  confirmCheckpoint: (caseId: string, checkpoint: string, subjectId: string, note: string) =>
+    request<ControlledCheckpointRow[]>(
+      `/api/cases/${caseId}/controlled-checkpoints/${checkpoint}/confirmation`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          confirmed_by: 'owner',
+          // 화면의 확인 버튼은 **명시적 확인**이다. 서버는 그렇지 않은 요청을 거부한다.
+          explicit: true,
+          subject_type: checkpoint === 'start_scope' ? 'case' : 'completion_candidate',
+          subject_id: subjectId,
+          note_summary: note || null,
+        }),
+      },
+    ),
+
+  setBudget: (caseId: string, metric: string, thresholdKind: string, value: number) =>
+    request<BudgetState>(`/api/cases/${caseId}/budget`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        metric,
+        threshold_kind: thresholdKind,
+        limit_value: value,
+        set_by: 'owner',
+      }),
+    }),
+
+  clearBudget: (caseId: string, metric: string, thresholdKind: string) =>
+    request<BudgetState>(`/api/cases/${caseId}/budget/${metric}/${thresholdKind}`, {
+      method: 'DELETE',
     }),
 }

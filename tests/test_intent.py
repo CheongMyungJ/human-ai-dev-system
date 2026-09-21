@@ -31,6 +31,18 @@ from domain.models import (
 SIX = {f.value for f in IntentField}
 
 
+def _required(harness, case_id: str) -> set[str]:
+    """그 Case 가 가져야 하는 의도 항목(P3-R1).
+
+    **여섯으로 고정하지 않는다.** v0.7에서 필수 항목은 Case 의 Profile 이 정하며
+    (D-62), 이 시험이 보려는 것은 "정보가 없는 항목을 지우지도 채우지도 않는다"이지
+    항목의 개수가 여섯이라는 사실이 아니다. Profile 이 기록되지 않은 Case 의 필수
+    항목이 여섯 그대로임은 `test_a_pre_r1_case_keeps_the_six_field_form` 이 본다.
+    """
+    policy = harness.client.get(f"/api/cases/{case_id}/policy").json()
+    return set(policy["profile"]["required_fields"])
+
+
 def _draft_fields(**overrides: dict) -> dict:
     """대표적인 초안 입력. 지정하지 않은 항목은 **비워 둔다.**"""
     fields = {
@@ -54,10 +66,13 @@ def _draft_fields(**overrides: dict) -> dict:
     return fields
 
 
-def test_all_six_fields_exist_and_missing_information_stays_undecided(harness):
-    """AC-1 — 여섯 항목이 모두 존재하고 빈 항목은 미정으로 남는다.
+def test_all_required_fields_exist_and_missing_information_stays_undecided(harness):
+    """AC-1 — 필수 항목이 모두 존재하고 빈 항목은 미정으로 남는다.
 
     정보가 없는 항목을 지우지도, 채우지도 않는다(intent-artifacts 1절).
+
+    **P3-R1에서 기대값이 바뀌었다.** "여섯"이 아니라 "그 Case 의 Profile 이 요구하는
+    항목 전부"다(D-62). 규칙 자체는 그대로다 — 빈 항목을 지우지 않는다.
     """
     project = harness.create_project()
     case = harness.create_case(project["id"])
@@ -65,7 +80,9 @@ def test_all_six_fields_exist_and_missing_information_stays_undecided(harness):
 
     intent = harness.latest_intent(case["id"])
     by_field = {f["field"]: f for f in intent["fields"]}
-    assert set(by_field) == SIX, "여섯 항목이 모두 행으로 있어야 한다"
+    required = _required(harness, case["id"])
+    assert set(by_field) == required, "필수 항목이 모두 행으로 있어야 한다"
+    assert SIX < required, "공통 여섯 항목 위에 Profile 의미 항목이 얹힌다"
 
     # 입력한 항목: 제안됨 + 출처가 구별된다(FR-04)
     assert by_field["goal"]["state"] == ConfirmationState.PROPOSED.value
@@ -448,7 +465,9 @@ def test_a_small_feature_still_goes_through_the_whole_flow(harness):
         summary="작은 기능 초안",
     )
     intent = harness.latest_intent(case["id"])
-    assert len(intent["fields"]) == 6, "작은 기능이라고 항목을 줄이지 않는다"
+    assert set(f["field"] for f in intent["fields"]) == _required(
+        harness, case["id"]
+    ), "작은 기능이라고 항목을 줄이지 않는다"
 
     harness.submit_feedback(case["id"], intent["id"], "'저장'이 더 낫습니다. 그대로 둡시다.")
     assert harness.intent_state(case["id"])["agreement_state"] == (
@@ -462,8 +481,8 @@ def test_a_small_feature_still_goes_through_the_whole_flow(harness):
     )
 
 
-def test_structure_report_must_carry_all_six_fields(harness):
-    """여섯 항목 중 일부만 보고하는 구조는 거부한다.
+def test_structure_report_must_carry_all_required_fields(harness):
+    """필수 항목 중 일부만 보고하는 구조는 거부한다.
 
     "정보가 없으면 항목을 삭제한다"가 아니라 미정으로 남기는 것이 규칙이므로,
     항목이 빠진 보고를 받아들이면 그 규칙이 조용히 무너진다.
@@ -490,7 +509,7 @@ def test_structure_report_must_carry_all_six_fields(harness):
         },
     )
     assert response.status_code == 409
-    assert "six fields" in response.json()["detail"]
+    assert "required fields" in response.json()["detail"]
 
 
 def test_knowing_the_hash_is_not_reading_the_original(harness):

@@ -874,3 +874,173 @@ CREATE TABLE IF NOT EXISTS run_command (
 );
 
 CREATE INDEX IF NOT EXISTS idx_case_workspace_project ON case_workspace(project_id, state);
+
+-- ===================================================================
+-- 스키마 v8 (P3-R1 정책·Profile·저장소·예산 모델)
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 정책을 바꾼 이유의 서술, Profile 항목의 내용, 예산을 정한 배경은 소유 Runner 의
+-- 원문 또는 사용자의 결정 근거에 있고 여기에는 판정·값·코드·짧은 요약만 남는다.
+--
+-- **이 표들은 기록이고 강제가 아니다.** Autonomy 에 따른 실행 경로는 R4,
+-- 예산 예약·정지는 R3, Case×Repo 작업공간과 허용 내 자동 추가는 R2 다. 행이
+-- 생겼다는 이유로 그 기능을 지원한다고 표시하지 않는다.
+--
+-- 그리고 **행이 없는 상태의 의미가 표마다 다르다.** 한 규칙으로 통일하면 어느 한쪽이
+-- 반드시 거짓이 된다.
+--   `case_policy`       없음 = R1 이후 Case 의 기본값(ask-on-decision). 이행된
+--                       Case 에는 `migrated_unknown` 행을 **명시로** 넣는다
+--   `budget_setting`    없음 = 무제한(D-56)
+--   `case_repository`   없음 = 선택이 기록되지 않음. 조회는 이행된 단일 저장소를
+--                       `implicit_single_repository` 로 **따로** 표시한다
+--   `controlled_checkpoint` 없음 = 요구되지 않음(ask-on-decision) 또는 아직 생성 전
+-- ===================================================================
+
+-- 이 Case 에 적용되는 Autonomy 와 그 출처. 바뀐 값은 `superseded` 로 보존한다.
+--
+-- `autonomy` 가 **NULL 일 수 있다.** R1 이전에 만들어진 Case 는 이 축이 기록되지
+-- 않았고, 기본값으로 읽으면 v0.6에서 사람이 검토·인수하기로 하고 진행한 업무가
+-- 조용히 자동 진행 대상이 된다. NULL 은 "기록되지 않음"이며 `ask_on_decision` 이
+-- 아니다(DEVELOPMENT.md 3절).
+CREATE TABLE IF NOT EXISTS case_policy (
+    id               TEXT PRIMARY KEY,
+    case_id          TEXT NOT NULL REFERENCES "case"(id),
+    revision         INTEGER NOT NULL,
+    autonomy         TEXT,                  -- ask_on_decision | controlled | NULL(미기록)
+    autonomy_source  TEXT NOT NULL,         -- system_default | case_explicit | migrated_unknown
+    policy_version   TEXT NOT NULL,         -- 이 행을 정한 규칙판. 이행 행은 "0.6"
+    set_by           TEXT NOT NULL,         -- 주체. 이행 행은 "migration"
+    reason_summary   TEXT,                  -- 짧은 요약. 원문 대체 아님
+    state            TEXT NOT NULL,         -- current | superseded
+    created_at       TEXT NOT NULL,
+    superseded_at    TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+);
+
+-- 지금 무엇을 근거로 자동 진행하는가(D-60).
+--
+-- 위임 기준은 `최초 요청 + 사용자의 후속 명시 결정·변경 요청 + 유효한 정책` 이다.
+-- **AI 초안은 근거가 아니다** — 비교 자료이며 `basis_kind` 에 값도 없다.
+-- 누적 material delta 는 이 기록들과 대조해 계산한다(R4).
+CREATE TABLE IF NOT EXISTS delegation_basis (
+    id             TEXT PRIMARY KEY,
+    case_id        TEXT NOT NULL REFERENCES "case"(id),
+    revision       INTEGER NOT NULL,
+    basis_kind     TEXT NOT NULL,           -- original_request | user_decision | project_policy
+    artifact_id    TEXT,                    -- 원문 참조. 본문은 Runner 에
+    artifact_rev   INTEGER,
+    content_hash   TEXT,                    -- 그 시점 원문의 해시
+    decision_id    TEXT REFERENCES decision(id),
+    summary        TEXT NOT NULL,           -- 짧은 요약. 원문 대체 아님
+    state          TEXT NOT NULL,           -- current | superseded
+    recorded_at    TEXT NOT NULL,
+    superseded_at  TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (length(summary) <= 200)
+);
+
+-- controlled 가 요구하는 확인 지점과 실제 확인(D-65).
+--
+-- 확인은 **그 대상에만** 붙는다. 대상이 바뀌면 `superseded` 가 되고 새 행으로 다시
+-- 확인받는다. 확인 기록을 지우지 않는 이유는 "무엇을 보고 확인했는가"가 FR-23 의
+-- 요구이기 때문이다.
+--
+-- **이 확인이 권한을 만들지 않는다.** push·게시 허용과 최종 인수는 각각
+-- `decision`·`final_acceptance` 의 별도 기록이다(D-32·D-65).
+CREATE TABLE IF NOT EXISTS controlled_checkpoint (
+    id               TEXT PRIMARY KEY,
+    case_id          TEXT NOT NULL REFERENCES "case"(id),
+    policy_id        TEXT NOT NULL REFERENCES case_policy(id),
+    checkpoint       TEXT NOT NULL,         -- start_scope | result_candidate
+    state            TEXT NOT NULL,         -- required | confirmed | superseded
+    subject_type     TEXT,                  -- case | completion_candidate | ...
+    subject_id       TEXT,
+    subject_hash     TEXT,                  -- 확인한 대상의 해시
+    decision_id      TEXT REFERENCES decision(id),
+    confirmed_by     TEXT,
+    confirmed_at     TEXT,
+    note_summary     TEXT,
+    created_at       TEXT NOT NULL,
+    superseded_at    TEXT,
+    CHECK (note_summary IS NULL OR length(note_summary) <= 200)
+);
+
+-- 선택한 예산 한도(D-56·D-61). **행이 없으면 무제한이다.**
+--
+-- `measurement` 와 `enforcement` 를 값과 **함께** 남기는 것이 핵심이다. 강제할 수
+-- 없는 지표에 정확한 hard 한도를 걸어 두면 사람이 상한이 있다고 믿는다. 그런 설정은
+-- 애초에 받지 않으며(`PolicyRefusal.HARD_LIMIT_NOT_ENFORCEABLE`) 받은 설정도
+-- R1 에서는 전부 `recorded_not_enforced` 다 — 예약·집계·정지는 R3 이다.
+--
+-- repair 한도(D-29)는 여기 없다. 품질 수정 차수와 자원 한도는 별개이며
+-- 하나가 다른 하나를 대신하지 않는다.
+CREATE TABLE IF NOT EXISTS budget_setting (
+    id              TEXT PRIMARY KEY,
+    case_id         TEXT NOT NULL REFERENCES "case"(id),
+    revision        INTEGER NOT NULL,
+    metric          TEXT NOT NULL,          -- run_count | input_tokens | ...
+    threshold_kind  TEXT NOT NULL,          -- warn | hard
+    limit_value     REAL NOT NULL,
+    unit            TEXT NOT NULL,
+    measurement     TEXT NOT NULL,          -- exact | estimated | unavailable
+    enforcement     TEXT NOT NULL,          -- recorded_not_enforced | not_enforceable
+    enforced_by     TEXT NOT NULL,          -- 어느 하위 작업이 실제로 강제하는가
+    policy_version  TEXT NOT NULL,
+    set_by          TEXT NOT NULL,
+    reason_summary  TEXT,
+    state           TEXT NOT NULL,          -- current | superseded
+    created_at      TEXT NOT NULL,
+    superseded_at   TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (limit_value > 0),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+);
+
+-- Project 에 등록된 저장소들(D-38·FR-01).
+--
+-- v1의 `project.repo_path` 를 대체한다. 그 컬럼은 **지우지 않는다** — 기존 배정·
+-- 작업공간 경로가 그 값을 쓰고 있고, 이행은 같은 값을 이 표에 한 건으로 옮기는
+-- 것으로 한다(`source = migrated_from_project`).
+CREATE TABLE IF NOT EXISTS project_repository (
+    id             TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL REFERENCES project(id),
+    name           TEXT NOT NULL,
+    repo_path      TEXT NOT NULL,           -- Runner 호스트에서 해석하는 경로
+    source         TEXT NOT NULL,           -- registered | migrated_from_project
+    registered_by  TEXT NOT NULL,
+    registered_at  TEXT NOT NULL,
+    UNIQUE (project_id, name),
+    CHECK (length(name) <= 100)
+);
+
+-- Case 가 선택한 저장소와 허용 범위(D-63·D-64·FR-01).
+--
+-- **세 가지가 서로 다른 집합이다.** 선택했다는 것, 코드를 바꿔도 된다는 것, 외부에
+-- 게시해도 된다는 것. 쓰기 허용만으로 게시 허용이 생기지 않는다(D-64 "쓰기 허용
+-- 저장소 추가는 게시 허용 확대가 아니다").
+--
+-- `selection_source = excluded` 는 **명시적으로 제외한** 저장소다. 행이 없는 것과
+-- 다르다 — 없음은 아직 판단하지 않은 것이고, 제외는 R2 의 자동 추가가 건드리지
+-- 못하는 경계다.
+CREATE TABLE IF NOT EXISTS case_repository (
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    repository_id      TEXT NOT NULL REFERENCES project_repository(id),
+    selection_source   TEXT NOT NULL,       -- explicit | auto_in_allowance | excluded
+    code_write_allowed INTEGER NOT NULL,    -- 0/1. 작업공간 준비는 R2
+    publish_allowed    INTEGER NOT NULL,    -- 0/1. 실제 push·PR 은 P5
+    selected_by        TEXT NOT NULL,
+    reason_summary     TEXT,
+    state              TEXT NOT NULL,       -- current | superseded
+    selected_at        TEXT NOT NULL,
+    superseded_at      TEXT,
+    PRIMARY KEY (case_id, repository_id),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_policy_case ON case_policy(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_delegation_case ON delegation_basis(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_case ON controlled_checkpoint(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_budget_case ON budget_setting(case_id, state);
+CREATE INDEX IF NOT EXISTS idx_project_repository ON project_repository(project_id);
+CREATE INDEX IF NOT EXISTS idx_case_repository_case ON case_repository(case_id, state);

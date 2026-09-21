@@ -34,12 +34,21 @@ class CaseKind(str, Enum):
     """업무 유형. 기능 개발만 의도 동의·설계·계획 선행 조건을 받는다(FR-03, FR-29).
 
     P2-01은 유형을 기록만 하고 진입 조건 검사는 P2-03에서 붙인다.
+
+    **P3-R1에서 이 축은 `CaseProfile` 에 자리를 넘겼다.** 값을 지우지 않는 이유는
+    P2-01부터의 기존 Case 기록이 이 컬럼을 갖고 있어서다. 새 Case 의 `kind` 는
+    Profile 에서 유도하며(`domain.profiles.KIND_FOR_PROFILE`) `refactoring`·
+    `maintenance` 는 그때 필요해진 값이다 — 여섯 Profile 중 둘은 v0.6 유형에 대응하는
+    값이 없었고, 없는 대응을 억지로 만들면(`refactoring` 을 `feature` 로 적는 식)
+    기록이 거짓이 된다.
     """
 
     FEATURE = "feature"
     BUG = "bug"
     ANALYSIS = "analysis"
     RESEARCH = "research"
+    REFACTORING = "refactoring"
+    MAINTENANCE = "maintenance"
 
 
 class IntentStatus(str, Enum):
@@ -868,3 +877,264 @@ class WorkspaceOwnership(str, Enum):
     FOREIGN = "foreign"
     #: 없다. 새로 만든다
     ABSENT = "absent"
+
+
+# --------------------------------------------------------------------- P3-R1
+#
+# v0.7 정책 모델. **여기서 만드는 것은 기록이고 강제가 아니다.**
+#
+# R1은 정책·Profile·저장소·예산의 영속 모델과 기존 데이터의 이행까지다. Autonomy 에
+# 따른 실행 경로는 R4, 예산의 예약·정지는 R3, Case×Repo 작업공간과 허용 내 자동 추가는
+# R2 의 몫이다. 값이 생겼다는 이유로 그 기능을 지원한다고 표시하지 않는다
+# (DEVELOPMENT.md 3절 "구현하지 않은 모드는 비활성/미지원으로 표시한다").
+
+#: 이 코드가 적용하는 정책 규칙판. 기록마다 남겨 나중에 "어느 규칙으로 정해졌는가"를
+#: 답할 수 있게 한다. **이행된 기록에는 당시 값(`0.6`)이 남는다** — 지금 값으로
+#: 덮어쓰면 과거 Case 가 새 규칙으로 정해진 것처럼 보인다.
+POLICY_VERSION = "0.7"
+
+#: R1 이전 기록에 붙는 정책 버전. 비교가 아니라 출처 표시용이라 문자열로 둔다.
+LEGACY_POLICY_VERSION = "0.6"
+
+
+class CaseProfile(str, Enum):
+    """업무의 대표 목적(D-62, case-profiles.md 1절).
+
+    **고정 pipeline 이 아니라 의미 계약이다.** 이름을 바꾸어 권한·검증·성공 기준을
+    완화할 수 없고, 대표 Profile 이 Task 의 조사·구현·실험 활동을 대신하지도 않는다.
+
+    `CaseKind` 와 합치지 않는다. `kind` 는 P2-01부터 있던 축이고 기존 Case 의 기록이
+    그 값을 갖고 있다. Profile 은 v0.7의 여섯 목적이며 **R1 이전 Case 에는 없다.**
+    """
+
+    FEATURE = "feature"
+    DEFECT_FIX = "defect_fix"
+    ROOT_CAUSE_ANALYSIS = "root_cause_analysis"
+    RESEARCH = "research"
+    REFACTORING = "refactoring"
+    MAINTENANCE = "maintenance"
+
+
+class ProfileSource(str, Enum):
+    """Profile 을 누가·어떻게 정했는가(FR-04).
+
+    `EXPLICIT`          요청에 Profile 이 지정됐다
+    `DERIVED_FROM_KIND` 지정이 없어 기존 `kind` 축에서 유도했다. 사람의 선택이 아니다
+    `NOT_RECORDED`      R1 이전에 만들어진 Case. 유도해서 채우지 않는다
+    """
+
+    EXPLICIT = "explicit"
+    DERIVED_FROM_KIND = "derived_from_kind"
+    NOT_RECORDED = "not_recorded"
+
+
+class Autonomy(str, Enum):
+    """사람이 확인해야 하는 시점(D-59, autonomy-budget-policy.md 1절).
+
+    **WorkDepth 와 다른 축이다.** `WorkLevel`(=WorkDepth)은 조사·설계·검증의 깊이이고
+    이것은 확인 경계다. `deep + ask_on_decision` 이 성립한다.
+
+    `fast` 는 여기에 없다. Fast Lane 은 자율성 등급이 아니라 조건에 맞을 때 절차를
+    줄일 수 있는 실행 경로다(D-59).
+    """
+
+    ASK_ON_DECISION = "ask_on_decision"
+    CONTROLLED = "controlled"
+
+
+class AutonomySource(str, Enum):
+    """적용된 Autonomy 값의 출처(autonomy-budget-policy.md 5절 우선순위).
+
+    Task·Project 단위 조정은 아직 없어서 값도 두지 않는다. 조회 결과에 "Project
+    기본값에서 왔다"가 나타나는 순간 사람이 없는 설정 화면을 찾게 된다.
+
+    `MIGRATED_UNKNOWN` 이 핵심이다. R1 이전 Case 는 Autonomy 가 **기록되지 않았고**
+    기본값으로 읽으면 v0.6에서 사람이 검토·인수하기로 한 업무가 조용히 자동 진행
+    대상이 된다(DEVELOPMENT.md 3절 "새 정책을 기존 승인·동의·권한에 소급 적용하지
+    않는다").
+    """
+
+    SYSTEM_DEFAULT = "system_default"
+    CASE_EXPLICIT = "case_explicit"
+    MIGRATED_UNKNOWN = "migrated_unknown"
+
+
+class PolicyState(str, Enum):
+    """정책·예산 설정 행의 상태. 바뀐 값은 지우지 않고 대체로 남긴다."""
+
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
+
+
+class DelegationBasisKind(str, Enum):
+    """자동 진행의 근거가 무엇인가(D-60, autonomy-budget-policy.md 2절).
+
+    현재 위임 기준은 `최초 요청 + 사용자의 후속 명시 결정·변경 요청 + 유효한 정책` 이다.
+    **AI 가 직전에 쓴 초안은 근거가 아니다** — 비교 자료일 뿐이며 그것을 근거로 적으면
+    AI 가 자기 초안으로 위임 범위를 넓히게 된다. 그래서 값에 `ai_draft` 가 없다.
+    """
+
+    ORIGINAL_REQUEST = "original_request"
+    USER_DECISION = "user_decision"
+    PROJECT_POLICY = "project_policy"
+
+
+class ControlledCheckpoint(str, Enum):
+    """controlled 가 요구하는 확인 지점(D-65, completion-lifecycle.md 4절).
+
+    순서는 `시작 범위 확인 → 작업·로컬 검증 → 결과 후보 확인 → 허용된 게시 → 필요한
+    외부 CI → 완료` 다. 설계·계획의 사람 검토는 **이 목록에 없다** — 별도 선택
+    사항이며 `stage_review_setting` 이 따로 관리한다.
+    """
+
+    START_SCOPE = "start_scope"
+    RESULT_CANDIDATE = "result_candidate"
+
+
+class CheckpointState(str, Enum):
+    """확인 지점의 상태.
+
+    `REQUIRED`   이 Case 에 필요하다. 아직 확인되지 않았다
+    `CONFIRMED`  사람이 실제로 확인했다. 대상 해시·주체·시점이 함께 남는다
+    `SUPERSEDED` 확인한 대상이 바뀌어 다시 확인해야 한다. **확인 기록은 지우지 않는다**
+
+    `CONFIRMED` 는 그 대상에만 붙는다. 다음 후보에 자동으로 넘어가지 않는다(FR-23).
+    """
+
+    REQUIRED = "required"
+    CONFIRMED = "confirmed"
+    SUPERSEDED = "superseded"
+
+
+class BudgetMetric(str, Enum):
+    """한도를 걸 수 있는 지표(D-61, autonomy-budget-policy.md 7절 표).
+
+    **CLI Run 과 CLI 내부 모델 호출은 같지 않다.** 여기서 세는 것은 시스템이 실제로
+    시작한 실행이며, CLI 가 그 안에서 몇 번 모델을 부르는지는 관측 범위 밖이다.
+    """
+
+    RUN_COUNT = "run_count"
+    REVIEW_RUN_COUNT = "review_run_count"
+    INPUT_TOKENS = "input_tokens"
+    OUTPUT_TOKENS = "output_tokens"
+    CONTEXT_BYTES = "context_bytes"
+    EXECUTION_SECONDS = "execution_seconds"
+    ELAPSED_SECONDS = "elapsed_seconds"
+    ESTIMATED_COST = "estimated_cost"
+
+
+class BudgetThreshold(str, Enum):
+    """경계의 종류(autonomy-budget-policy.md 8절).
+
+    `WARN` 표시·허용된 절약. 경고만으로 사람 응답을 기다리지는 않는다
+    `HARD` 그 한도를 소비하는 **새 실행을 배정하지 않는다.** 기존 결과는 보존한다
+    """
+
+    WARN = "warn"
+    HARD = "hard"
+
+
+class BudgetMeasurement(str, Enum):
+    """그 지표를 어떻게 아는가(D-61).
+
+    **`UNAVAILABLE` 을 0으로 기록하지 않는다.** 미제공을 0으로 적으면 한도가 영원히
+    남아 있는 것처럼 보인다.
+    """
+
+    EXACT = "exact"
+    ESTIMATED = "estimated"
+    UNAVAILABLE = "unavailable"
+
+
+class BudgetEnforcement(str, Enum):
+    """그 설정을 실제로 강제할 수 있는가, 그리고 지금 강제하고 있는가.
+
+    R1 에서 실제로 기록되는 값은 `RECORDED_NOT_ENFORCED` 뿐이다 — 예약·집계·정지는
+    R3 이다. `NOT_ENFORCEABLE` 은 측정 계약이 없어 **설정을 받지 않는** 경우를
+    설명하는 값이며 그 설정은 저장되지 않는다(D-61 "보장할 수 없다면 해당 설정/실행을
+    허용하지 않는다").
+    """
+
+    RECORDED_NOT_ENFORCED = "recorded_not_enforced"
+    NOT_ENFORCEABLE = "not_enforceable"
+
+
+#: 지표별 측정 계약. **이것이 hard 한도를 받을 수 있는지 정한다.**
+#:
+#: 정확한 hard 한도를 요구했는데 보장할 수 없으면 설정을 거부한다(D-61). 지금
+#: `EXACT` 인 것들은 시스템이 스스로 세거나 재는 값이다 — 실행을 시작한 횟수,
+#: 시스템이 만들어 전달한 입력 패키지의 크기, 시작·종료 시각의 차이.
+#:
+#: 토큰·비용이 `ESTIMATED` 인 이유는 어댑터가 사용량을 주지 않을 때가 있고
+#: (`run.usage_json` 의 기본값이 `"not_reported"` 다) 사후에만 주는 경우도 있어서다.
+#: 그 지표에 정확한 hard 상한을 걸 수 있다고 표시하지 않는다.
+BUDGET_MEASUREMENT: dict[BudgetMetric, BudgetMeasurement] = {
+    BudgetMetric.RUN_COUNT: BudgetMeasurement.EXACT,
+    BudgetMetric.REVIEW_RUN_COUNT: BudgetMeasurement.EXACT,
+    BudgetMetric.CONTEXT_BYTES: BudgetMeasurement.EXACT,
+    BudgetMetric.EXECUTION_SECONDS: BudgetMeasurement.EXACT,
+    BudgetMetric.ELAPSED_SECONDS: BudgetMeasurement.EXACT,
+    BudgetMetric.INPUT_TOKENS: BudgetMeasurement.ESTIMATED,
+    BudgetMetric.OUTPUT_TOKENS: BudgetMeasurement.ESTIMATED,
+    BudgetMetric.ESTIMATED_COST: BudgetMeasurement.ESTIMATED,
+}
+
+#: 지표의 단위. 표시·검증에 쓴다. 비용의 통화는 사용자가 정하므로 값만 받는다.
+BUDGET_UNIT: dict[BudgetMetric, str] = {
+    BudgetMetric.RUN_COUNT: "runs",
+    BudgetMetric.REVIEW_RUN_COUNT: "runs",
+    BudgetMetric.INPUT_TOKENS: "tokens",
+    BudgetMetric.OUTPUT_TOKENS: "tokens",
+    BudgetMetric.CONTEXT_BYTES: "bytes",
+    BudgetMetric.EXECUTION_SECONDS: "seconds",
+    BudgetMetric.ELAPSED_SECONDS: "seconds",
+    BudgetMetric.ESTIMATED_COST: "currency_units",
+}
+
+
+class RepositorySelectionSource(str, Enum):
+    """Case 가 그 저장소를 **어떻게** 선택했는가(D-63).
+
+    `AUTO_IN_ALLOWANCE` 는 R2 가 만든다. 값을 미리 두는 이유는 마이그레이션·조회
+    계약을 고정해 두기 위해서이며 **R1 은 이 값을 발급하지 않는다.**
+    """
+
+    EXPLICIT = "explicit"
+    AUTO_IN_ALLOWANCE = "auto_in_allowance"
+    EXCLUDED = "excluded"
+
+
+class RepositorySource(str, Enum):
+    """Project 등록 저장소 행의 출처.
+
+    `MIGRATED_FROM_PROJECT` 는 R1 이전 Project 의 `repo_path` 를 옮긴 행이다. 사람이
+    새로 등록한 것과 구별한다 — 등록 시점·주체가 다르기 때문이다.
+    """
+
+    REGISTERED = "registered"
+    MIGRATED_FROM_PROJECT = "migrated_from_project"
+
+
+class PolicyRefusal(str, Enum):
+    """정책·Profile·저장소·예산 설정을 기록할 수 없는 이유.
+
+    **네 번째 독립 목록이다.** `AgreementRefusal`(동의를 기록할 수 있는가),
+    `AdmissionRefusal`(실행을 배정해도 되는가), `AcceptanceRefusal`(종료로 확정해도
+    되는가)과 합치지 않는다. 이쪽은 "이 설정을 받아도 되는가"를 본다(FR-23).
+    """
+
+    CASE_ALREADY_CLOSED = "case_already_closed"
+    #: 정확한 hard 한도를 요구했는데 그 지표를 정확히 측정·강제할 수 없다(D-61).
+    HARD_LIMIT_NOT_ENFORCEABLE = "hard_limit_not_enforceable"
+    LIMIT_NOT_POSITIVE = "limit_not_positive"
+    #: 이 Case 의 Project 에 등록되지 않은 저장소다.
+    REPOSITORY_NOT_IN_PROJECT = "repository_not_in_project"
+    #: 기록 저장소를 코드 대상으로 선택하려 했다(D-17·D-34·FR-30).
+    JOURNAL_REPOSITORY_NOT_A_CODE_TARGET = "journal_repository_not_a_code_target"
+    #: 이 Case 는 Profile 이 기록되지 않았다(R1 이전). 조용히 채우지 않는다.
+    PROFILE_NOT_RECORDED = "profile_not_recorded"
+    #: controlled 가 아닌 Case 의 체크포인트를 확인하려 했다.
+    CHECKPOINT_NOT_REQUIRED = "checkpoint_not_required"
+    #: 확인 대상이 바뀌었다. 새 대상으로 다시 확인한다(FR-23).
+    CHECKPOINT_SUBJECT_CHANGED = "checkpoint_subject_changed"
+    NOT_EXPLICIT = "not_explicit"

@@ -23,29 +23,38 @@ from controller.repository import (
     AcceptanceRefused,
     ConflictError,
     NotFoundError,
+    PolicyRefused,
     Repository,
 )
 from domain import ids, intent_doc
+from domain import profiles as case_profiles
 from domain.models import (
     AcceptanceMode,
     AcceptanceRefusal,
     AgreementRefusal,
     ArtifactKind,
     AuthoringMode,
+    Autonomy,
     Availability,
     AxisWeight,
+    BudgetMetric,
+    BudgetThreshold,
     CaseKind,
+    CaseProfile,
     CompletionMode,
+    ControlledCheckpoint,
     ConfirmationState,
     ContentOrigin,
     CriterionVerdict,
     DecideAt,
     DecisionKind,
+    DelegationBasisKind,
     EvidenceKind,
     IntentField,
     Permission,
     PreparationStage,
     ReadRequestState,
+    RepositorySelectionSource,
     ReviewMode,
     RunOutcome,
     RunPurpose,
@@ -75,6 +84,16 @@ def _handle(exc: Exception) -> HTTPException:
                 "message": str(exc),
             },
         )
+    if isinstance(exc, PolicyRefused):
+        # 정책 거절도 구조로 돌려준다(P3-R1). 화면과 직접 호출이 같은 코드를 받아야
+        # "왜 이 설정을 받지 않았는가"를 같은 근거로 설명할 수 있다.
+        return HTTPException(
+            status_code=409,
+            detail={
+                "refusals": [r.value for r in exc.refusals],
+                "message": str(exc),
+            },
+        )
     if isinstance(exc, ConflictError):
         return HTTPException(status_code=409, detail=str(exc))
     raise exc
@@ -90,8 +109,19 @@ class ProjectIn(BaseModel):
 
 
 class CaseIn(BaseModel):
+    """Case 생성 입력.
+
+    **P3-R1: `profile` 이 대표 목적의 축이다**(D-62). 주면 그 값이 기록되고
+    `kind` 는 유도된다. 주지 않으면 `kind` 에서 Profile 을 유도하며 그 사실이
+    `profile_source = derived_from_kind` 로 남는다 — 사람의 선택이 아니기 때문이다.
+
+    둘을 함께 주고 서로 맞지 않으면 **거부한다.** 한쪽을 조용히 이기게 만들면
+    기록된 목적과 요청한 목적이 달라진다.
+    """
+
     title: str = Field(min_length=1, max_length=200)
-    kind: CaseKind = CaseKind.FEATURE
+    kind: CaseKind | None = None
+    profile: CaseProfile | None = None
 
 
 class ArtifactIn(BaseModel):
@@ -269,9 +299,21 @@ def create_case(
 ) -> Any:
     repo = _repo(request)
 
+    if payload.profile is not None and payload.kind is not None:
+        expected = case_profiles.KIND_FOR_PROFILE[payload.profile]
+        if expected is not payload.kind:
+            raise HTTPException(
+                status_code=409,
+                detail=f"profile {payload.profile.value} implies kind {expected.value},"
+                f" not {payload.kind.value}",
+            )
+    # 둘 다 없으면 P2-01부터의 기본값(`feature`)을 그대로 쓴다. 기본값이 붙었다는
+    # 사실은 `profile_source = derived_from_kind` 로 남는다.
+    kind = payload.kind or (None if payload.profile else CaseKind.FEATURE)
+
     def produce():
         try:
-            return repo.create_case(project_id, payload.title, payload.kind), 201
+            return repo.create_case(project_id, payload.title, kind, payload.profile), 201
         except (NotFoundError, ConflictError) as exc:
             raise _handle(exc)
 
@@ -317,6 +359,9 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 작업공간 상태도 같은 응답에 담는다(P3-03). "어떤 코드 위에서 어디에 만들고
     # 있는가"와 "왜 쓰기가 아직 열리지 않는가"를 한 화면에서 본다(FR-14).
     case["workspace"] = repo.workspace_view(case_id)
+    # 정책·Profile·예산·저장소도 같은 응답에 담는다(P3-R1). "지금 어떤 확인 경계와
+    # 한도로 진행하는가"와 "그 값이 실제로 강제되는가"를 한 화면에서 본다(FR-14).
+    case["policy"] = repo.effective_policy(case_id)
     return case
 
 
@@ -671,7 +716,11 @@ class IntentCriterionIn(BaseModel):
     """
 
     key: str = Field(min_length=1, max_length=64)
-    relates_to: IntentField = IntentField.EXPECTED_OUTCOME
+    #: **P3-R1: 공통 여섯 항목 또는 그 Profile 의 의미 항목**이다. 열거형을 여섯
+    #: 항목으로 못박아 두면 `improvement_target` 에 걸린 기준이 입력 계약에서
+    #: 거부된다 — 라이브에서 실제로 그렇게 막혔다. 이름의 유효성은 문서 형식
+    #: (`intent_doc.compose`)과 저장 계층(`_field_name`)이 검사한다.
+    relates_to: str = Field(default=IntentField.EXPECTED_OUTCOME.value, max_length=64)
     text: str = Field(min_length=1)
     method: str = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=200)
@@ -808,6 +857,10 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
     """
     repo = _repo(request)
     try:
+        # **P3-R1: 문서 형식은 Case 의 Profile 이 정한다.** 사람이 직접 입력한
+        # 초안도 같은 항목 집합을 쓴다 — 경로에 따라 항목이 달라지면 같은 Case 의
+        # 의도 버전들이 서로 다른 형식이 된다.
+        case = repo.get_case(case_id)
         body = intent_doc.compose(
             fields={k: v.model_dump() for k, v in payload.fields.items()},
             questions=[q.model_dump() for q in payload.questions],
@@ -815,7 +868,11 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
             authored_by=payload.authored_by,
             criteria=[c.model_dump(mode="json") for c in payload.criteria],
             sizing=(payload.sizing.model_dump(mode="json") if payload.sizing else None),
+            profile=case.get("profile"),
+            profile_version=case.get("profile_version"),
         )
+    except NotFoundError as exc:
+        raise _handle(exc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1361,10 +1418,16 @@ class ExceptionIn(BaseModel):
 
 
 class SuccessorCaseIn(BaseModel):
-    """완료 후 수정 요청. 기존 Case 재개가 아니라 연결된 새 Case 다(D-33)."""
+    """완료 후 수정 요청. 기존 Case 재개가 아니라 연결된 새 Case 다(D-33).
+
+    **P3-R1: Profile 도 승계하지 않는다.** 원래 Case 의 목적이 새 Case 의 목적이라고
+    가정하지 않는다 — 완료한 기능의 수정 요청이 결함 수정일 수도, 유지보수일 수도
+    있다. 주지 않으면 `kind` 에서 유도되고 그 사실이 출처에 남는다.
+    """
 
     title: str = Field(min_length=1, max_length=200)
-    kind: CaseKind = CaseKind.FEATURE
+    kind: CaseKind | None = None
+    profile: CaseProfile | None = None
     reason_summary: str = Field(min_length=1, max_length=200)
 
 
@@ -1538,8 +1601,9 @@ def create_successor(
         return _repo(request).create_successor_case(
             from_case_id=case_id,
             title=payload.title,
-            kind=payload.kind,
+            kind=payload.kind or (None if payload.profile else CaseKind.FEATURE),
             reason_summary=payload.reason_summary,
+            profile=payload.profile,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2095,4 +2159,311 @@ def write_slot(request: Request, runner_id: str) -> dict[str, Any]:
     try:
         return _repo(request).write_slot_state(runner_id)
     except NotFoundError as exc:
+        raise _handle(exc)
+
+
+# =============================================================== P3-R1 정책
+#
+# **화면을 거치지 않아도 같은 검사를 받는다.** 아래 경로는 모두 `Repository` 의
+# 같은 함수를 부르며, 거절 사유는 `PolicyRefusal` 코드로 나간다(FR-29 "직접 실행으로
+# 우회하지 않는다").
+#
+# 어떤 경로도 **실행을 열지 않는다.** 정책을 기록하고 조회할 뿐이며, 각 응답은
+# `enforcement` 로 "이 값을 지금 누가 강제하는가"를 함께 말한다.
+
+
+class AutonomyIn(BaseModel):
+    autonomy: Autonomy
+    set_by: str = Field(min_length=1, max_length=100)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+class DelegationBasisIn(BaseModel):
+    basis_kind: DelegationBasisKind
+    summary: str = Field(min_length=1, max_length=200)
+    artifact_id: str | None = None
+    artifact_rev: int | None = Field(default=None, ge=1)
+    decision_id: str | None = None
+
+
+class CheckpointConfirmIn(BaseModel):
+    """controlled 확인 기록.
+
+    `explicit` 를 받는 이유는 P2-02의 동의와 같다 — "진행하라"가 아닌 것을 확인으로
+    적지 않는다(D-14·FR-03). 대상과 그 해시를 함께 받는 이유는 확인이 **그 내용에**
+    붙기 때문이다(FR-23).
+    """
+
+    confirmed_by: str = Field(min_length=1, max_length=100)
+    explicit: bool = False
+    subject_type: str = Field(min_length=1, max_length=40)
+    subject_id: str = Field(min_length=1, max_length=64)
+    subject_hash: str | None = Field(default=None, max_length=128)
+    note_summary: str | None = Field(default=None, max_length=200)
+
+
+class CheckpointSupersedeIn(BaseModel):
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+class BudgetLimitIn(BaseModel):
+    metric: BudgetMetric
+    threshold_kind: BudgetThreshold
+    limit_value: float = Field(gt=0)
+    set_by: str = Field(min_length=1, max_length=100)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+class RepositoryIn(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    repo_path: str = Field(min_length=1)
+    registered_by: str = Field(default="owner", max_length=100)
+
+
+class JournalRepositoryIn(BaseModel):
+    repository_id: str = Field(min_length=1)
+
+
+class CaseRepositoryIn(BaseModel):
+    """Case 의 저장소 선택과 허용 범위.
+
+    **기본값이 없다.** 쓰기·게시 허용은 호출자가 명시해야 한다. 기본값을 참으로
+    두면 선택하는 행동이 곧 권한 부여가 되고, 기본값을 참에서 거짓으로 바꾸는 실수
+    하나로 D-64("쓰기 허용은 게시 허용이 아니다")가 깨진다.
+    """
+
+    repository_id: str = Field(min_length=1)
+    selection_source: RepositorySelectionSource = RepositorySelectionSource.EXPLICIT
+    code_write_allowed: bool
+    publish_allowed: bool
+    selected_by: str = Field(min_length=1, max_length=100)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+@router.get("/api/profiles")
+def list_profiles(request: Request) -> dict[str, Any]:
+    """여섯 Profile 의 현재 정의(D-62).
+
+    화면·지시문·시험이 같은 정의를 보게 한다. 버전을 함께 내보내는 이유는 Case 가
+    자기 버전을 기록하고 그 버전으로 조회하기 때문이다.
+    """
+    return {
+        "current_version": case_profiles.CURRENT_PROFILE_VERSION,
+        "profiles": case_profiles.catalog(),
+        "note": "정의는 의미 계약이며 고정 pipeline 이 아니다. 공개한 버전은 고치지 않고"
+        " 새 버전을 더한다",
+    }
+
+
+@router.get("/api/cases/{case_id}/policy")
+def get_case_policy(request: Request, case_id: str) -> dict[str, Any]:
+    try:
+        return _repo(request).effective_policy(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/autonomy")
+def set_autonomy(request: Request, case_id: str, payload: AutonomyIn) -> dict[str, Any]:
+    """Autonomy 를 명시로 설정한다(D-59).
+
+    **이 설정이 실행 경로를 바꾸지 않는다**(P3-R1). 값과 그 출처가 기록되고,
+    controlled 면 확인 지점이 생긴다. 목적별 진입 조건은 R4 에서 이 값을 읽는다.
+    """
+    try:
+        return _repo(request).set_autonomy(
+            case_id, payload.autonomy, payload.set_by, payload.reason_summary
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/policy-revisions")
+def list_policy_revisions(request: Request, case_id: str) -> list[dict[str, Any]]:
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).list_policy_revisions(case_id)
+
+
+@router.post("/api/cases/{case_id}/delegation-basis", status_code=201)
+def record_delegation_basis(
+    request: Request, case_id: str, payload: DelegationBasisIn
+) -> dict[str, Any]:
+    try:
+        return _repo(request).record_delegation_basis(
+            case_id,
+            payload.basis_kind,
+            payload.summary,
+            payload.artifact_id,
+            payload.artifact_rev,
+            payload.decision_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/controlled-checkpoints")
+def list_checkpoints(request: Request, case_id: str) -> list[dict[str, Any]]:
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).list_checkpoints(case_id)
+
+
+@router.post(
+    "/api/cases/{case_id}/controlled-checkpoints/{checkpoint}/confirmation", status_code=201
+)
+def confirm_checkpoint(
+    request: Request,
+    case_id: str,
+    checkpoint: ControlledCheckpoint,
+    payload: CheckpointConfirmIn,
+) -> list[dict[str, Any]]:
+    """사람이 그 확인 지점을 실제로 확인했다(D-65).
+
+    **이 기록이 권한을 만들지 않는다.** push·게시 허용은 `decisions`, 최종 인수는
+    `acceptance` 의 별도 기록이며 이 응답에는 어느 쪽도 들어 있지 않다.
+    """
+    try:
+        return _repo(request).confirm_checkpoint(
+            case_id,
+            checkpoint,
+            payload.confirmed_by,
+            payload.explicit,
+            payload.subject_type,
+            payload.subject_id,
+            payload.subject_hash,
+            payload.note_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post(
+    "/api/cases/{case_id}/controlled-checkpoints/{checkpoint}/supersede", status_code=201
+)
+def supersede_checkpoint(
+    request: Request,
+    case_id: str,
+    checkpoint: ControlledCheckpoint,
+    payload: CheckpointSupersedeIn,
+) -> list[dict[str, Any]]:
+    """확인한 대상이 바뀌었다. 확인 기록을 남기고 새 요구를 만든다(D-65)."""
+    try:
+        return _repo(request).supersede_checkpoint(
+            case_id, checkpoint, payload.reason_summary
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/budget")
+def get_budget(request: Request, case_id: str) -> dict[str, Any]:
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).budget_state(case_id)
+
+
+@router.put("/api/cases/{case_id}/budget", status_code=201)
+def set_budget(request: Request, case_id: str, payload: BudgetLimitIn) -> dict[str, Any]:
+    """예산 한도를 설정한다(D-56·D-61).
+
+    **강제할 수 없는 정확한 hard 한도는 거부한다.** 저장해 두면 설정한 사람은 상한이
+    있다고 믿는데 시스템은 그것을 지킬 방법이 없다.
+    """
+    try:
+        return _repo(request).set_budget_limit(
+            case_id,
+            payload.metric,
+            payload.threshold_kind,
+            payload.limit_value,
+            payload.set_by,
+            payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.delete("/api/cases/{case_id}/budget/{metric}/{threshold_kind}")
+def clear_budget(
+    request: Request, case_id: str, metric: BudgetMetric, threshold_kind: BudgetThreshold
+) -> dict[str, Any]:
+    try:
+        return _repo(request).clear_budget_limit(case_id, metric, threshold_kind)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/projects/{project_id}/repositories")
+def list_project_repositories(request: Request, project_id: str) -> dict[str, Any]:
+    try:
+        return _repo(request).project_repository_view(project_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/projects/{project_id}/repositories", status_code=201)
+def register_repository(
+    request: Request, project_id: str, payload: RepositoryIn
+) -> dict[str, Any]:
+    """Project 에 저장소를 등록한다(D-38).
+
+    등록은 선택도 허용도 아니다. 어떤 Case 도 이 등록만으로 그 저장소를 쓰지 않는다.
+    """
+    try:
+        return _repo(request).register_project_repository(
+            project_id, payload.name, payload.repo_path, payload.registered_by
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/projects/{project_id}/journal-repository")
+def set_journal_repository(
+    request: Request, project_id: str, payload: JournalRepositoryIn
+) -> dict[str, Any]:
+    """기록 이슈를 만들 저장소를 지정한다(D-17·D-34·FR-30).
+
+    **코드 대상이 아니다.** 이 저장소를 코드 쓰기 대상으로 선택하려는 요청은
+    거부된다.
+    """
+    try:
+        return _repo(request).set_journal_repository(project_id, payload.repository_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/repositories")
+def list_case_repositories(request: Request, case_id: str) -> dict[str, Any]:
+    try:
+        return _repo(request).case_repository_state(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/repositories", status_code=201)
+def select_case_repository(
+    request: Request, case_id: str, payload: CaseRepositoryIn
+) -> dict[str, Any]:
+    """Case 의 저장소 선택과 허용 범위를 기록한다(D-63·D-64).
+
+    **작업공간을 만들지 않는다.** Case×Repo worktree 준비는 R2 이며, 이 기록만으로
+    쓰기 실행이 열리지도 않는다 — 진입 검사는 여전히 P3-03의 단일 작업공간을 본다.
+    """
+    try:
+        return _repo(request).select_case_repository(
+            case_id,
+            payload.repository_id,
+            payload.selection_source,
+            payload.code_write_allowed,
+            payload.publish_allowed,
+            payload.selected_by,
+            payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
