@@ -20,9 +20,9 @@
 | 활성 plan | 없음. 다음 세션이 `plans/P3-PLAN-R4.md`를 작성·공유한 뒤 구현. 완료된 `P3-PLAN-R3`·`P3-PLAN-R2`·`P3-PLAN-R1`·`P3-PLAN-03`을 다시 열지 않음 |
 | 다음 순서 | P3-R4 자동 실행 → P3-04 수직 통합 → P4 → P5 → P6 |
 | 마지막 제품 검증 | P3-R3 보고 기준 **pytest 341 + P1 계약 unittest 18 통과**, 스키마 **v10**, 실제 Codex 라이브 1회의 사용량 집계·정산. [P3-R3 근거](p3/evidence/P3-R3-results.md). R2의 313·R1의 286·P3-03의 242는 그 시점 수치로 보존 |
-| 이 문서 개정 시작 상태 | `main`, HEAD `25f1e95`, 작업 트리 clean으로 관측. **이 세션의 변경은 아직 커밋하지 않았다.** 실제 상태는 `git status --short --branch` 로 확인 |
+| 이 문서 개정 시작 상태 | `main`, HEAD `25f1e95`, 작업 트리 clean으로 관측. 이 세션의 변경은 **사용자 지시로 커밋해 `origin/main`에 push했다**. 실제 커밋은 `git log --oneline 25f1e95..HEAD`, 원격 반영은 로컬/원격 ref로 확인 |
 | 남은 제품 결정 | **`autonomy = NULL`(R1 이전) Case를 어떻게 진행할지는 R4 plan에서 사람에게 확인한다.** P3-04의 실제 시험 기능은 그 작업 시작 시 정한다 |
-| 외부 반영 허용 | **없다.** P3-R3의 변경은 커밋·push하지 않았다. R1·R2에 받은 허용은 그 커밋에만 적용됐고 이 변경으로 확대되지 않는다 — 커밋·push는 사용자 확인 뒤에만 한다 |
+| 외부 반영 허용 | 사용자의 후속 지시로 P3-R3 변경의 커밋과 `origin/main` push를 허용받아 반영했다. **이 허용은 그 커밋에만 적용되며 이후 새 변경·PR·병합으로 확대되지 않는다.** 다음 세션의 변경은 다시 확인받는다. 실제 반영 상태는 로컬/원격 ref로 확인 |
 
 P3-R3 구현은 R1이 기록만 하던 예산을 **실제 배정 판단**으로 바꿨다. 배정 전에 Run 생성과 **같은 트랜잭션**에서 `이미 사용한 양 + 진행 중 예약 + 새 실행 예약 ≤ 한도`를 검사하고(`BEGIN IMMEDIATE`), 종료 후 정산하며, 소비는 역할·Task·저장소·세션·재배정으로 나뉘거나 초기화되지 않는다(D-61). hard 도달은 그 한도를 **소비하는** 새 실행과 재배정만 막고 진행 중 실행의 결과·이벤트·산출물은 계속 받는다 — 완료도 취소도 아니며 `case.status`를 바꾸지 않는다. 재개 경로는 한도 변경 하나뿐이고 `continue` 류의 예외 인자가 없다.
 
@@ -174,8 +174,8 @@ R1의 모델은 R3/R4를 우회하는 실행 권한이 아니고, R2가 붙인 �
 - **라이브가 찾은 결함:** codex 가 `input_tokens: 30600` 을 보고했는데 **집계의 확정값이 0 이었다.** 정산의 확정 조건을 실행 단위로 잡고 `residual_activity == "none"` 을 요구했는데, 실제 어댑터는 그 값을 **항상** `unknown` 으로 보고한다(P1-03). 판단을 **지표 단위**로 옮겼다 — 잔류 프로세스가 더 늘릴 수 있는 것(실행 시간)과 이미 보고된 것(토큰)은 다르다. 회귀 시험은 실제 어댑터와 같은 보고를 쓴다. 상세는 결과 문서 6절.
 - **다음 행동:** 실제 Git 상태 확인 → P3-R4 범위와 [자동화·위임](autonomy-budget-policy.md)·[Profile](case-profiles.md)·[완료](completion-lifecycle.md)·P3-R3 결과 확인 → **P3-PLAN-R4 작성·공유 → R4 구현·검증**. R1~R3의 모델을 재설계하지 않고 그 위에 실행 경로를 붙인다 — 새 자동 실행 경로도 **같은 예약을 지나야 한다**(우회 경로를 만들면 예산이 무의미해진다). P3-04를 먼저 시작하지 않는다.
 - **사람에게 물어야 할 것:** **`autonomy = NULL`(R1 이전) Case 를 어떻게 진행할지.** 미기록을 기본값으로 올려 자동 진행 대상으로 삼지 않는다 — R4 plan에서 확인한다.
-- **작업공간:** 시작 `main`/`25f1e95`, clean 관측. **이 세션의 변경은 커밋하지 않았다.** 새 파일은 `domain/budget.py`, `tests/test_budget.py`, `plans/P3-PLAN-R3.md`, `p3/evidence/P3-R3-*` 이고 수정 파일은 `controller/{admission,db,repository,schema.sql}`, `domain/models.py`, `tests/{conftest,test_migration,test_policy,test_restart_recovery}.py`, `web/src/{api.ts,PolicyPanel.tsx}` 다. 실제 상태는 `git status --short --branch` 로 확인한다.
-- **다음 세션이 이어서 할 때:** `tests/test_migration.py` 의 옛 스키마 조회는 작업 트리가 아니라 **커밋 이력**에서 `git show` 로 찾는다(`_v7_schema`·`_v8_schema`·`_v9_schema`). 새로 더한 `_v9_schema()` 는 `budget_reservation` 이 없는 가장 최근 커밋을 고르므로 이 변경을 커밋한 뒤에도 `25f1e95` 의 스키마를 찾는다. **커밋 후 재실행해 확인할 것** — R1·R2 세션도 push 뒤에 같은 확인을 했다.
+- **작업공간:** 시작 `main`/`25f1e95`, clean 관측. 새 파일 `domain/budget.py`, `tests/test_budget.py`, `plans/P3-PLAN-R3.md`, `p3/evidence/P3-R3-*` 와 수정 파일들(`controller/{admission,db,repository,schema.sql}`, `domain/models.py`, `tests/{conftest,test_migration,test_policy,test_restart_recovery}.py`, `web/src/{api.ts,PolicyPanel.tsx}`)을 **사용자 지시로 커밋하고 `origin/main`에 push했다**(그 허용은 이 변경에만 적용된다). 실제 커밋은 `git log --oneline 25f1e95..HEAD`, 원격 반영은 로컬/원격 ref로 확인한다. 인계 소비 시 실제 상태를 재확인한다.
+- **다음 세션이 이어서 할 때:** 작업 트리는 clean 이고 `origin/main` 과 같다. `tests/test_migration.py` 의 옛 스키마 조회는 작업 트리가 아니라 **커밋 이력**에서 `git show` 로 찾는다(`_v7_schema`·`_v8_schema`·`_v9_schema`). 새로 더한 `_v9_schema()` 는 `budget_reservation` 이 없는 가장 최근 커밋을 고르므로 v10 을 커밋한 뒤에는 `25f1e95` 의 스키마를 찾는다 — **push 뒤 재실행해 확인했다**(5건 통과).
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 종료했다(스크립트가 `finally` 에서 정리하고 로그로 확인). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p3-r3-live` 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 증거 사본은 `p3/evidence/P3-R3-*` 에 있다. R1·R2의 라이브 데이터(`hads-p3-r1-live`·`hads-p3-r2-live`)도 그대로 있다.
 
 ### 이전 인계 — S-012 / 2026-09-21 / P3-R2 Repository·작업공간
