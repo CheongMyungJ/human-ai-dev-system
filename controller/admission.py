@@ -35,7 +35,7 @@ P2-03·P2-04에서는 설계·계획 검토의 구현이 없었으므로 `featur
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from domain.models import (
     AdmissionOutcome,
@@ -161,6 +161,14 @@ class AdmissionRequest:
     #: 이 Case 에서 아직 끝나지 않은 **다른** 쓰기 실행. 같은 Case 의 쓰기는
     #: 직렬화한다(FR-26 "동일 Runner 쓰기 실행은 기본 1개", D-39).
     case_write_runs: list[dict[str, Any]] = field(default_factory=list)
+    #: 이 실행을 배정하면 넘는 hard 예산 한도들(P3-R3). 빈 목록은 **한도가 없거나
+    #: 한도 안**이라는 뜻이고, 둘을 여기서 구분하지 않는 이유는 판정이 같기 때문이다.
+    #:
+    #: 실제 예약은 Run 생성 트랜잭션 안에서 **다시** 검사한다. 여기 있는 것은 "왜
+    #: 실행이 열리지 않았는지"를 사람이 볼 수 있게 하는 층이고(FR-14), 저쪽은 마지막
+    #: 한 칸의 경쟁을 막는 층이다. 두 층이 필요한 이유는 `Repository.create_run()`
+    #: 주석에 있다.
+    budget_breaches: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -445,6 +453,40 @@ def _check_work_graph(request: AdmissionRequest, refuse: Any) -> None:
         refuse(AdmissionRefusal(block["reason"]), block["detail"])
 
 
+def budget_refusal_reason(breaches: list[dict[str, Any]]) -> str:
+    """예산 거부의 사람용 설명. **무엇이 얼마나 찼는지와 그 보장 범위**를 담는다.
+
+    `guarantee` 를 문구에 넣는 이유는 `no_absolute_cap` 한도가 왜 초과된 값을
+    보여 주는지를 같은 자리에서 설명하기 위해서다 — 진행 중 실행을 초 단위로 끊을
+    수 없어 노출이 한도를 넘어설 수 있다(D-61).
+    """
+    detail = "; ".join(
+        f"{b['metric']} {b['exposure']}/{b['limit_value']} {b['unit']} ({b['guarantee']})"
+        for b in breaches
+    )
+    return (
+        f"설정된 hard 한도에 도달했다: {detail}."
+        " 그 한도를 소비하는 새 실행을 배정하지 않는다. 현재 결과·남은 작업은"
+        " 그대로 보존되며, 한도를 바꾸거나 해제하면 다시 배정된다"
+    )
+
+
+def _check_budget(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """설정된 hard 예산이 이 실행을 허용하는가(P3-R3).
+
+    **완료도 취소도 아니다.** 그 한도를 소비하는 새 실행을 배정하지 않을 뿐이며
+    현재 결과·미검증·남은 작업은 그대로 보존된다(autonomy-budget-policy 8절).
+
+    `continue` 류의 예외 인자를 받지 않는 것이 이 함수의 계약이다. 한도를 그대로 둔
+    채 이어 가는 경로가 있으면 hard 는 경고선과 같아진다(D-61).
+    """
+    if request.budget_breaches:
+        refuse(
+            AdmissionRefusal.BUDGET_HARD_LIMIT_REACHED,
+            budget_refusal_reason(request.budget_breaches),
+        )
+
+
 def evaluate(request: AdmissionRequest) -> AdmissionResult:
     """진입 조건을 검사한다. 거부 사유는 **모두** 모은다.
 
@@ -621,6 +663,11 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
 
     if request.purpose in NEEDS_WORK_GRAPH:
         _check_work_graph(request, refuse)
+
+    # **예산은 마지막에 본다.** 앞의 조건들은 "이 실행을 열 수 있는가"이고 이것은
+    # "열어도 되는데 살 수 있는가"이다. 순서를 바꾸면 조건을 갖추지 못한 요청이 예산
+    # 사유로만 거부돼 사람이 엉뚱한 것을 고치게 된다.
+    _check_budget(request, refuse)
 
     outcome = AdmissionOutcome.REFUSED if refusals else AdmissionOutcome.ADMITTED
     return AdmissionResult(

@@ -17,10 +17,29 @@ from typing import Any, Iterable
 from controller import gate as gatemod
 from controller import sizing as sizingmod
 from controller import work_graph as workgraph
-from controller.admission import AdmissionRequest, AdmissionResult
+from controller.admission import AdmissionRequest, AdmissionResult, budget_refusal_reason
 from controller.admission import evaluate as evaluate_admission
-from controller.db import transaction, utc_now
+from controller.db import (
+    context_package_bytes,
+    elapsed_seconds,
+    parse_ts,
+    transaction,
+    utc_now,
+)
 from domain import ids, prep_doc, profiles
+from domain.budget import (
+    RESERVATION_KIND,
+    BudgetGuarantee,
+    ReservationKind,
+    ReservationSource,
+    ReservationState,
+    SettleSource,
+    guarantee_for,
+    measurement_for_settlement,
+    normalize_usage,
+    planned_reservation,
+    reservation_contract,
+)
 from domain.models import (
     BUDGET_MEASUREMENT,
     BUDGET_UNIT,
@@ -28,6 +47,7 @@ from domain.models import (
     AcceptanceMode,
     AcceptanceRefusal,
     AdmissionOutcome,
+    AdmissionRefusal,
     ArtifactKind,
     AuthoringMode,
     Autonomy,
@@ -109,6 +129,18 @@ WRITE_PERMISSIONS = (
 #: 같은 Runner 가 동시에 맡는 쓰기 실행의 기본 수(FR-26·D-55).
 RUNNER_WRITE_LIMIT = 1
 
+#: 보장 범위 → `budget_setting.enforcement` 에 적는 값(P3-R3).
+#:
+#: 표를 따로 두는 이유는 `domain.budget` 이 "무엇을 약속할 수 있는가"만 알고
+#: 저장 표현을 모르게 하기 위해서다. 계약과 컬럼 값이 한 곳에 섞이면 컬럼을 바꿀 때
+#: 계약이 조용히 따라 바뀐다.
+_ENFORCEMENT_FOR_GUARANTEE: dict[BudgetGuarantee, BudgetEnforcement] = {
+    BudgetGuarantee.ABSOLUTE: BudgetEnforcement.ENFORCED_ABSOLUTE,
+    BudgetGuarantee.NO_ABSOLUTE_CAP: BudgetEnforcement.ENFORCED_NO_ABSOLUTE_CAP,
+    BudgetGuarantee.DISPLAY_ONLY: BudgetEnforcement.DISPLAY_ONLY,
+    BudgetGuarantee.NOT_ENFORCEABLE: BudgetEnforcement.NOT_ENFORCEABLE,
+}
+
 
 class ConflictError(Exception):
     """요청이 현재 상태와 맞지 않는다. HTTP 409로 돌려준다."""
@@ -129,6 +161,24 @@ class PolicyRefused(ConflictError):
     def __init__(self, refusals: list[PolicyRefusal]) -> None:
         self.refusals = refusals
         super().__init__("policy refused: " + ", ".join(r.value for r in refusals))
+
+
+class BudgetExhausted(ConflictError):
+    """설정된 hard 예산이 이 실행을 허용하지 않는다(P3-R3).
+
+    **진입 거부(`AdmissionRefusal.BUDGET_HARD_LIMIT_REACHED`)와 짝이지 같은 것이
+    아니다.** 진입 검사는 "왜 실행이 열리지 않았는가"를 사람에게 남기고, 이 예외는
+    Run 생성 트랜잭션 **안에서** 마지막 한 칸의 경쟁을 막는다. 둘 중 하나만 두면
+    앞의 것만으로는 동시 요청이 함께 통과하고, 뒤의 것만으로는 거부 사유가 기록되지
+    않는다(autonomy-budget-policy 8절).
+    """
+
+    def __init__(self, breaches: list[dict[str, Any]]) -> None:
+        self.breaches = breaches
+        super().__init__(
+            "budget hard limit reached: "
+            + ", ".join(str(b.get("metric")) for b in breaches)
+        )
 
 
 class AcceptanceRefused(ConflictError):
@@ -771,6 +821,7 @@ class Repository:
         instruction_artifact_rev: int,
         purpose: RunPurpose = RunPurpose.LIMITED_ANALYSIS,
         repository_id: str | None = None,
+        context_refs: list[dict[str, Any]] | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
@@ -780,6 +831,14 @@ class Repository:
         **진입 조건 검사는 여기서 하지 않는다.** `admit_and_create_run()` 이 검사한
         뒤에 이 메서드를 부른다. 두 가지를 한 함수에 섞으면 "검사를 건너뛰는 생성
         경로"가 생기기 때문에 호출 순서를 그 한 곳으로 모은다.
+
+        **P3-R3: 예산 검사와 예약만은 여기서 한다.** 진입 검사에도 같은 판정이
+        있지만(그래야 거부 사유가 기록된다) 그것만으로는 마지막 한 칸을 두 요청이
+        함께 통과한다. 검사·Run 생성·예약이 **한 트랜잭션**이어야 하고, 그 트랜잭션은
+        여기에 있다. 넘으면 `BudgetExhausted` 를 던진다.
+
+        고정 컨텍스트 참조도 같은 트랜잭션에서 넣는다. 예약한 `context_bytes` 가
+        실제로 들어간 참조와 어긋나지 않게 하기 위해서다.
         """
         existing = self.conn.execute("SELECT * FROM run WHERE run_id = ?", (run_id,)).fetchone()
         if existing is not None:
@@ -793,8 +852,24 @@ class Repository:
                 f"instruction artifact is {ref['availability']}, not available for execution"
             )
         now = utc_now()
+        refs = list(context_refs or [])
+        want = planned_reservation(
+            role,
+            context_package_bytes(
+                self.conn,
+                instruction_artifact_id,
+                instruction_artifact_rev,
+                [(r["artifact_id"], r["revision"]) for r in refs],
+            ),
+        )
         try:
             with transaction(self.conn):
+                # **BEGIN IMMEDIATE 안이다.** 읽고 → 판단하고 → 넣는 사이에 다른
+                # 연결이 끼어들 수 없다. 이 검사를 트랜잭션 밖으로 옮기면 동시
+                # 요청 둘이 같은 잔여량을 보고 함께 통과한다(D-61).
+                breaches = self._budget_breaches(case_id, want, now)
+                if breaches:
+                    raise BudgetExhausted(breaches)
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
@@ -818,6 +893,10 @@ class Repository:
                         # 아니라 기록되지 않음이다(P3-R2).
                         repository_id,
                     ),
+                )
+                self._insert_context_refs(run_id, refs)
+                self._reserve_budget(
+                    case_id, run_id, 1, role, purpose, want, now
                 )
         except sqlite3.IntegrityError:
             # 동시에 같은 run_id 가 들어온 경우에도 새 실행을 만들지 않는다.
@@ -963,11 +1042,40 @@ class Repository:
         run = self.get_run(run_id)
         if run["status"] == RunStatus.FINISHED.value:
             raise ConflictError("run already finished")
+        now = utc_now()
+        # **재배정은 새 소비다.** 다시 배정하면 CLI 가 다시 불리고 그것은 새 호출이다
+        # (autonomy-budget-policy 7절 "재시작된 실제 AI 호출은 새 소비"). 같은
+        # `run_id` 라는 이유로 두 번째 호출을 공짜로 두면 한도가 재배정 횟수만큼
+        # 늘어난다. 예산이 없으면 재배정하지 않는다.
+        refs = [
+            (r["artifact_id"], r["revision"]) for r in self.list_context_refs(run_id)
+        ]
+        want = planned_reservation(
+            RunRole(run["role"]),
+            context_package_bytes(
+                self.conn,
+                run["instruction_artifact_id"],
+                run["instruction_artifact_rev"],
+                refs,
+            ),
+        )
         with transaction(self.conn):
+            breaches = self._budget_breaches(run["case_id"], want, now)
+            if breaches:
+                raise BudgetExhausted(breaches)
             self.conn.execute(
                 "UPDATE run SET assignment_generation = assignment_generation + 1,"
                 " status = ?, assigned_runner_id = NULL, assigned_at = NULL WHERE run_id = ?",
                 (RunStatus.PENDING.value, run_id),
+            )
+            self._reserve_budget(
+                run["case_id"],
+                run_id,
+                run["assignment_generation"] + 1,
+                RunRole(run["role"]),
+                RunPurpose(run["purpose"]) if run.get("purpose") else RunPurpose.LIMITED_ANALYSIS,
+                want,
+                now,
             )
         return self.get_run(run_id)
 
@@ -1042,10 +1150,13 @@ class Repository:
         run = self._check_generation(run_id, generation)
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
+                # **중복 청구가 생기지 않는 자리가 여기다.** 정산은 이 가드 뒤에
+                # 있으므로 같은 결과를 다시 보내도 예약이 두 번 정산되지 않는다.
                 return run  # 같은 결과의 재전송. 덮어쓰지 않는다
             raise ConflictError(
                 f"run already finished with outcome {run['outcome']}; refusing to overwrite"
             )
+        finished_at = utc_now()
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE run SET status = ?, outcome = ?, exit_code = ?, output_artifact_id = ?,"
@@ -1063,9 +1174,21 @@ class Repository:
                     json.dumps(workspace_effect) if workspace_effect else None,
                     residual_activity,
                     observed_tool_version,
-                    utc_now(),
+                    finished_at,
                     run_id,
                 ),
+            )
+            # **같은 트랜잭션에서 정산한다.** 결과는 기록됐는데 예약이 잡힌 채로
+            # 남으면 그 Case 는 영원히 소진 상태가 된다.
+            self._settle_budget(
+                {
+                    **run,
+                    "outcome": outcome.value,
+                    "residual_activity": residual_activity,
+                    "finished_at": finished_at,
+                },
+                usage,
+                finished_at,
             )
         return self.get_run(run_id)
 
@@ -2000,6 +2123,32 @@ class Repository:
 
     # ------------------------------------------------------ FR-29 진입 조건 검사
 
+    def _planned_reservation_for(
+        self,
+        case_id: str,
+        purpose: RunPurpose,
+        role: RunRole,
+        instruction_artifact_id: str,
+        instruction_artifact_rev: int,
+    ) -> dict[BudgetMetric, float | None]:
+        """이 요청이 잡게 될 예산(P3-R3).
+
+        **진입 검사와 생성이 같은 값을 봐야 한다.** 두 곳에서 따로 계산하면 한쪽만
+        고쳐졌을 때 "검사는 통과했는데 생성이 막히는" 상태가 조용히 생긴다.
+        """
+        return planned_reservation(
+            role,
+            context_package_bytes(
+                self.conn,
+                instruction_artifact_id,
+                instruction_artifact_rev,
+                [
+                    (r["artifact_id"], r["revision"])
+                    for r in self.compose_context_refs(case_id, purpose)
+                ],
+            ),
+        )
+
     def check_admission(
         self,
         case_id: str,
@@ -2073,6 +2222,13 @@ class Repository:
             # 작업공간이 둘 이상이면 고르지 않고 거부한다.
             workspace_state=self.workspace_state(case_id, repository_id),
             case_write_runs=self.unfinished_write_runs(case_id=case_id),
+            # **예산도 지금 DB 에서 다시 읽는다**(P3-R3). 같은 규칙이다 — 메모리에
+            # "이 Case 는 예산이 남았다"를 두면 재시작으로 우회된다.
+            budget_breaches=self._budget_breaches(
+                case_id, self._planned_reservation_for(case_id, purpose, role,
+                                                       instruction_artifact_id,
+                                                       instruction_artifact_rev)
+            ),
         )
         return evaluate_admission(request)
 
@@ -2191,24 +2347,47 @@ class Repository:
             )
             return None, False, result, check
 
-        run, created = self.create_run(
-            run_id=run_id,
-            case_id=case_id,
-            task_id=task_id,
-            role=role,
-            tool_id=tool_id,
-            mode=mode,
-            permission=permission,
-            instruction_artifact_id=instruction_artifact_id,
-            instruction_artifact_rev=instruction_artifact_rev,
-            purpose=purpose,
-            repository_id=repository_id,
-        )
-        if created:
-            # **고정 컨텍스트를 여기서 정한다.** 배정 시점이 아니라 생성 시점에
-            # 고정하는 이유는 "실행이 무엇을 보고 썼는가"가 재배정으로 달라지면
-            # 안 되기 때문이다(review-context-contract 2절 "버전이 고정된 참조 목록").
-            self.record_context_refs(run["run_id"], self.compose_context_refs(case_id, purpose))
+        try:
+            run, created = self.create_run(
+                run_id=run_id,
+                case_id=case_id,
+                task_id=task_id,
+                role=role,
+                tool_id=tool_id,
+                mode=mode,
+                permission=permission,
+                instruction_artifact_id=instruction_artifact_id,
+                instruction_artifact_rev=instruction_artifact_rev,
+                purpose=purpose,
+                repository_id=repository_id,
+                # **고정 컨텍스트를 여기서 정한다.** 배정 시점이 아니라 생성 시점에
+                # 고정하는 이유는 "실행이 무엇을 보고 썼는가"가 재배정으로 달라지면
+                # 안 되기 때문이다(review-context-contract 2절). P3-R3 부터는 Run
+                # 행·예약과 **같은 트랜잭션**에 들어간다 — 예약한 `context_bytes` 가
+                # 실제 참조와 어긋나지 않게 하기 위해서다.
+                context_refs=self.compose_context_refs(case_id, purpose),
+            )
+        except BudgetExhausted as exhausted:
+            # 위의 진입 검사는 통과했는데 트랜잭션 안에서 막혔다 = **경쟁에서 졌다.**
+            # 마지막 한 칸을 다른 요청이 먼저 가져갔다는 뜻이다. 이것도 거부로
+            # 기록한다 — 기록되지 않으면 사람은 실행이 사라진 이유를 알 수 없다.
+            result = AdmissionResult(
+                outcome=AdmissionOutcome.REFUSED,
+                profile=result.profile,
+                refusals=[AdmissionRefusal.BUDGET_HARD_LIMIT_REACHED],
+                reasons={
+                    AdmissionRefusal.BUDGET_HARD_LIMIT_REACHED.value: budget_refusal_reason(
+                        exhausted.breaches
+                    )
+                },
+                intent_version_id=result.intent_version_id,
+                intent_agreement_state=result.intent_agreement_state,
+                gate_verdict=result.gate_verdict,
+            )
+            check = self.record_admission(
+                case_id, run_id, task_id, purpose, role, permission, tool_id, result, None
+            )
+            return None, False, result, check
         check = self.record_admission(
             case_id, run_id, task_id, purpose, role, permission, tool_id, result, run["run_id"]
         )
@@ -3817,21 +3996,30 @@ class Repository:
                     add(ContextRefRole.PREVIOUS_PLAN, plan["artifact_id"], plan["artifact_rev"])
         return refs
 
-    def record_context_refs(self, run_id: str, refs: list[dict[str, Any]]) -> None:
-        with transaction(self.conn):
-            for seq, ref in enumerate(refs, start=1):
-                self.conn.execute(
-                    "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
-                    " VALUES (?, ?, ?, ?, ?)"
-                    " ON CONFLICT(run_id, seq) DO NOTHING",
-                    (
-                        run_id,
-                        seq,
-                        ContextRefRole(ref["role"]).value,
-                        ref["artifact_id"],
-                        int(ref["revision"]),
-                    ),
-                )
+    def _insert_context_refs(self, run_id: str, refs: list[dict[str, Any]]) -> None:
+        """고정 컨텍스트 참조를 넣는다. **호출자의 트랜잭션 안에서 돈다**(P3-R3).
+
+        여기서 트랜잭션을 열지 않는 이유는 Run 행·예약·참조가 한 트랜잭션이어야
+        하기 때문이다 — 예약한 `context_bytes` 는 이 참조들의 크기 합이고, 둘이 다른
+        트랜잭션이면 참조 없는 Run 에 크기만 잡힌 예약이 남을 수 있다.
+
+        `ContextRefRole(...)` 로 이름을 검증한다. **모르는 역할 이름을 그대로 넣지
+        않는다** — 넣으면 조회가 해석할 수 없는 참조가 생기고, 그 참조가 가리키는
+        원문을 실행이 읽어야 하는지 아무도 답할 수 없다.
+        """
+        for seq, ref in enumerate(refs, start=1):
+            self.conn.execute(
+                "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
+                " VALUES (?, ?, ?, ?, ?)"
+                " ON CONFLICT(run_id, seq) DO NOTHING",
+                (
+                    run_id,
+                    seq,
+                    ContextRefRole(ref["role"]).value,
+                    ref["artifact_id"],
+                    int(ref["revision"]),
+                ),
+            )
 
     def list_context_refs(self, run_id: str) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -5152,10 +5340,10 @@ class Repository:
 
     # =================================================== P3-R1 정책·Profile
     #
-    # **여기 있는 것은 기록이고 강제가 아니다.** 어떤 메서드도 실행을 열거나 막지
-    # 않는다. Autonomy 에 따른 진입 조건은 R4, 예산 예약·정지는 R3, Case×Repo
-    # 작업공간과 허용 내 자동 추가는 R2 다. 조회 결과가 그 사실을 말한다
-    # (`ENFORCEMENT` 표).
+    # R1 이 만든 것은 **기록**이다. 그 위에 강제가 하나씩 붙었다 — R2 가 저장소
+    # 선택·쓰기 허용을, R3 이 예산을 실제 판단으로 바꿨다. **Autonomy 에 따른 진입
+    # 조건과 확인 지점은 아직 R4 이고 게시는 P5 다.** 어느 축이 지금 무엇을 하는지는
+    # `ENFORCEMENT` 표가 말하며 조회에 그대로 실려 나간다.
 
     #: 각 정책 축을 **지금 누가 강제하는가.** 조회에 그대로 실려 나간다.
     #:
@@ -5175,10 +5363,16 @@ class Repository:
             "detail": "확인 지점과 확인 기록은 남지만 확인하지 않은 상태가 실행·게시를"
             " 막지는 않는다",
         },
+        # **P3-R3에서 바뀐 축.** 한도가 실제로 배정을 정한다. 다만 지표마다 약속할
+        # 수 있는 것이 달라서 한 문장으로 "강제한다"고 쓰지 않는다 — 실행 수·컨텍스트
+        # 크기는 절대 상한이고 시간은 새 배정만 막는다(`reservation_contract`).
         "budget": {
-            "state": "recorded_not_enforced",
+            "state": "enforced",
             "enforced_by": "P3-R3",
-            "detail": "한도는 기록된다. 예약·누적·hard 도달 시 배정 중지는 아직 없다",
+            "detail": "예약·누적·정산이 동작하고 hard 도달은 그 한도를 소비하는 새 실행"
+            "·재배정을 막는다. 보장 범위는 지표마다 다르다 — 실행 수·검토 수·컨텍스트"
+            " 크기는 절대 상한이고, 시간 지표는 새 배정만 막으며 진행 중 실행의 초과"
+            " 노출이 있을 수 있다. 토큰·비용의 hard 한도는 여전히 설정을 받지 않는다",
         },
         # **P3-R2에서 바뀐 축.** 선택과 쓰기 허용은 이제 작업공간을 만들 수 있는지를
         # 실제로 정한다. 게시 허용은 아래 `publish` 가 따로 말하며 여전히 기록일
@@ -5582,6 +5776,11 @@ class Repository:
         지킬 방법이 없는 상태가 된다.
 
         경고선(`warn`)은 추정 지표에도 받는다. 경고는 표시이며 보장이 아니다.
+
+        **P3-R3: 받은 한도가 무엇을 약속하는지 행에 남긴다.** 실행 수·컨텍스트 크기는
+        예약이 정확해 절대 상한을 지킬 수 있고, 시간 지표는 새 배정만 막을 수 있다 —
+        돌고 있는 CLI 를 초 단위로 끊을 능력이 없기 때문이다(P1-03). 둘을 같은 값으로
+        적으면 없는 보장을 표시한 것이 된다(`domain.budget.guarantee_for`).
         """
         self._guard_policy_change(case_id)
         self.get_case(case_id)
@@ -5589,10 +5788,8 @@ class Repository:
         if limit_value <= 0:
             refusals.append(PolicyRefusal.LIMIT_NOT_POSITIVE)
         measurement = BUDGET_MEASUREMENT[metric]
-        if (
-            threshold_kind is BudgetThreshold.HARD
-            and measurement is not BudgetMeasurement.EXACT
-        ):
+        guarantee = guarantee_for(metric, threshold_kind)
+        if guarantee is BudgetGuarantee.NOT_ENFORCEABLE:
             refusals.append(PolicyRefusal.HARD_LIMIT_NOT_ENFORCEABLE)
         if refusals:
             raise PolicyRefused(refusals)
@@ -5631,7 +5828,7 @@ class Repository:
                     float(limit_value),
                     BUDGET_UNIT[metric],
                     measurement.value,
-                    BudgetEnforcement.RECORDED_NOT_ENFORCED.value,
+                    _ENFORCEMENT_FOR_GUARANTEE[guarantee].value,
                     self.ENFORCEMENT["budget"]["enforced_by"],
                     POLICY_VERSION,
                     set_by,
@@ -5663,31 +5860,488 @@ class Repository:
             )
         return self.budget_state(case_id)
 
+    # ----------------------------------------------- 예약·집계·정지 (R3)
+    #
+    # **집계의 출처는 `budget_reservation` 하나다.** `run` 표에서 따로 세고 여기서도
+    # 세면 두 수가 갈라지고, 갈라지면 어느 쪽이 한도인지 아무도 말할 수 없다.
+    # R3 이전 실행은 v10 이행이 같은 표에 넣어 두었다.
+
+    def _current_limits(
+        self, case_id: str, threshold_kind: BudgetThreshold
+    ) -> dict[BudgetMetric, dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM budget_setting WHERE case_id = ? AND state = ?"
+            " AND threshold_kind = ?",
+            (case_id, PolicyState.CURRENT.value, threshold_kind.value),
+        ).fetchall()
+        return {BudgetMetric(r["metric"]): dict(r) for r in rows}
+
+    def _metric_exposure(
+        self, case_id: str, now: str | None = None
+    ) -> dict[str, dict[str, Any]]:
+        """지표별 **확정 사용량과 노출.**
+
+        셋을 구분한다.
+
+            `settled`     실제 사용량이 확정됐다
+            `held`        진행 중 실행이 잡고 있다. 시간은 지금까지 관측된 만큼
+            `unresolved`  실행은 끝났는데 얼마인지 모른다. **해제하지 않는다** —
+                          "확인 전에 잔여량을 낙관적으로 복구하지 않는다"(7절)
+
+        `exposure` 는 셋의 합이며 **한도 판정에 쓰는 값**이다. `settled` 만 보고
+        판정하면 진행 중 실행과 결과 불명이 공짜가 된다.
+
+        `complete` 는 "이 수가 실제 소비 전부인가"이다. 어댑터가 토큰을 주지 않은
+        실행이 하나라도 있으면 `False` 이고, 그때 **모자란 만큼을 0으로 채우지
+        않는다**(D-61 "미제공을 0으로 기록하지 않는다").
+        """
+        now = now or utc_now()
+        out: dict[str, dict[str, Any]] = {
+            m.value: {
+                "metric": m.value,
+                "unit": BUDGET_UNIT[m],
+                "settled": 0.0,
+                "held": 0.0,
+                "unresolved": 0.0,
+                "exposure": 0.0,
+                "reservation": RESERVATION_KIND[m].value,
+                "measurement": BUDGET_MEASUREMENT[m].value,
+                "runs_counted": 0,
+                "runs_unknown": 0,
+                "runs_in_flight": 0,
+                "complete": True,
+            }
+            for m in BudgetMetric
+        }
+
+        # 벽시계는 예약 행이 없다. Case 시작 시각에서 도출한다 — 배정을 멈춰도
+        # 줄지 않는 값을 예약으로 표현하면 거짓말이 된다.
+        case = self.get_case(case_id)
+        elapsed = elapsed_seconds(case["created_at"], now)
+        clock = out[BudgetMetric.ELAPSED_SECONDS.value]
+        clock["settled"] = elapsed if elapsed is not None else 0.0
+        clock["complete"] = elapsed is not None
+        clock["source"] = "case_created_at"
+
+        rows = self.conn.execute(
+            "SELECT b.*, r.assigned_at FROM budget_reservation b"
+            " JOIN run r ON r.run_id = b.run_id WHERE b.case_id = ?",
+            (case_id,),
+        ).fetchall()
+        for row in rows:
+            bucket = out[row["metric"]]
+            state = row["state"]
+            actual = row["actual_value"]
+            reserved = row["reserved_value"]
+            if state == ReservationState.HELD.value:
+                bucket["runs_in_flight"] += 1
+                if reserved is not None:
+                    value = float(reserved)
+                elif row["reservation_kind"] == ReservationKind.OPEN_ENDED_PER_RUN.value:
+                    # 진행 중 실행의 시간은 **지금까지 관측된 만큼**이다. 아직
+                    # 배정되지 않았으면 0 이며 그것은 관측 사실이다.
+                    observed = elapsed_seconds(row["assigned_at"], now)
+                    value = observed if observed is not None else 0.0
+                else:
+                    value = 0.0
+                bucket["held"] += value
+            elif state == ReservationState.UNRESOLVED.value:
+                bucket["runs_unknown"] += 1
+                bucket["complete"] = False
+                if actual is not None:
+                    bucket["unresolved"] += float(actual)
+                elif reserved is not None:
+                    bucket["unresolved"] += float(reserved)
+            else:
+                bucket["runs_counted"] += 1
+                if actual is not None:
+                    bucket["settled"] += float(actual)
+
+        for bucket in out.values():
+            if bucket["runs_in_flight"]:
+                bucket["complete"] = False
+            bucket["exposure"] = round(
+                bucket["settled"] + bucket["held"] + bucket["unresolved"], 6
+            )
+            for key in ("settled", "held", "unresolved"):
+                bucket[key] = round(bucket[key], 6)
+        return out
+
+    def _budget_breaches(
+        self,
+        case_id: str,
+        want: dict[BudgetMetric, float | None],
+        now: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """이 실행을 배정하면 넘는 hard 한도들.
+
+        **검사 대상은 그 실행이 실제로 소비하는 지표뿐이다.** 검토 한도가 소진돼도
+        작성 실행은 막히지 않는다 — hard 는 "해당 한도를 소비하는 새 실행"을 막는
+        것이지 Case 전체를 잠그는 것이 아니다(autonomy-budget-policy 8절).
+
+        벽시계(`elapsed_seconds`)만 예외로 모든 실행에 적용된다. 기한이 지난 뒤에
+        시작하는 실행은 종류를 가리지 않고 그 기한을 넘기 때문이다.
+        """
+        limits = self._current_limits(case_id, BudgetThreshold.HARD)
+        if not limits:
+            return []
+        exposure = self._metric_exposure(case_id, now)
+        checked = set(want) | {BudgetMetric.ELAPSED_SECONDS}
+        breaches: list[dict[str, Any]] = []
+        for metric in sorted(checked, key=lambda m: m.value):
+            limit = limits.get(metric)
+            if limit is None:
+                continue
+            current = exposure[metric.value]["exposure"]
+            adding = want.get(metric)
+            if adding is None:
+                # 얼마를 더할지 모르는 지표(시간). 남은 칸이 없을 때만 막는다 —
+                # 이것이 `no_absolute_cap` 의 실제 내용이다.
+                projected = current
+                over = current >= float(limit["limit_value"])
+            else:
+                projected = current + float(adding)
+                over = projected > float(limit["limit_value"])
+            if over:
+                breaches.append(
+                    {
+                        "metric": metric.value,
+                        "limit_value": float(limit["limit_value"]),
+                        "unit": limit["unit"],
+                        "exposure": current,
+                        "would_be": round(projected, 6),
+                        "guarantee": guarantee_for(metric, BudgetThreshold.HARD).value,
+                        "complete": exposure[metric.value]["complete"],
+                    }
+                )
+        return breaches
+
+    def _reserve_budget(
+        self,
+        case_id: str,
+        run_id: str,
+        generation: int,
+        role: RunRole,
+        purpose: RunPurpose,
+        want: dict[BudgetMetric, float | None],
+        now: str,
+    ) -> None:
+        """예약 행을 넣는다. **호출자의 트랜잭션 안에서 돈다.**
+
+        여기서 따로 트랜잭션을 열지 않는 것이 핵심이다 — 검사와 Run 생성과 예약이
+        한 트랜잭션이어야 마지막 한 칸을 두 요청이 함께 통과하지 못한다.
+        """
+        for metric, value in want.items():
+            self.conn.execute(
+                "INSERT OR IGNORE INTO budget_reservation"
+                " (id, case_id, run_id, generation, metric, reserved_value, actual_value,"
+                "  measurement, reservation_kind, role, purpose, state, source,"
+                "  settle_source, reserved_at, settled_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)",
+                (
+                    ids.new_id("budres"),
+                    case_id,
+                    run_id,
+                    generation,
+                    metric.value,
+                    None if value is None else float(value),
+                    # 예약 시점에는 아직 잰 것이 없다. 지표의 정적 계약을 여기 적으면
+                    # 받은 적 없는 값이 있는 것처럼 보인다.
+                    BudgetMeasurement.UNAVAILABLE.value,
+                    RESERVATION_KIND[metric].value,
+                    role.value,
+                    purpose.value,
+                    ReservationState.HELD.value,
+                    ReservationSource.RESERVED.value,
+                    now,
+                ),
+            )
+
+    def _settle_budget(self, run: dict[str, Any], usage: Any, now: str) -> None:
+        """실행이 끝났다. 예약을 정산한다. **호출자의 트랜잭션 안에서 돈다.**
+
+        **판단은 실행 단위가 아니라 지표 단위다.** 결과가 불명확하다는 사실이 모든
+        지표를 똑같이 모르게 만들지는 않기 때문이다.
+
+        1. `exact_per_run`(실행 수·검토 수·컨텍스트 크기) 은 **언제나 확정된다.**
+           실패·취소·결과 불명이어도 호출은 실제로 있었고 전달한 패키지의 크기도
+           이미 정해져 있다. 이 값들은 잔류 프로세스가 있어도 더 커지지 않는다.
+        2. `open_ended_per_run`(실행 시간) 은 시계에서 도출하되
+           (`assigned_at → finished_at`) **결과가 `unknown` 이거나 잔류 활동이
+           `none` 이 아니면 `unresolved` 로 남긴다.** 프로세스가 남아 있으면 관측한
+           값이 최종이라는 근거가 없다(autonomy-budget-policy 7절).
+        3. `post_hoc_reported`(토큰·비용) 은 **어댑터가 준 값을 그대로 확정한다.**
+           주지 않았으면 `unresolved`·`unavailable` 이다. 잔류 프로세스가 있다는
+           사실이 이미 보고된 수를 모르게 만들지는 않는다 — 실제 어댑터는
+           `residual_activity` 를 항상 `unknown` 으로 보고하므로(P1-03), 그것을
+           확정 조건으로 쓰면 받은 관측을 전부 버리게 된다. 값이 `estimated` 라는
+           사실은 `measurement` 가 따로 말한다.
+
+        **셋을 실행 단위 하나로 묶으면 두 방향으로 틀린다.** 느슨하게 묶으면 잔류
+        프로세스가 있는데 시간을 확정으로 적고, 엄격하게 묶으면 실제로 돈 실행 수마저
+        "모른다"가 되어 집계가 아무 것도 말하지 못한다 — 지금 실제 CLI 어댑터는
+        `residual_activity` 를 항상 `unknown` 으로 보고한다(P1-03).
+
+        어댑터가 주지 않은 토큰·비용은 `unresolved`·`unavailable` 이며 **0 이
+        아니다.** 0 으로 적으면 한도가 영원히 남아 있는 것처럼 보인다.
+        """
+        run_id = run["run_id"]
+        generation = run["assignment_generation"]
+        outcome = run.get("outcome")
+        residual = run.get("residual_activity")
+        confirmed = outcome != RunOutcome.UNKNOWN.value and residual == "none"
+        unconfirmed_reason = (
+            SettleSource.OUTCOME_UNKNOWN.value
+            if outcome == RunOutcome.UNKNOWN.value
+            else SettleSource.RESIDUAL_ACTIVITY.value
+        )
+        seconds = elapsed_seconds(run.get("assigned_at"), run.get("finished_at"))
+        reported = normalize_usage(usage)
+
+        held = self.conn.execute(
+            "SELECT * FROM budget_reservation WHERE run_id = ? AND generation = ?"
+            " AND state = ?",
+            (run_id, generation, ReservationState.HELD.value),
+        ).fetchall()
+        for row in held:
+            metric = BudgetMetric(row["metric"])
+            kind = ReservationKind(row["reservation_kind"])
+            if kind is ReservationKind.EXACT_PER_RUN:
+                # **잔류 활동이 이 값을 더 키우지 않는다.** 호출은 이미 있었고
+                # 전달한 패키지의 크기도 정해졌다. 여기서 `unresolved` 로 두면
+                # "몇 번 실행했는지 모른다"가 되어 집계가 무의미해진다.
+                actual: float | None = (
+                    None if row["reserved_value"] is None else float(row["reserved_value"])
+                )
+                source = SettleSource.RESERVED_EXACT.value
+                state = (
+                    ReservationState.SETTLED.value
+                    if actual is not None
+                    else ReservationState.UNRESOLVED.value
+                )
+            else:
+                actual = seconds
+                source = (
+                    SettleSource.OBSERVED_CLOCK.value
+                    if seconds is not None
+                    else SettleSource.CLOCK_UNAVAILABLE.value
+                )
+                if actual is None:
+                    state = ReservationState.UNRESOLVED.value
+                elif not confirmed:
+                    # 값은 남기되 **최종이라고 적지 않는다.** 프로세스가 남아 있으면
+                    # 더 늘 수 있고, 노출에는 관측한 만큼이 들어간다.
+                    state = ReservationState.UNRESOLVED.value
+                    source = unconfirmed_reason
+                else:
+                    state = ReservationState.SETTLED.value
+            self.conn.execute(
+                "UPDATE budget_reservation SET actual_value = ?, measurement = ?,"
+                " state = ?, settle_source = ?, settled_at = ? WHERE id = ?",
+                (
+                    actual,
+                    measurement_for_settlement(metric, actual).value,
+                    state,
+                    source,
+                    now,
+                    row["id"],
+                ),
+            )
+
+        # 사후 보고 지표는 **정산 시점에 행이 생긴다.** 실행 전에는 잡을 근거가 전혀
+        # 없고, 그렇다고 보고된 소비를 버리면 경고선이 아무 것도 보지 못한다.
+        for metric in (
+            BudgetMetric.INPUT_TOKENS,
+            BudgetMetric.OUTPUT_TOKENS,
+            BudgetMetric.ESTIMATED_COST,
+        ):
+            value = reported.get(metric)
+            if value is not None:
+                # **받은 수를 버리지 않는다.** 잔류 프로세스가 더 쓸 수 있다는 것은
+                # 추측이고, 이 값은 관측이다. 추정값이라는 사실은 `measurement` 가
+                # 따로 말한다.
+                state = ReservationState.SETTLED.value
+                source = SettleSource.ADAPTER_REPORTED.value
+            elif outcome == RunOutcome.UNKNOWN.value:
+                state = ReservationState.UNRESOLVED.value
+                source = SettleSource.OUTCOME_UNKNOWN.value
+            else:
+                state = ReservationState.UNRESOLVED.value
+                source = SettleSource.ADAPTER_NOT_REPORTED.value
+            self.conn.execute(
+                "INSERT OR IGNORE INTO budget_reservation"
+                " (id, case_id, run_id, generation, metric, reserved_value, actual_value,"
+                "  measurement, reservation_kind, role, purpose, state, source,"
+                "  settle_source, reserved_at, settled_at)"
+                " VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("budres"),
+                    run["case_id"],
+                    run_id,
+                    generation,
+                    metric.value,
+                    value,
+                    measurement_for_settlement(metric, value).value,
+                    ReservationKind.POST_HOC_REPORTED.value,
+                    run["role"],
+                    run.get("purpose") or "",
+                    state,
+                    ReservationSource.RESERVED.value,
+                    source,
+                    now,
+                    now,
+                ),
+            )
+
+    def budget_stop(self, case_id: str, now: str | None = None) -> dict[str, Any]:
+        """예산 때문에 **새 실행을 시작할 수 없는가.**
+
+        **도출한다. 저장하지 않는다.** hard 도달은 완료도 취소도 아니고
+        (autonomy-budget-policy 8절), 한도를 올리면 그 순간 다시 진행할 수 있어야
+        한다 — 상태를 컬럼에 적어 두면 그것을 되돌리는 경로가 또 필요해지고, 그
+        경로가 곧 `continue` 우회가 된다.
+
+        막는 것은 **새 실행 생성과 재배정 하나뿐이다.** 결과 보고·이벤트 수신·산출물
+        저장·기존 기록 조회는 계속 받는다. 정리라는 이름의 새 AI 실행도 막는다.
+        """
+        limits = self._current_limits(case_id, BudgetThreshold.HARD)
+        if not limits:
+            return {
+                "stopped": False,
+                "metrics": [],
+                "detail": "설정된 hard 한도가 없다. 기본 무제한이다(D-56)",
+                "resume": None,
+            }
+        exposure = self._metric_exposure(case_id, now)
+        reached = []
+        for metric, limit in sorted(limits.items(), key=lambda kv: kv[0].value):
+            current = exposure[metric.value]["exposure"]
+            if current >= float(limit["limit_value"]):
+                reached.append(
+                    {
+                        "metric": metric.value,
+                        "limit_value": float(limit["limit_value"]),
+                        "unit": limit["unit"],
+                        "exposure": current,
+                        "guarantee": guarantee_for(metric, BudgetThreshold.HARD).value,
+                        "complete": exposure[metric.value]["complete"],
+                    }
+                )
+        return {
+            "stopped": bool(reached),
+            "metrics": reached,
+            "detail": (
+                "그 한도를 소비하는 새 실행을 배정하지 않는다. 진행 중 실행의 결과는"
+                " 그대로 받고 남은 작업·미검증 상태는 보존된다"
+                if reached
+                else "설정된 hard 한도 안이다"
+            ),
+            "resume": (
+                "한도를 바꾸거나 해제하면 다음 요청부터 다시 배정된다."
+                " 한도를 그대로 둔 채 이어 가는 경로는 없다(D-61)"
+                if reached
+                else None
+            ),
+        }
+
     def budget_state(self, case_id: str) -> dict[str, Any]:
-        """지금 걸려 있는 한도와 그 강제 상태.
+        """지금 걸려 있는 한도, 실제 소비, 그리고 그 한도가 **약속하는 것.**
 
         `unlimited` 를 따로 두는 이유는 "한도 0건"과 "한도 0"이 다르기 때문이다.
-        측정·집계는 R3 이므로 **사용량을 여기서 0으로 보고하지 않는다** — 미측정을
-        0으로 적으면 잔여량이 항상 가득한 것처럼 보인다(D-61).
+
+        **P3-R3: 사용량이 여기 들어온다.** 다만 모르는 값을 0 으로 적지 않는다 —
+        각 지표의 `complete` 가 "이 수가 소비 전부인가"를 말하고, 어댑터가 주지 않은
+        실행 수는 `runs_unknown` 으로 드러난다(D-61).
         """
+        now = utc_now()
         rows = self.conn.execute(
             "SELECT * FROM budget_setting WHERE case_id = ? ORDER BY revision", (case_id,)
         ).fetchall()
         items = [dict(r) for r in rows]
         current = [i for i in items if i["state"] == PolicyState.CURRENT.value]
+        for limit in current:
+            # **지금 이 한도가 무엇을 약속하는가.** 행에 적힌 `enforcement` 는 설정
+            # 시점의 값이고, R1 시절에 설정된 행은 `recorded_not_enforced` 로 남아
+            # 있다. 그 행을 고쳐 쓰지 않고 현재 판정을 따로 얹는다.
+            limit["guarantee"] = guarantee_for(
+                BudgetMetric(limit["metric"]), BudgetThreshold(limit["threshold_kind"])
+            ).value
+        exposure = self._metric_exposure(case_id, now)
+
+        warnings = []
+        for metric, limit in sorted(
+            self._current_limits(case_id, BudgetThreshold.WARN).items(),
+            key=lambda kv: kv[0].value,
+        ):
+            used = exposure[metric.value]["exposure"]
+            if used >= float(limit["limit_value"]):
+                warnings.append(
+                    {
+                        "metric": metric.value,
+                        "limit_value": float(limit["limit_value"]),
+                        "unit": limit["unit"],
+                        "exposure": used,
+                        "complete": exposure[metric.value]["complete"],
+                        "detail": "표시이며 실행을 막지 않는다. 경고 자체로 사람 응답을"
+                        " 기다리지 않는다(autonomy-budget-policy 8절)",
+                    }
+                )
+
         return {
             "unlimited": not current,
             "limits": current,
             "history": items,
-            "usage": None,
-            "usage_detail": "사용량 누적·예약·정산은 P3-R3 이다. 미측정을 0으로 적지 않는다",
+            "usage": exposure,
+            "usage_detail": "`exposure = settled + held + unresolved` 가 한도 판정값이다."
+            " 모르는 값을 0 으로 채우지 않으며 `complete = false` 로 드러낸다",
+            "by_role": self._budget_by(case_id, "role"),
+            "by_purpose": self._budget_by(case_id, "purpose"),
+            "warnings": warnings,
+            "stop": self.budget_stop(case_id, now),
+            "reservations": self.list_budget_reservations(case_id),
             "measurement_contract": {
                 m.value: BUDGET_MEASUREMENT[m].value for m in BudgetMetric
             },
+            "reservation_contract": reservation_contract(),
             "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며"
-            " 아직 모델이 없다(P4-01)",
+            " 아직 모델이 없다(P4-01). 이 집계를 repair 횟수로 쓰지 않는다",
             "enforcement": self.ENFORCEMENT["budget"],
         }
+
+    def _budget_by(self, case_id: str, column: str) -> dict[str, dict[str, Any]]:
+        """역할별·목적별 집계(D-61 "전체 역할·재시도·추출을 누적").
+
+        **나눈 값의 합이 Case 전체다.** 역할별 계산으로 Case 한도를 우회할 수 없게
+        하려면 이 축이 표시용이어야 하고 판정은 언제나 Case 하나로 한다(8절).
+        """
+        rows = self.conn.execute(
+            f"SELECT {column} AS axis, metric, state, SUM(actual_value) AS total,"
+            " COUNT(*) AS n FROM budget_reservation WHERE case_id = ?"
+            f" GROUP BY {column}, metric, state",
+            (case_id,),
+        ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            axis = out.setdefault(row["axis"], {})
+            bucket = axis.setdefault(
+                row["metric"], {"settled": 0.0, "unknown_rows": 0, "rows": 0}
+            )
+            bucket["rows"] += row["n"]
+            if row["state"] == ReservationState.SETTLED.value:
+                bucket["settled"] = round(float(row["total"] or 0.0), 6)
+            else:
+                # **확정되지 않은 행을 0 으로 합치지 않는다.** 수로 드러낸다.
+                bucket["unknown_rows"] += row["n"]
+        return out
+
+    def list_budget_reservations(self, case_id: str) -> list[dict[str, Any]]:
+        """예약 한 건 한 건. **왜 모르는지가 `settle_source` 에 있다**(FR-14)."""
+        rows = self.conn.execute(
+            "SELECT * FROM budget_reservation WHERE case_id = ?"
+            " ORDER BY reserved_at, run_id, metric",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     # --------------------------------------------------- Project 저장소
 

@@ -529,3 +529,149 @@ def test_a_v8_workspace_keeps_its_branch_base_commit_and_worktree(tmp_path):
         == "C:/tmp/worktrees/case-1"
     )
     conn.close()
+
+
+def _v9_schema() -> str:
+    """v10 표가 없는 가장 최근 커밋 스키마를 찾는다(P3-R3).
+
+    **커밋된 것을 그대로 꺼내 쓴다.** 시험 안에 스키마를 베껴 두면 그 사본이 실제
+    과거와 달라져도 시험이 통과해 버린다.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "budget_reservation" not in schema and "code_composition" in schema:
+            return schema
+    pytest.skip("v9 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v9_database_keeps_the_consumption_that_already_happened(tmp_path):
+    """v9 → v10 (P3-R3 AC-17).
+
+    **이 시험이 R3의 두 번째로 위험한 지점을 지킨다.** 집계의 출처를 새 표 하나로
+    만들면서 R3 이전에 실제로 돈 실행에 행을 만들지 않으면, **스키마를 올리는 것만으로
+    그 Case 의 소비가 0 이 된다.** "세션·Task 분할로 초기화하지 않는다"(D-61)는
+    이행에도 그대로 적용된다.
+
+    함께 보는 것이 하나 더 있다. 토큰을 보고하지 않은 옛 실행을 **0 으로 적지 않는
+    것**이다 — 0 으로 적으면 한도가 영원히 남아 있는 것처럼 보인다.
+    """
+    schema = _v9_schema()
+    path = tmp_path / "controller.sqlite3"
+
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(schema)
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (9, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old-repo','codex',?)",
+        (now,),
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1','prj-1','v9 시절 Case','analysis','in_progress',?,?)",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','pc','host-1','registered',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+        " byte_size, owner_runner_id, availability, summary, created_at)"
+        " VALUES ('art-1',1,'case-1','instruction','h'*1,1200,'runner-1','available',"
+        " '지시',?)",
+        (now,),
+    )
+    # 실제 v9 DB 는 `run.purpose`·`run.repository_id` 를 갖는다. 그 둘은
+    # schema.sql 이 아니라 `_add_column_if_missing` 이 더하므로 여기서 같은 모양을
+    # 만든다 — 커밋된 schema.sql 만으로는 v9 의 실제 표가 되지 않는다.
+    old.execute("ALTER TABLE run ADD COLUMN purpose TEXT")
+    old.execute("ALTER TABLE run ADD COLUMN repository_id TEXT")
+
+    # 실제로 돈 실행 셋. 작성 둘(하나는 결과 불명) + 검토 하나.
+    for run_id, role, outcome, status, usage in (
+        ("run-1", "author", "completed", "finished", '{"tokens": {"input_tokens": 900,'
+         ' "output_tokens": 120}, "cost_usd": 0.4}'),
+        ("run-2", "reviewer", "completed", "finished", '"not_reported"'),
+        ("run-3", "author", None, "assigned", '"not_reported"'),
+    ):
+        old.execute(
+            "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+            " instruction_artifact_id, instruction_artifact_rev, status,"
+            " assignment_generation, outcome, usage_json, residual_activity, created_at,"
+            " assigned_at, finished_at, purpose)"
+            " VALUES (?, 'case-1','task-1',?, 'codex','cli','read_only','art-1',1,?,1,?,"
+            " ?, 'none', ?, ?, ?, 'limited_analysis')",
+            (
+                run_id,
+                role,
+                status,
+                outcome,
+                usage,
+                now,
+                "2026-09-21T00:00:00.000000+00:00",
+                "2026-09-21T00:00:30.000000+00:00" if status == "finished" else None,
+            ),
+        )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    rows = {
+        (r["run_id"], r["metric"]): r
+        for r in conn.execute("SELECT * FROM budget_reservation")
+    }
+    assert rows, "이행이 기존 실행의 소비를 집계에 넣지 않았다"
+
+    # --- 이미 있던 소비가 남는다 -----------------------------------------
+    assert rows[("run-1", "run_count")]["actual_value"] == 1.0
+    assert rows[("run-1", "run_count")]["state"] == "settled"
+    assert rows[("run-1", "run_count")]["source"] == "migrated_from_run"
+    # 지시 원문의 크기가 컨텍스트 패키지로 잡힌다.
+    assert rows[("run-1", "context_bytes")]["actual_value"] == 1200.0
+    # 시계에서 도출한 실행 시간.
+    assert rows[("run-1", "execution_seconds")]["actual_value"] == 30.0
+
+    # --- 검토 실행만 검토 축에 잡힌다 -------------------------------------
+    assert ("run-2", "review_run_count") in rows
+    assert ("run-1", "review_run_count") not in rows
+    # 그리고 검토도 전체 실행 수에는 그대로 들어간다(중복 차감하지 않는다).
+    assert rows[("run-2", "run_count")]["actual_value"] == 1.0
+
+    # --- **미보고를 0 으로 적지 않는다** -----------------------------------
+    unreported = rows[("run-2", "input_tokens")]
+    assert unreported["actual_value"] is None
+    assert unreported["measurement"] == "unavailable"
+    assert unreported["state"] == "unresolved"
+    assert unreported["settle_source"] == "adapter_not_reported"
+    # 보고한 실행은 값이 남는다.
+    assert rows[("run-1", "input_tokens")]["actual_value"] == 900.0
+    assert rows[("run-1", "estimated_cost")]["actual_value"] == 0.4
+
+    # --- 진행 중 실행은 **끝난 것으로 바뀌지 않는다** ---------------------
+    assert rows[("run-3", "run_count")]["state"] == "held"
+    assert rows[("run-3", "run_count")]["actual_value"] is None
+
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
+
+    # 다시 돌려도 행이 늘지 않는다. `migrate()` 는 연결마다 돈다.
+    before = conn.execute("SELECT COUNT(*) c FROM budget_reservation").fetchone()["c"]
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM budget_reservation").fetchone()["c"] == before
+    conn.close()

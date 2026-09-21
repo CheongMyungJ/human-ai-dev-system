@@ -11,12 +11,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 def utc_now() -> str:
@@ -146,6 +146,13 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "completion_candidate", "composition_id", "TEXT")
 
     _migrate_v9_case_workspace(conn)
+
+    # v10: 예산 예약. **새 표 하나뿐이고 기존 컬럼은 바뀌지 않는다.**
+    #
+    #      다만 표가 비어 있으면 안 된다. 집계의 출처가 이 표 하나이므로, R3 이전에
+    #      실제로 돈 실행에 행이 없으면 스키마를 올리는 것만으로 그 Case 의 소비가
+    #      0 이 된다 — "세션·Task 분할로 초기화하지 않는다"(D-61)가 이행에서 깨진다.
+    _migrate_v10_budget_reservations(conn)
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
@@ -342,4 +349,226 @@ def _migrate_v9_case_workspace(conn: sqlite3.Connection) -> None:
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_case_workspace_project"
         " ON case_workspace(project_id, state)"
+    )
+
+
+def parse_ts(value: str | None) -> datetime | None:
+    """기록된 시각 문자열 → `datetime`. 읽을 수 없으면 `None`(=모름)이다.
+
+    **깨진 값을 현재 시각으로 대신하지 않는다.** 대신하면 읽을 수 없는 기록이 0초
+    실행으로 보이고, 그 0이 예산 잔여량을 늘린다.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def elapsed_seconds(start: str | None, end: str | None) -> float | None:
+    """두 기록 시각의 차이. 어느 한쪽이 없으면 `None`(=모름)이다."""
+    a, b = parse_ts(start), parse_ts(end)
+    if a is None or b is None:
+        return None
+    return max(0.0, (b - a).total_seconds())
+
+
+def context_package_bytes(
+    conn: sqlite3.Connection,
+    instruction_artifact_id: str,
+    instruction_artifact_rev: int,
+    context_refs: Iterable[tuple[str, int]] = (),
+) -> int:
+    """제어부가 **만들어 전달하는** 입력 패키지의 크기(P3-R3).
+
+    지시 원문과 고정 컨텍스트 참조가 가리키는 원문들의 `byte_size` 합이다.
+
+    **CLI 가 내부에서 더 읽은 자료는 여기 없다.** 그것을 측정했다고 주장하지 않는
+    것이 측정 계약이며(autonomy-budget-policy 7절), 그래서 이 값의 이름은
+    `context_bytes` 이지 "실행이 본 전체 입력"이 아니다.
+
+    크기를 알 수 없는 참조는 **건너뛰지 않고 0 으로도 세지 않는다** — 참조는 언제나
+    `artifact_ref` 에 있고 그 표의 `byte_size` 는 NOT NULL 이므로 알 수 없는 경우가
+    없다. 없는 참조는 애초에 외래 키로 막힌다.
+    """
+    total = 0
+    refs = [(instruction_artifact_id, instruction_artifact_rev), *context_refs]
+    for artifact_id, revision in refs:
+        row = conn.execute(
+            "SELECT byte_size FROM artifact_ref WHERE artifact_id = ? AND revision = ?",
+            (artifact_id, revision),
+        ).fetchone()
+        if row is not None:
+            total += int(row["byte_size"])
+    return total
+
+
+def _migrate_v10_budget_reservations(conn: sqlite3.Connection) -> None:
+    """R3 이전에 만들어진 Run 에 예약 행을 만든다.
+
+    **없던 소비를 지어내는 것이 아니라 이미 있던 소비를 집계에 넣는 것이다.**
+    각 값은 `run` 표가 실제로 아는 것만 담는다.
+
+        run_count          실행이 존재한다 = 호출이 1 번 있었다. 확정값이다
+        review_run_count   `role = reviewer` 인 실행만
+        context_bytes      지시 원문 + 고정 컨텍스트 참조의 `byte_size` 합
+        execution_seconds  `assigned_at → finished_at`. 둘 중 하나가 없으면 **모름**
+        토큰·비용           `usage_json` 이 준 것만. 주지 않았으면 **`unavailable`**
+
+    마지막 줄이 중요하다. 미보고를 0 으로 적으면 한도가 영원히 남아 있는 것처럼
+    보인다(D-61). 그래서 그 행은 `actual_value = NULL`·`state = unresolved` 다.
+
+    아직 끝나지 않은 실행은 `held` 로 둔다. 이행이 진행 중 실행을 끝난 것으로
+    바꾸지 않는다.
+
+    `migrate()` 는 매 연결마다 도므로 **이미 행이 있는 Run 은 건드리지 않는다.**
+    과거의 재배정은 복원할 수 없으므로 현재 세대 하나에 대해서만 만든다 — 없는
+    세대를 지어내지 않는다.
+    """
+    from domain import ids
+    from domain.budget import (
+        RESERVATION_KIND,
+        ReservationKind,
+        ReservationSource,
+        ReservationState,
+        SettleSource,
+        normalize_usage,
+    )
+    from domain.models import (
+        BUDGET_MEASUREMENT,
+        BudgetMeasurement,
+        BudgetMetric,
+        RunOutcome,
+        RunRole,
+        RunStatus,
+    )
+
+    import json
+
+    runs = conn.execute(
+        "SELECT r.* FROM run r WHERE NOT EXISTS"
+        " (SELECT 1 FROM budget_reservation b WHERE b.run_id = r.run_id)"
+    ).fetchall()
+    if not runs:
+        return
+
+    rows: list[tuple[Any, ...]] = []
+    for run in runs:
+        finished = run["status"] == RunStatus.FINISHED.value
+        outcome = run["outcome"]
+        role = run["role"]
+        refs = [
+            (r["artifact_id"], r["revision"])
+            for r in conn.execute(
+                "SELECT artifact_id, revision FROM run_context_ref WHERE run_id = ?"
+                " ORDER BY seq",
+                (run["run_id"],),
+            ).fetchall()
+        ]
+        context_bytes = context_package_bytes(
+            conn,
+            run["instruction_artifact_id"],
+            run["instruction_artifact_rev"],
+            refs,
+        )
+        seconds = elapsed_seconds(run["assigned_at"], run["finished_at"])
+        try:
+            usage = json.loads(run["usage_json"])
+        except (TypeError, ValueError):
+            usage = "not_reported"
+        reported = normalize_usage(usage)
+
+        planned: dict[BudgetMetric, tuple[float | None, float | None, str]] = {
+            # (예약값, 정산값, 정산 출처)
+            BudgetMetric.RUN_COUNT: (1.0, 1.0 if finished else None, SettleSource.RESERVED_EXACT.value),
+            BudgetMetric.CONTEXT_BYTES: (
+                float(context_bytes),
+                float(context_bytes) if finished else None,
+                SettleSource.RESERVED_EXACT.value,
+            ),
+            BudgetMetric.EXECUTION_SECONDS: (
+                None,
+                seconds if finished else None,
+                SettleSource.OBSERVED_CLOCK.value
+                if seconds is not None
+                else SettleSource.CLOCK_UNAVAILABLE.value,
+            ),
+        }
+        if role == RunRole.REVIEWER.value:
+            planned[BudgetMetric.REVIEW_RUN_COUNT] = (
+                1.0,
+                1.0 if finished else None,
+                SettleSource.RESERVED_EXACT.value,
+            )
+        if finished:
+            for metric in (
+                BudgetMetric.INPUT_TOKENS,
+                BudgetMetric.OUTPUT_TOKENS,
+                BudgetMetric.ESTIMATED_COST,
+            ):
+                value = reported.get(metric)
+                planned[metric] = (
+                    None,
+                    value,
+                    SettleSource.ADAPTER_REPORTED.value
+                    if value is not None
+                    else SettleSource.ADAPTER_NOT_REPORTED.value,
+                )
+
+        for metric, (reserved, actual, settle_source) in planned.items():
+            kind = RESERVATION_KIND[metric]
+            if not finished:
+                state = ReservationState.HELD.value
+            elif actual is None:
+                # **모르는 값을 0 으로 적지 않는다.** 노출에 남긴다.
+                state = ReservationState.UNRESOLVED.value
+            elif kind is ReservationKind.OPEN_ENDED_PER_RUN and (
+                outcome == RunOutcome.UNKNOWN.value
+            ):
+                # 실행 시간만 결과 불명의 영향을 받는다 — 프로세스가 남아 있으면
+                # 더 늘 수 있다. 실행 수·컨텍스트 크기는 더 커지지 않고, 어댑터가
+                # 이미 보고한 토큰은 관측이지 추측이 아니다(라이브 결함, 9절).
+                state = ReservationState.UNRESOLVED.value
+            else:
+                state = ReservationState.SETTLED.value
+            measurement = (
+                BUDGET_MEASUREMENT[metric].value
+                if actual is not None
+                else BudgetMeasurement.UNAVAILABLE.value
+            )
+            if (
+                state == ReservationState.UNRESOLVED.value
+                and actual is not None
+                and outcome == RunOutcome.UNKNOWN.value
+            ):
+                settle_source = SettleSource.OUTCOME_UNKNOWN.value
+            rows.append(
+                (
+                    ids.new_id("budres"),
+                    run["case_id"],
+                    run["run_id"],
+                    run["assignment_generation"],
+                    metric.value,
+                    reserved,
+                    actual,
+                    measurement,
+                    RESERVATION_KIND[metric].value,
+                    role,
+                    run["purpose"] or "",
+                    state,
+                    ReservationSource.MIGRATED_FROM_RUN.value,
+                    settle_source if finished else None,
+                    run["created_at"],
+                    run["finished_at"] if finished else None,
+                )
+            )
+
+    conn.executemany(
+        "INSERT OR IGNORE INTO budget_reservation"
+        " (id, case_id, run_id, generation, metric, reserved_value, actual_value,"
+        "  measurement, reservation_kind, role, purpose, state, source, settle_source,"
+        "  reserved_at, settled_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
     )

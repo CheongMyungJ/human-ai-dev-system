@@ -1,0 +1,19 @@
+{
+  "detail": {
+    "admission": {
+      "outcome": "refused",
+      "profile": "non_feature_minimal",
+      "refusals": [
+        "budget_hard_limit_reached"
+      ],
+      "reasons": {
+        "budget_hard_limit_reached": "설정된 hard 한도에 도달했다: run_count 2.0/2.0 runs (absolute). 그 한도를 소비하는 새 실행을 배정하지 않는다. 현재 결과·남은 작업은 그대로 보존되며, 한도를 바꾸거나 해제하면 다시 배정된다"
+      },
+      "intent_version_id": null,
+      "intent_agreement_state": "no_intent",
+      "gate_verdict": "not_applicable"
+    },
+    "admission_check_id": "admission-ebf52824de7e8665",
+    "message": "entry conditions are not met; the run was not created"
+  }
+}

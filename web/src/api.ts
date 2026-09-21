@@ -1549,16 +1549,80 @@ export interface BudgetLimit {
   set_by: string
   reason_summary: string | null
   created_at: string
+  // **이 한도가 지금 약속하는 것**(P3-R3). 행의 `enforcement` 는 설정 시점의 값이고
+  // 이쪽이 현재 판정이다. `absolute` 만 절대 상한이다.
+  guarantee?: string
+}
+
+// 지표 하나의 소비. **`exposure` 가 한도 판정값이다** — 확정 사용량만 보면
+// 진행 중 실행과 결과 불명이 공짜가 된다(P3-R3).
+export interface BudgetMetricUsage {
+  metric: string
+  unit: string
+  settled: number
+  held: number
+  unresolved: number
+  exposure: number
+  reservation: string
+  measurement: string
+  runs_counted: number
+  runs_unknown: number
+  runs_in_flight: number
+  // `false` 면 이 수가 소비 전부가 아니다. **모자란 만큼을 0으로 채우지 않는다**(D-61).
+  complete: boolean
+}
+
+export interface BudgetStop {
+  stopped: boolean
+  metrics: Array<{
+    metric: string
+    limit_value: number
+    unit: string
+    exposure: number
+    guarantee: string
+    complete: boolean
+  }>
+  detail: string
+  resume: string | null
+}
+
+export interface BudgetReservationRow {
+  id: string
+  run_id: string
+  generation: number
+  metric: string
+  reserved_value: number | null
+  // `null` 은 **아직 모른다**이며 0이 아니다.
+  actual_value: number | null
+  measurement: string
+  reservation_kind: string
+  role: string
+  purpose: string
+  state: string
+  source: string
+  settle_source: string | null
+}
+
+export interface BudgetReservationContract {
+  measurement: string
+  reservation: string
+  hard_guarantee: string
+  reason: string
 }
 
 export interface BudgetState {
   unlimited: boolean
   limits: BudgetLimit[]
   history: BudgetLimit[]
-  // `null` 은 **아직 측정하지 않는다**는 뜻이며 0이 아니다(D-61).
-  usage: null | Record<string, unknown>
+  usage: Record<string, BudgetMetricUsage>
   usage_detail: string
+  by_role: Record<string, Record<string, { settled: number; unknown_rows: number; rows: number }>>
+  by_purpose: Record<string, Record<string, { settled: number; unknown_rows: number; rows: number }>>
+  warnings: Array<{ metric: string; limit_value: number; unit: string; exposure: number; detail: string }>
+  stop: BudgetStop
+  reservations: BudgetReservationRow[]
   measurement_contract: Record<string, string>
+  reservation_contract: Record<string, BudgetReservationContract>
   repair_limit_note: string
   enforcement: EnforcementNote
 }

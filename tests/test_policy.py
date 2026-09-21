@@ -493,15 +493,22 @@ def test_returning_to_ask_on_decision_keeps_confirmed_records(harness):
 
 
 def test_no_budget_setting_means_unlimited(harness):
-    """AC-9 — 설정이 없으면 무제한이다(D-56). 사용량을 0으로 지어내지 않는다."""
+    """AC-9 / R3 AC-1 — 설정이 없으면 무제한이고 아무 것도 막지 않는다(D-56).
+
+    **P3-R3에서 갱신됐다.** R1은 `usage is None` 을 고정했고 그것은 "아직 재지
+    않는다"는 뜻이었다. 이제 잰다. 다만 무제한 Case 에서는 재는 것이 배정을 바꾸지
+    않아야 하며, 실행이 없으면 0 이고 그 0 은 **관측된 0**(`complete = true`)이다 —
+    "재지 않아서 모른다"와 다르다.
+    """
     project = harness.create_project()
     case = harness.create_case(project["id"])
     budget = harness.client.get(f"/api/cases/{case['id']}/budget").json()
     assert budget["unlimited"] is True
     assert budget["limits"] == []
-    # 측정·누적은 R3 이다. 미측정을 0으로 적으면 잔여량이 항상 가득해 보인다.
-    assert budget["usage"] is None
-    assert "P3-R3" in budget["usage_detail"]
+    assert budget["stop"]["stopped"] is False
+    assert budget["usage"]["run_count"]["exposure"] == 0.0
+    assert budget["usage"]["run_count"]["complete"] is True
+    assert budget["usage"]["run_count"]["runs_counted"] == 0
     assert "P4-01" in budget["repair_limit_note"]
 
 
@@ -526,8 +533,12 @@ def test_a_measurable_hard_limit_is_recorded(harness):
     assert limit["metric"] == "run_count"
     assert limit["measurement"] == BudgetMeasurement.EXACT.value
     assert limit["unit"] == "runs"
-    # **강제 상태를 값과 함께 남긴다.** 설정한 사람이 상한이 있다고 믿지 않도록.
-    assert limit["enforcement"] == "recorded_not_enforced"
+    # **강제 상태를 값과 함께 남긴다.** 설정한 사람이 무엇을 약속받았는지 알도록.
+    #
+    # P3-R3에서 `recorded_not_enforced` 에서 바뀌었다. 실행 수는 배정 전에 정확히
+    # 1 을 잡을 수 있으므로 **절대 상한**을 약속한다.
+    assert limit["enforcement"] == "enforced_absolute"
+    assert limit["guarantee"] == "absolute"
     assert limit["enforced_by"] == "P3-R3"
 
 
@@ -732,8 +743,11 @@ def test_the_policy_view_says_who_enforces_each_axis(harness):
     assert enforcement["autonomy"]["enforced_by"] == "P3-R4"
     assert enforcement["controlled_checkpoint"]["state"] == "recorded_not_enforced"
     assert enforcement["controlled_checkpoint"]["enforced_by"] == "P3-R4"
-    assert enforcement["budget"]["state"] == "recorded_not_enforced"
+    # **P3-R3에서 바뀐 축.** 예약·집계·정지가 실제로 배정을 정한다.
+    assert enforcement["budget"]["state"] == "enforced"
     assert enforcement["budget"]["enforced_by"] == "P3-R3"
+    # 다만 "강제한다"가 모든 지표에 같은 약속은 아니다. 그 차이를 조회가 말한다.
+    assert "절대 상한" in enforcement["budget"]["detail"]
     # **P3-R2가 실제로 강제한다.**
     assert enforcement["repository_selection"]["state"] == "enforced"
     assert enforcement["repository_selection"]["enforced_by"] == "P3-R2"
@@ -742,12 +756,13 @@ def test_the_policy_view_says_who_enforces_each_axis(harness):
     assert enforcement["publish"]["enforced_by"] == "P5"
 
 
-def test_a_hard_budget_does_not_yet_change_admission(harness):
-    """AC-10 — hard 한도를 걸어도 이번 단계에서는 진입 검사 결과가 달라지지 않는다.
+def test_a_hard_budget_now_stops_the_next_run(harness):
+    """R3 AC-2 — hard 한도에 도달하면 다음 실행이 **거부되고 그 사유가 기록된다**.
 
-    **이 사실을 시험으로 고정하는 이유**는 반대쪽을 막기 위해서다. 기록만으로 예산이
-    강제된다고 표시하면 사람이 없는 보장을 믿는다. R3 가 실제 강제를 붙일 때 이
-    시험은 바뀌어야 한다.
+    **R1의 `test_a_hard_budget_does_not_yet_change_admission` 을 대체한다.** 저
+    시험은 "기록만 하고 막지 않는다"를 고정했고, 그것이 R1·R2 시점의 사실이었다.
+    이제 막으므로 시험도 반대를 확인한다 — 통과한 채로 남았다면 강제를 붙이지 않은
+    것이다(DEVELOPMENT.md 9절).
     """
     project = harness.create_project()
     case = harness.create_case(project["id"], kind="analysis")
@@ -763,11 +778,31 @@ def test_a_hard_budget_does_not_yet_change_admission(harness):
     artifact = harness.submit_artifact(case["id"], "조사 지시")["artifact_id"]
     harness.agent.persist_pending_intakes()
     harness.create_run(case["id"], artifact, run_id="run-budget-1")
-    harness.create_run(case["id"], artifact, run_id="run-budget-2")
+
+    refused = harness.client.post(
+        f"/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-budget-2",
+            "instruction_artifact_id": artifact,
+            "purpose": "limited_analysis",
+            "role": "author",
+            "tool_id": "local-echo",
+            "mode": "p2-01-local",
+            "permission": "read_only",
+            "task_id": "task-1",
+        },
+    )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["admission"]["refusals"] == ["budget_hard_limit_reached"]
+
+    # **거부가 기록된다.** 사람이 왜 실행이 열리지 않았는지 볼 수 있어야 한다(FR-14).
     refusals = [
         r for check in harness.admission_checks(case["id"]) for r in check["refusals"]
     ]
-    assert not [r for r in refusals if "budget" in r]
+    assert "budget_hard_limit_reached" in refusals
+    # 두 번째 Run 은 **만들어지지 않았다.**
+    runs = harness.client.get(f"/api/cases/{case['id']}").json()["runs"]
+    assert [r["run_id"] for r in runs] == ["run-budget-1"]
 
 
 def test_new_profiles_do_not_loosen_the_existing_admission_rules(harness):

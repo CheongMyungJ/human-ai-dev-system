@@ -1,0 +1,529 @@
+{
+  "unlimited": false,
+  "limits": [
+    {
+      "id": "budget-91c88bdf583f62d8",
+      "case_id": "case-a3a08528234f179b",
+      "revision": 1,
+      "metric": "run_count",
+      "threshold_kind": "hard",
+      "limit_value": 2.0,
+      "unit": "runs",
+      "measurement": "exact",
+      "enforcement": "enforced_absolute",
+      "enforced_by": "P3-R3",
+      "policy_version": "0.7",
+      "set_by": "owner",
+      "reason_summary": "라이브 확인: 두 번만 실행한다",
+      "state": "current",
+      "created_at": "2026-09-21T16:57:39.900139+00:00",
+      "superseded_at": null,
+      "guarantee": "absolute"
+    }
+  ],
+  "history": [
+    {
+      "id": "budget-91c88bdf583f62d8",
+      "case_id": "case-a3a08528234f179b",
+      "revision": 1,
+      "metric": "run_count",
+      "threshold_kind": "hard",
+      "limit_value": 2.0,
+      "unit": "runs",
+      "measurement": "exact",
+      "enforcement": "enforced_absolute",
+      "enforced_by": "P3-R3",
+      "policy_version": "0.7",
+      "set_by": "owner",
+      "reason_summary": "라이브 확인: 두 번만 실행한다",
+      "state": "current",
+      "created_at": "2026-09-21T16:57:39.900139+00:00",
+      "superseded_at": null,
+      "guarantee": "absolute"
+    }
+  ],
+  "usage": {
+    "run_count": {
+      "metric": "run_count",
+      "unit": "runs",
+      "settled": 2.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 2.0,
+      "reservation": "exact_per_run",
+      "measurement": "exact",
+      "runs_counted": 2,
+      "runs_unknown": 0,
+      "runs_in_flight": 0,
+      "complete": true
+    },
+    "review_run_count": {
+      "metric": "review_run_count",
+      "unit": "runs",
+      "settled": 0.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 0.0,
+      "reservation": "exact_per_run",
+      "measurement": "exact",
+      "runs_counted": 0,
+      "runs_unknown": 0,
+      "runs_in_flight": 0,
+      "complete": true
+    },
+    "input_tokens": {
+      "metric": "input_tokens",
+      "unit": "tokens",
+      "settled": 30627.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 30627.0,
+      "reservation": "post_hoc_reported",
+      "measurement": "estimated",
+      "runs_counted": 1,
+      "runs_unknown": 1,
+      "runs_in_flight": 0,
+      "complete": false
+    },
+    "output_tokens": {
+      "metric": "output_tokens",
+      "unit": "tokens",
+      "settled": 162.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 162.0,
+      "reservation": "post_hoc_reported",
+      "measurement": "estimated",
+      "runs_counted": 1,
+      "runs_unknown": 1,
+      "runs_in_flight": 0,
+      "complete": false
+    },
+    "context_bytes": {
+      "metric": "context_bytes",
+      "unit": "bytes",
+      "settled": 216.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 216.0,
+      "reservation": "exact_per_run",
+      "measurement": "exact",
+      "runs_counted": 2,
+      "runs_unknown": 0,
+      "runs_in_flight": 0,
+      "complete": true
+    },
+    "execution_seconds": {
+      "metric": "execution_seconds",
+      "unit": "seconds",
+      "settled": 0.020504,
+      "held": 0.0,
+      "unresolved": 13.325709,
+      "exposure": 13.346213,
+      "reservation": "open_ended_per_run",
+      "measurement": "exact",
+      "runs_counted": 1,
+      "runs_unknown": 1,
+      "runs_in_flight": 0,
+      "complete": false
+    },
+    "elapsed_seconds": {
+      "metric": "elapsed_seconds",
+      "unit": "seconds",
+      "settled": 17.951592,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 17.951592,
+      "reservation": "case_clock",
+      "measurement": "exact",
+      "runs_counted": 0,
+      "runs_unknown": 0,
+      "runs_in_flight": 0,
+      "complete": true,
+      "source": "case_created_at"
+    },
+    "estimated_cost": {
+      "metric": "estimated_cost",
+      "unit": "currency_units",
+      "settled": 0.0,
+      "held": 0.0,
+      "unresolved": 0.0,
+      "exposure": 0.0,
+      "reservation": "post_hoc_reported",
+      "measurement": "estimated",
+      "runs_counted": 0,
+      "runs_unknown": 2,
+      "runs_in_flight": 0,
+      "complete": false
+    }
+  },
+  "usage_detail": "`exposure = settled + held + unresolved` 가 한도 판정값이다. 모르는 값을 0 으로 채우지 않으며 `complete = false` 로 드러낸다",
+  "by_role": {
+    "author": {
+      "context_bytes": {
+        "settled": 216.0,
+        "unknown_rows": 0,
+        "rows": 2
+      },
+      "estimated_cost": {
+        "settled": 0.0,
+        "unknown_rows": 2,
+        "rows": 2
+      },
+      "execution_seconds": {
+        "settled": 0.020504,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "input_tokens": {
+        "settled": 30627.0,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "output_tokens": {
+        "settled": 162.0,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "run_count": {
+        "settled": 2.0,
+        "unknown_rows": 0,
+        "rows": 2
+      }
+    }
+  },
+  "by_purpose": {
+    "limited_analysis": {
+      "context_bytes": {
+        "settled": 216.0,
+        "unknown_rows": 0,
+        "rows": 2
+      },
+      "estimated_cost": {
+        "settled": 0.0,
+        "unknown_rows": 2,
+        "rows": 2
+      },
+      "execution_seconds": {
+        "settled": 0.020504,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "input_tokens": {
+        "settled": 30627.0,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "output_tokens": {
+        "settled": 162.0,
+        "unknown_rows": 1,
+        "rows": 2
+      },
+      "run_count": {
+        "settled": 2.0,
+        "unknown_rows": 0,
+        "rows": 2
+      }
+    }
+  },
+  "warnings": [],
+  "stop": {
+    "stopped": true,
+    "metrics": [
+      {
+        "metric": "run_count",
+        "limit_value": 2.0,
+        "unit": "runs",
+        "exposure": 2.0,
+        "guarantee": "absolute",
+        "complete": true
+      }
+    ],
+    "detail": "그 한도를 소비하는 새 실행을 배정하지 않는다. 진행 중 실행의 결과는 그대로 받고 남은 작업·미검증 상태는 보존된다",
+    "resume": "한도를 바꾸거나 해제하면 다음 요청부터 다시 배정된다. 한도를 그대로 둔 채 이어 가는 경로는 없다(D-61)"
+  },
+  "reservations": [
+    {
+      "id": "budres-8ff28013fdd8cf78",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "context_bytes",
+      "reserved_value": 108.0,
+      "actual_value": 108.0,
+      "measurement": "exact",
+      "reservation_kind": "exact_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "reserved_exact",
+      "reserved_at": "2026-09-21T16:57:41.258355+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-3634a18ad2e5858d",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "execution_seconds",
+      "reserved_value": null,
+      "actual_value": 13.325709,
+      "measurement": "exact",
+      "reservation_kind": "open_ended_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "unresolved",
+      "source": "reserved",
+      "settle_source": "residual_activity",
+      "reserved_at": "2026-09-21T16:57:41.258355+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-3ecdfe050bebc7d6",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "run_count",
+      "reserved_value": 1.0,
+      "actual_value": 1.0,
+      "measurement": "exact",
+      "reservation_kind": "exact_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "reserved_exact",
+      "reserved_at": "2026-09-21T16:57:41.258355+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-c74b2dfc2e413e8b",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "estimated_cost",
+      "reserved_value": null,
+      "actual_value": null,
+      "measurement": "unavailable",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "unresolved",
+      "source": "reserved",
+      "settle_source": "adapter_not_reported",
+      "reserved_at": "2026-09-21T16:57:55.334695+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-e0674c9a43be8165",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "input_tokens",
+      "reserved_value": null,
+      "actual_value": 30627.0,
+      "measurement": "estimated",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "adapter_reported",
+      "reserved_at": "2026-09-21T16:57:55.334695+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-8bc856886916667f",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-1",
+      "generation": 1,
+      "metric": "output_tokens",
+      "reserved_value": null,
+      "actual_value": 162.0,
+      "measurement": "estimated",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "adapter_reported",
+      "reserved_at": "2026-09-21T16:57:55.334695+00:00",
+      "settled_at": "2026-09-21T16:57:55.334695+00:00"
+    },
+    {
+      "id": "budres-8fb322f363759106",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "context_bytes",
+      "reserved_value": 108.0,
+      "actual_value": 108.0,
+      "measurement": "exact",
+      "reservation_kind": "exact_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "reserved_exact",
+      "reserved_at": "2026-09-21T16:57:57.343769+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    },
+    {
+      "id": "budres-7718dd5d0c278d35",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "execution_seconds",
+      "reserved_value": null,
+      "actual_value": 0.020504,
+      "measurement": "exact",
+      "reservation_kind": "open_ended_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "observed_clock",
+      "reserved_at": "2026-09-21T16:57:57.343769+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    },
+    {
+      "id": "budres-d0603f747d456080",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "run_count",
+      "reserved_value": 1.0,
+      "actual_value": 1.0,
+      "measurement": "exact",
+      "reservation_kind": "exact_per_run",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "settled",
+      "source": "reserved",
+      "settle_source": "reserved_exact",
+      "reserved_at": "2026-09-21T16:57:57.343769+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    },
+    {
+      "id": "budres-5ca1546e74a3eacc",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "estimated_cost",
+      "reserved_value": null,
+      "actual_value": null,
+      "measurement": "unavailable",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "unresolved",
+      "source": "reserved",
+      "settle_source": "adapter_not_reported",
+      "reserved_at": "2026-09-21T16:57:57.380880+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    },
+    {
+      "id": "budres-e8c2bd7d55ba2375",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "input_tokens",
+      "reserved_value": null,
+      "actual_value": null,
+      "measurement": "unavailable",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "unresolved",
+      "source": "reserved",
+      "settle_source": "adapter_not_reported",
+      "reserved_at": "2026-09-21T16:57:57.380880+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    },
+    {
+      "id": "budres-5acbbd67a0abc207",
+      "case_id": "case-a3a08528234f179b",
+      "run_id": "run-live-r3-2",
+      "generation": 1,
+      "metric": "output_tokens",
+      "reserved_value": null,
+      "actual_value": null,
+      "measurement": "unavailable",
+      "reservation_kind": "post_hoc_reported",
+      "role": "author",
+      "purpose": "limited_analysis",
+      "state": "unresolved",
+      "source": "reserved",
+      "settle_source": "adapter_not_reported",
+      "reserved_at": "2026-09-21T16:57:57.380880+00:00",
+      "settled_at": "2026-09-21T16:57:57.380880+00:00"
+    }
+  ],
+  "measurement_contract": {
+    "run_count": "exact",
+    "review_run_count": "exact",
+    "input_tokens": "estimated",
+    "output_tokens": "estimated",
+    "context_bytes": "exact",
+    "execution_seconds": "exact",
+    "elapsed_seconds": "exact",
+    "estimated_cost": "estimated"
+  },
+  "reservation_contract": {
+    "run_count": {
+      "measurement": "exact",
+      "reservation": "exact_per_run",
+      "hard_guarantee": "absolute",
+      "reason": "시스템이 시작한 호출을 센다. 배정 전에 정확히 1 이다"
+    },
+    "review_run_count": {
+      "measurement": "exact",
+      "reservation": "exact_per_run",
+      "hard_guarantee": "absolute",
+      "reason": "검토 역할의 실행만 센다. 전체 실행 수에서 중복 차감하지 않는다"
+    },
+    "input_tokens": {
+      "measurement": "estimated",
+      "reservation": "post_hoc_reported",
+      "hard_guarantee": "not_enforceable",
+      "reason": "어댑터가 주면 알고 주지 않으면 모른다. 미제공을 0 으로 적지 않는다"
+    },
+    "output_tokens": {
+      "measurement": "estimated",
+      "reservation": "post_hoc_reported",
+      "hard_guarantee": "not_enforceable",
+      "reason": "같음"
+    },
+    "context_bytes": {
+      "measurement": "exact",
+      "reservation": "exact_per_run",
+      "hard_guarantee": "absolute",
+      "reason": "제어부가 만들어 전달한 입력 패키지의 크기다. CLI 가 내부에서 더 읽은 자료는 관측 범위 밖이다"
+    },
+    "execution_seconds": {
+      "measurement": "exact",
+      "reservation": "open_ended_per_run",
+      "hard_guarantee": "no_absolute_cap",
+      "reason": "끝나야 실제 시간을 안다. 진행 중에는 지금까지의 노출만 보이고, 돌고 있는 실행을 초 단위로 끊을 수 없다(P1-03)"
+    },
+    "elapsed_seconds": {
+      "measurement": "exact",
+      "reservation": "case_clock",
+      "hard_guarantee": "no_absolute_cap",
+      "reason": "Case 시작부터의 벽시계다. 배정을 멈춰도 줄지 않는다"
+    },
+    "estimated_cost": {
+      "measurement": "estimated",
+      "reservation": "post_hoc_reported",
+      "hard_guarantee": "not_enforceable",
+      "reason": "가격·모델·측정 범위에 따른 추정이며 실제 청구액의 상한이 아니다"
+    }
+  },
+  "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며 아직 모델이 없다(P4-01). 이 집계를 repair 횟수로 쓰지 않는다",
+  "enforcement": {
+    "state": "enforced",
+    "enforced_by": "P3-R3",
+    "detail": "예약·누적·정산이 동작하고 hard 도달은 그 한도를 소비하는 새 실행·재배정을 막는다. 보장 범위는 지표마다 다르다 — 실행 수·검토 수·컨텍스트 크기는 절대 상한이고, 시간 지표는 새 배정만 막으며 진행 중 실행의 초과 노출이 있을 수 있다. 토큰·비용의 hard 한도는 여전히 설정을 받지 않는다"
+  }
+}

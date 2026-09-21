@@ -58,6 +58,27 @@ function EnforcementTag(props: { note: { state: string; enforced_by: string; det
   )
 }
 
+/** 보장 범위를 사람 말로. **셋을 한 단어로 합치지 않는다**(D-61). */
+function guaranteeLabel(guarantee: string | undefined): string {
+  switch (guarantee) {
+    case 'absolute':
+      return '절대 상한'
+    case 'no_absolute_cap':
+      return '새 배정만 차단 (절대 상한 아님)'
+    case 'display_only':
+      return '표시만'
+    case 'not_enforceable':
+      return '강제 불가'
+    default:
+      return '보장 범위 미표시'
+  }
+}
+
+/** 바이트·초가 소수점으로 길어지지 않게. 값을 **반올림할 뿐 바꾸지 않는다.** */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
 export function PolicyPanel(props: {
   detail: CaseDetail
   onChanged: () => void | Promise<void>
@@ -250,7 +271,8 @@ export function PolicyPanel(props: {
           {budget.limits.map((row) => (
             <li key={row.id} className="small">
               {row.metric} · {row.threshold_kind} · {row.limit_value} {row.unit} ·{' '}
-              <span className="muted">측정 {row.measurement}</span>
+              <span className="muted">측정 {row.measurement}</span> ·{' '}
+              <span className="muted">{guaranteeLabel(row.guarantee)}</span>
               <button
                 type="button"
                 onClick={() =>
@@ -264,14 +286,83 @@ export function PolicyPanel(props: {
             </li>
           ))}
         </ul>
-        {/* 사용량을 0으로 보이지 않는다. 미측정과 0은 다르다(D-61). */}
-        <p className="muted small">사용량: 측정하지 않음 — {budget.usage_detail}</p>
+        {/* --- 정지 ------------------------------------------------
+            hard 도달은 **완료도 취소도 아니다.** 무엇이 막히고 무엇이 계속되는지,
+            그리고 어떻게 재개하는지를 같은 자리에 둔다(D-61). */}
+        {budget.stop.stopped && (
+          <div className="notice">
+            <strong>예산으로 새 실행이 중지됐다</strong>
+            <ul className="list">
+              {budget.stop.metrics.map((row) => (
+                <li key={row.metric} className="small">
+                  {row.metric} · 노출 {row.exposure} / 한도 {row.limit_value} {row.unit}
+                  {row.guarantee === 'no_absolute_cap' && (
+                    <span className="muted">
+                      {' '}
+                      — 새 배정만 막는다. 진행 중 실행의 초과 노출이 있을 수 있다
+                    </span>
+                  )}
+                  {!row.complete && <span className="muted"> — 이 수는 소비 전부가 아니다</span>}
+                </li>
+              ))}
+            </ul>
+            <p className="muted small">{budget.stop.detail}</p>
+            {budget.stop.resume && <p className="muted small">{budget.stop.resume}</p>}
+          </div>
+        )}
+
+        {/* --- 경고선 ----------------------------------------------- */}
+        {budget.warnings.map((row) => (
+          <p key={row.metric} className="muted small">
+            경고선 도달: {row.metric} {row.exposure} / {row.limit_value} {row.unit} — {row.detail}
+          </p>
+        ))}
+
+        {/* --- 사용량 ------------------------------------------------
+            **`exposure` 를 앞에 둔다.** 확정 사용량만 보이면 진행 중 실행과 결과
+            불명이 공짜처럼 보인다. 모르는 것은 "미확정"으로 드러내고 0으로 채우지
+            않는다(D-61). */}
+        <ul className="list">
+          {Object.values(budget.usage)
+            .filter((row) => row.exposure > 0 || row.runs_unknown > 0 || row.runs_in_flight > 0)
+            .map((row) => (
+              <li key={row.metric} className="small">
+                {row.metric} · 노출 <strong>{round2(row.exposure)}</strong> {row.unit}
+                <span className="muted">
+                  {' '}
+                  (확정 {round2(row.settled)} · 진행 중 {round2(row.held)} · 미확정{' '}
+                  {round2(row.unresolved)})
+                </span>
+                {!row.complete && (
+                  <span className="muted">
+                    {' '}
+                    — 미확정 {row.runs_unknown}건, 진행 중 {row.runs_in_flight}건.{' '}
+                    <strong>이 수는 소비 전부가 아니다</strong>
+                  </span>
+                )}
+              </li>
+            ))}
+        </ul>
+        <p className="muted small">{budget.usage_detail}</p>
+
+        {/* --- 역할별 -------------------------------------------------
+            표시용 축이다. **판정은 언제나 Case 하나로 한다** — 역할별 계산으로 Case
+            한도를 우회하지 못하게 하기 위해서다(autonomy-budget-policy 8절). */}
+        {Object.entries(budget.by_role).length > 0 && (
+          <p className="muted small">
+            역할별 실행 수:{' '}
+            {Object.entries(budget.by_role)
+              .map(([role, metrics]) => `${role} ${metrics.run_count?.rows ?? 0}`)
+              .join(' · ')}{' '}
+            — 표시용이며 한도 판정은 Case 전체로 한다
+          </p>
+        )}
         <p className="muted small">{budget.repair_limit_note}</p>
         <div className="row">
           <select value={metric} onChange={(event) => setMetric(event.target.value)}>
-            {Object.entries(budget.measurement_contract).map(([name, measurement]) => (
+            {Object.entries(budget.reservation_contract).map(([name, contract]) => (
               <option key={name} value={name}>
-                {name} (측정 {measurement})
+                {name} (측정 {contract.measurement} · hard {guaranteeLabel(contract.hard_guarantee)})
               </option>
             ))}
           </select>
@@ -294,6 +385,11 @@ export function PolicyPanel(props: {
         <p className="muted small">
           정확히 측정할 수 없는 지표의 hard 한도는 <strong>설정이 거부된다</strong> —
           지킬 수 없는 상한을 있는 것처럼 표시하지 않는다(D-61).
+        </p>
+        {/* **같은 "hard" 가 지표마다 다른 것을 약속한다.** 그 차이를 숨기면 시간
+            한도를 건 사람이 절대 상한을 믿게 된다. */}
+        <p className="muted small">
+          {budget.reservation_contract[metric]?.reason}
         </p>
       </div>
 

@@ -1183,6 +1183,41 @@ def test_policy_profile_budget_and_repositories_survive_a_forced_kill(controller
         timeout=10.0,
     ).raise_for_status()
 
+    # **소비를 남긴다**(P3-R3). 한도만 복원되고 사용량이 0 으로 돌아오면 제어부를
+    # 다시 띄우는 것만으로 hard 한도를 우회할 수 있다.
+    instruction = httpx.post(
+        f"{base}/api/cases/{case['id']}/artifacts",
+        json={
+            "kind": "instruction",
+            "content": "예산 복원 확인용 지시",
+            "summary": "예산 복원",
+            "target_runner_id": RUNNER_ID,
+        },
+        timeout=10.0,
+    ).json()
+    # Runner 프로세스가 없으므로 Runner 역할로 저장 완료를 보고한다(위 시험과 같다).
+    httpx.post(
+        f"{base}/api/runner/intakes/{instruction['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": instruction["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    httpx.post(
+        f"{base}/api/cases/{case['id']}/runs",
+        json={
+            "run_id": "run-policy-budget-1",
+            "instruction_artifact_id": instruction["artifact_id"],
+            "purpose": "limited_analysis",
+            "role": "author",
+            "tool_id": "local-echo",
+            "mode": "p2-01-local",
+            "permission": "read_only",
+            "task_id": "task-1",
+        },
+        timeout=10.0,
+    ).raise_for_status()
+    before = httpx.get(f"{base}/api/cases/{case['id']}/budget", timeout=10.0).json()
+    assert before["usage"]["run_count"]["exposure"] == 1.0
+
     # ---- 강제 종료 ----
     controller.kill_hard()
     controller.start()
@@ -1201,8 +1236,17 @@ def test_policy_profile_budget_and_repositories_survive_a_forced_kill(controller
     assert policy["budget"]["unlimited"] is False
     limit = policy["budget"]["limits"][0]
     assert (limit["metric"], limit["limit_value"]) == ("run_count", 4.0)
-    # **강제 상태도 그대로 복원된다.** 재시작이 "이제 강제한다"로 바뀌지 않는다.
-    assert limit["enforcement"] == "recorded_not_enforced"
+    # **강제 상태도 그대로 복원된다.** 재시작이 보장 범위를 바꾸지 않는다.
+    # P3-R3에서 `recorded_not_enforced` → `enforced_absolute` 로 바뀌었다.
+    assert limit["enforcement"] == "enforced_absolute"
+
+    # **소비도 복원된다**(P3-R3 AC-9). 재시작으로 한도가 다시 가득 차지 않는다.
+    usage = policy["budget"]["usage"]["run_count"]
+    assert usage["exposure"] == 1.0, "재시작이 소비를 초기화했다"
+    reservations = [
+        r for r in policy["budget"]["reservations"] if r["metric"] == "run_count"
+    ]
+    assert len(reservations) == 1, "이행이 같은 실행에 예약을 다시 만들었다"
 
     selected = policy["repositories"]["selected"]
     assert [s["repository_id"] for s in selected] == [extra["id"]]

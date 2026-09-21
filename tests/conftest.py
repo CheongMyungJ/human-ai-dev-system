@@ -302,6 +302,12 @@ class FakeCliExecutor:
         #: 바뀐 것이 없는" 실행이며 시스템이 그것을 완료로 올리지 않아야 한다.
         self.write_files: dict[str, str] = {}
         self.outcome = RunOutcome.COMPLETED
+        #: 어댑터가 보고하는 사용량(P3-R3). 기본값은 **미보고**다 — 실제 어댑터도
+        #: 항상 주지는 않으며, 시험 기본값이 "항상 보고함"이면 미제공 경로가 한
+        #: 번도 돌지 않는다. `runner.cli_events` 가 만드는 모양을 그대로 쓴다.
+        self.usage: Any = "not_reported"
+        #: 잔류 활동 보고. `none` 이 아니면 소비가 끝났다는 근거가 없다.
+        self.residual_activity = "unknown"
         #: 세션 식별자를 고정하면 "작성과 검토가 같은 세션"을 만들 수 있다.
         self.fixed_session_ref: str | None = None
         self.calls: list[dict[str, Any]] = []
@@ -392,8 +398,8 @@ class FakeCliExecutor:
             output_body=f"fake run {run_id}\n{final}".encode("utf-8"),
             outcome=self.outcome,
             exit_code=0,
-            usage="not_reported",
-            residual_activity="unknown",
+            usage=self.usage,
+            residual_activity=self.residual_activity,
             session_ref=self._session_ref(run_id),
             observed_tool_version=f"{tool_id}/fake-for-tests",
             final_message=final,

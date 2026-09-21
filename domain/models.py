@@ -485,6 +485,14 @@ class AdmissionRefusal(str, Enum):
     # 채로 쓰기를 여는 것이 가장 비싼 실수다(D-39).
     WORKSPACE_TARGET_NOT_RECORDED = "workspace_target_not_recorded"
 
+    # --- P3-R3 예산 -------------------------------------------------------
+    #
+    # **완료도 취소도 아니다.** 설정된 hard 한도를 소비하는 새 실행을 배정하지
+    # 않는다는 뜻이며, 현재 결과·미검증·남은 작업은 그대로 보존된다
+    # (autonomy-budget-policy 8절). 한도를 바꾸면 그 순간 다시 배정된다 —
+    # `continue` 류의 예외 경로는 만들지 않는다(D-61).
+    BUDGET_HARD_LIMIT_REACHED = "budget_hard_limit_reached"
+
 
 class GateId(str, Enum):
     """이번 단계가 구현하는 게이트. QG-02~07은 아직 값으로 두지 않는다 —
@@ -891,9 +899,10 @@ class WorkspaceOwnership(str, Enum):
 #
 # v0.7 정책 모델. **여기서 만드는 것은 기록이고 강제가 아니다.**
 #
-# R1은 정책·Profile·저장소·예산의 영속 모델과 기존 데이터의 이행까지다. Autonomy 에
-# 따른 실행 경로는 R4, 예산의 예약·정지는 R3, Case×Repo 작업공간과 허용 내 자동 추가는
-# R2 의 몫이다. 값이 생겼다는 이유로 그 기능을 지원한다고 표시하지 않는다
+# R1은 정책·Profile·저장소·예산의 영속 모델과 기존 데이터의 이행까지다. 그 위에
+# 강제가 하나씩 붙었다 — Case×Repo 작업공간과 허용 내 자동 추가는 R2, 예산의
+# 예약·정지는 R3. **Autonomy 에 따른 실행 경로는 아직 R4 의 몫이다.** 값이 생겼다는
+# 이유로 그 기능을 지원한다고 표시하지 않는다
 # (DEVELOPMENT.md 3절 "구현하지 않은 모드는 비활성/미지원으로 표시한다").
 
 #: 이 코드가 적용하는 정책 규칙판. 기록마다 남겨 나중에 "어느 규칙으로 정해졌는가"를
@@ -1057,14 +1066,29 @@ class BudgetMeasurement(str, Enum):
 class BudgetEnforcement(str, Enum):
     """그 설정을 실제로 강제할 수 있는가, 그리고 지금 강제하고 있는가.
 
-    R1 에서 실제로 기록되는 값은 `RECORDED_NOT_ENFORCED` 뿐이다 — 예약·집계·정지는
-    R3 이다. `NOT_ENFORCEABLE` 은 측정 계약이 없어 **설정을 받지 않는** 경우를
+    R1 에서 실제로 기록되는 값은 `RECORDED_NOT_ENFORCED` 뿐이었다. 예약·집계·정지를
+    붙인 것이 R3 이다. `NOT_ENFORCEABLE` 은 측정 계약이 없어 **설정을 받지 않는** 경우를
     설명하는 값이며 그 설정은 저장되지 않는다(D-61 "보장할 수 없다면 해당 설정/실행을
     허용하지 않는다").
+
+    **P3-R3 이 아래 셋을 더했다.** 강제하는 한도를 한 값으로 뭉뚱그리지 않는 것이
+    이 단계의 요점이다.
+
+    `ENFORCED_ABSOLUTE`         예약이 정확해 한도를 넘는 배정이 생기지 않는다
+    `ENFORCED_NO_ABSOLUTE_CAP`  새 배정은 막지만 **진행 중 실행의 초과 노출이 있을
+                                수 있다.** 시간 지표가 여기 속한다 — 돌고 있는 CLI 를
+                                초 단위로 끊을 능력이 없다(P1-03)
+    `DISPLAY_ONLY`              경고선. 표시이며 보장이 아니다
+
+    `RECORDED_NOT_ENFORCED` 는 지우지 않는다. R1·R2 시절에 설정된 행이 그 값을 갖고
+    있고, 값을 지우면 그 기록을 읽을 수 없다.
     """
 
     RECORDED_NOT_ENFORCED = "recorded_not_enforced"
     NOT_ENFORCEABLE = "not_enforceable"
+    ENFORCED_ABSOLUTE = "enforced_absolute"
+    ENFORCED_NO_ABSOLUTE_CAP = "enforced_no_absolute_cap"
+    DISPLAY_ONLY = "display_only"
 
 
 #: 지표별 측정 계약. **이것이 hard 한도를 받을 수 있는지 정한다.**

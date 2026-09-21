@@ -1,0 +1,112 @@
+{
+  "run_id": "run-live-r3-1",
+  "case_id": "case-a3a08528234f179b",
+  "task_id": "task-1",
+  "role": "author",
+  "tool_id": "codex",
+  "mode": "exec",
+  "permission": "read_only",
+  "instruction_artifact_id": "art-2aae43a36fd79c9b",
+  "instruction_artifact_rev": 1,
+  "status": "finished",
+  "assignment_generation": 1,
+  "assigned_runner_id": "runner-live-r3",
+  "outcome": "completed",
+  "exit_code": 0,
+  "output_artifact_id": "art-3278ca27c78d55dd",
+  "output_artifact_rev": 1,
+  "session_ref": "01a0c4e6-e8a5-7860-b717-0d942f9ab53f",
+  "residual_activity": "unknown",
+  "observed_tool_version": "codex-cli 0.154.0",
+  "created_at": "2026-09-21T16:57:41.258355+00:00",
+  "assigned_at": "2026-09-21T16:57:42.008986+00:00",
+  "finished_at": "2026-09-21T16:57:55.334695+00:00",
+  "purpose": "limited_analysis",
+  "repository_id": null,
+  "usage": {
+    "tokens": {
+      "input_tokens": 30627,
+      "cached_input_tokens": 27264,
+      "cache_write_input_tokens": 0,
+      "output_tokens": 162,
+      "reasoning_output_tokens": 22
+    },
+    "cost_usd": "not_reported"
+  },
+  "workspace_effect": null,
+  "events": [
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 1,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "session_identified",
+      "native_type": "thread.started",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 2,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "run_started",
+      "native_type": "turn.started",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 3,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "assistant_message",
+      "native_type": "item.completed",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 4,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "tool_call_started",
+      "native_type": "item.started",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 5,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "tool_call_finished",
+      "native_type": "item.completed",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 6,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "assistant_message",
+      "native_type": "item.completed",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 7,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "usage_reported",
+      "native_type": "turn.completed",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    },
+    {
+      "run_id": "run-live-r3-1",
+      "seq": 8,
+      "ts": "2026-09-21T16:57:55.318714+00:00",
+      "type": "run_finished",
+      "native_type": "turn.completed",
+      "raw_ref": null,
+      "received_at": "2026-09-21T16:57:55.325460+00:00"
+    }
+  ],
+  "commands": []
+}

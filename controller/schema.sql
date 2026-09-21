@@ -897,9 +897,10 @@ CREATE INDEX IF NOT EXISTS idx_case_workspace_project ON case_workspace(project_
 -- 정책을 바꾼 이유의 서술, Profile 항목의 내용, 예산을 정한 배경은 소유 Runner 의
 -- 원문 또는 사용자의 결정 근거에 있고 여기에는 판정·값·코드·짧은 요약만 남는다.
 --
--- **이 표들은 기록이고 강제가 아니다.** Autonomy 에 따른 실행 경로는 R4,
--- 예산 예약·정지는 R3, Case×Repo 작업공간과 허용 내 자동 추가는 R2 다. 행이
--- 생겼다는 이유로 그 기능을 지원한다고 표시하지 않는다.
+-- 이 표들은 **기록**이다. 그 위에 강제가 하나씩 붙었다 — Case×Repo 작업공간과
+-- 허용 내 자동 추가는 R2(v9), 예산의 예약·집계·정지는 R3(v10, `budget_reservation`).
+-- **Autonomy 에 따른 실행 경로와 확인 지점은 아직 R4 다.** 행이 생겼다는 이유로
+-- 그 기능을 지원한다고 표시하지 않는다.
 --
 -- 그리고 **행이 없는 상태의 의미가 표마다 다르다.** 한 규칙으로 통일하면 어느 한쪽이
 -- 반드시 거짓이 된다.
@@ -1116,3 +1117,55 @@ CREATE TABLE IF NOT EXISTS code_composition_entry (
 );
 
 CREATE INDEX IF NOT EXISTS idx_composition_case ON code_composition(case_id, state);
+
+-- ===================================================================
+-- 스키마 v10 (P3-R3 예산 예약·집계·정지)
+--
+-- 기존 표의 컬럼을 **하나도 바꾸지 않는다.** 새 표 하나와 그 표를 채우는 이행이
+-- 전부다. 예산 강제는 판정이지 저장 구조의 재설계가 아니다.
+--
+-- **집계의 출처는 이 표 하나다.** `run` 표에서 따로 세고 여기서도 세면 두 수가
+-- 갈라지고, 갈라지면 어느 쪽이 한도인지 아무도 말할 수 없다. 그래서 v10 이행이
+-- 기존 실행에도 행을 만든다(`source = migrated_from_run`) — 스키마를 올리는 것만으로
+-- 소비가 0 이 되면 "세션·Task 분할로 초기화하지 않는다"(D-61)가 이행에서 깨진다.
+--
+-- 없음의 뜻:
+--   `budget_reservation` 행이 없는 Run = R3 이행 대상이 아닌 실행(있을 수 없다).
+--                       이행이 모든 기존 Run 에 행을 만들기 때문이다
+--   `actual_value IS NULL` = **아직 모른다.** 0 이 아니다(D-61 "미제공을 0으로
+--                       기록하지 않는다")
+-- ===================================================================
+
+-- 한 실행이 잡아 둔 예산 한 건. 배정 **전에** 잡고 종료 후 정산한다.
+--
+-- `generation` 이 키에 있는 이유: 재배정된 실행은 CLI 를 다시 부르고 그것은 새
+-- 소비다(autonomy-budget-policy 7절 "재시작된 실제 AI 호출은 새 소비"). 같은
+-- `run_id` 라는 이유로 두 번째 호출을 공짜로 두지 않는다.
+--
+-- 본문은 없다. 여기 있는 것은 수·상태·측정 방식·참조뿐이다.
+CREATE TABLE IF NOT EXISTS budget_reservation (
+    id               TEXT PRIMARY KEY,
+    -- **누적 단위는 Case 하나다.** 역할·Task·저장소·세션으로 나뉘지 않는다(D-61).
+    case_id          TEXT NOT NULL REFERENCES "case"(id),
+    run_id           TEXT NOT NULL REFERENCES run(run_id),
+    generation       INTEGER NOT NULL,
+    metric           TEXT NOT NULL,
+    -- 실행 전에 잡은 양. `open_ended`·사후 보고 지표는 NULL(=모름)이며 0 이 아니다.
+    reserved_value   REAL,
+    -- 정산된 실제 사용량. NULL = 아직 모른다.
+    actual_value     REAL,
+    measurement      TEXT NOT NULL,   -- exact | estimated | unavailable
+    reservation_kind TEXT NOT NULL,   -- exact_per_run | open_ended_per_run | post_hoc_reported
+    -- 역할별·목적별 집계의 축. Run 표를 다시 읽지 않고 집계하기 위해 복제한다.
+    role             TEXT NOT NULL,
+    purpose          TEXT NOT NULL,
+    state            TEXT NOT NULL,   -- held | settled | unresolved
+    source           TEXT NOT NULL,   -- reserved | migrated_from_run
+    settle_source    TEXT,            -- 왜 그 값인지. 특히 **왜 모르는지**
+    reserved_at      TEXT NOT NULL,
+    settled_at       TEXT,
+    UNIQUE (run_id, generation, metric)
+);
+
+CREATE INDEX IF NOT EXISTS idx_budget_reservation_case
+    ON budget_reservation(case_id, metric, state);
