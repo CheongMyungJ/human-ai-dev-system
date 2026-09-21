@@ -20,9 +20,9 @@
 | 활성 plan | 없음. 다음 세션이 `plans/P3-PLAN-R2.md`를 작성·공유한 뒤 구현. 완료된 `P3-PLAN-R1`·`P3-PLAN-03`을 다시 열지 않음 |
 | 다음 순서 | P3-R2 복수 저장소 → P3-R3 예산 → P3-R4 자동 실행 → P3-04 수직 통합 → P4 → P5 → P6 |
 | 마지막 제품 검증 | P3-R1 보고 기준 **pytest 286 + P1 계약 unittest 18 통과**, 스키마 **v8**, 실제 Codex 라이브 1회. [P3-R1 근거](p3/evidence/P3-R1-results.md). P3-03의 242는 그 시점 수치로 보존 |
-| 이 문서 개정 시작 상태 | `main`, HEAD `3ca144b`, 작업 트리 clean으로 관측. **이 세션의 코드·시험·문서 변경은 미커밋**이며 실제 상태는 `git status`로 대조 |
+| 이 문서 개정 시작 상태 | `main`, HEAD `3ca144b`, 작업 트리 clean으로 관측. 이 세션의 변경은 커밋해 `origin/main`에 반영했다. 실제 커밋은 `git log --oneline 3ca144b..HEAD`, 원격 반영은 로컬/원격 ref로 확인 |
 | 남은 제품 결정 | R2 착수에 필요한 미결 없음. P3-04의 실제 시험 기능은 그 작업 시작 시 정한다 |
-| 외부 반영 허용 | 이전 세션의 v0.7 문서 변경 커밋·push 허용은 **그 변경에만** 적용됐다. **P3-R1의 코드·시험 변경은 아직 커밋·push 허용을 받지 않았다** — 커밋 전에 사용자에게 확인한다. 실제 반영 상태는 로컬/원격 ref로 확인 |
+| 외부 반영 허용 | 사용자의 후속 지시로 P3-R1 변경의 커밋과 `origin/main` push를 허용받아 반영했다. **이 허용은 그 커밋에만 적용되며 이후 새 변경·PR·병합으로 확대되지 않는다.** 다음 세션의 변경은 다시 확인받는다. 실제 반영 상태는 로컬/원격 ref로 확인 |
 
 P3-R1 구현은 여섯 Profile의 목적별 의도 항목, `Autonomy`(기본 ask-on-decision)와 정책 이력, 위임 근거, controlled 확인 지점, 예산 설정 계약, Project 등록 저장소와 Case의 선택·쓰기허용·게시허용을 **기록·조회**한다. **그 값들을 아직 강제하지 않는다** — 목적별 진입 조건과 자동 실행 경로는 R4, 예산 예약·정지는 R3, Case×Repo 작업공간과 허용 내 자동 추가는 R2다. 조회 응답의 `enforcement` 가 각 축을 지금 누가 강제하는지 말한다. 복수 저장소 실행, 예산 강제, 지식 적용은 여전히 없다. 이전 계획·증거는 당시 사실로 유지하고 새 설계 통과 증거로 재명명하지 않는다. 상세 과거 인계는 [v0.6 보존본](development-history-v0.6.md), 완료된 plan은 [P3-PLAN-R1](plans/P3-PLAN-R1.md)·[P3-PLAN-03](plans/P3-PLAN-03.md)을 따른다.
 
@@ -157,7 +157,8 @@ R1의 모델은 R2/R3/R4를 우회하는 실행 권한이 아니다. R4에서 �
 - **검증:** **pytest 286 + P1 계약 unittest 18 통과**(P3-03 시점 242 → +44), `npm run build` 성공, 제어부 강제 종료 후 복원, 커밋된 v7 스키마로 만든 실제 DB의 v8 이행, 라이브 **실제 codex 1회**(refactoring Profile 초안 11항목·기준 3건·질문 1건, 필수 항목 누락 0). 근거는 [P3-R1 결과](p3/evidence/P3-R1-results.md). v0.6의 "여섯 항목" 단정 5건은 의미를 검토해 "그 Case의 Profile이 요구하는 항목"으로 바꾸고 Profile 없는 Case의 여섯 항목 유지 시험을 새로 더했다 — 검사를 지우지 않았다.
 - **라이브가 찾은 결함:** 성공 기준이 Profile 의미 항목을 가리키면 구조 보고가 500으로 죽어 초안 전체가 사라졌다. 저장 계층·입력 계약을 함께 고치고 회귀 시험을 더했다. 상세는 결과 문서 10절.
 - **다음 행동:** 실제 Git 상태 확인 → P3-R2 범위와 [실행·작업공간](execution-workspace-review.md)·P3-R1 결과 확인 → **P3-PLAN-R2 작성·공유 → R2 구현·검증**. R1의 모델을 재설계하지 않고 그 위에 실행을 붙인다. R3·R4·P3-04를 먼저 시작하지 않는다.
-- **작업공간:** 시작 `main`/`3ca144b`, clean 관측. **이 세션의 변경은 전부 미커밋이다** — 새 파일 `domain/profiles.py`, `tests/test_policy.py`, `web/src/PolicyPanel.tsx`, `plans/P3-PLAN-R1.md`, `p3/evidence/P3-R1-*` 와 수정 파일 16개. 커밋·push 허용은 아직 받지 않았으므로 **커밋 전에 사용자에게 확인한다.** 실제 상태는 `git status --short --branch` 로 대조한다.
+- **작업공간:** 시작 `main`/`3ca144b`, clean 관측. 새 파일 `domain/profiles.py`, `tests/test_policy.py`, `web/src/PolicyPanel.tsx`, `plans/P3-PLAN-R1.md`, `p3/evidence/P3-R1-*` 와 수정 파일 18개를 **사용자 지시로 커밋하고 `origin/main`에 push했다**(그 허용은 이 변경에만 적용된다). 실제 커밋은 `git log --oneline 3ca144b..HEAD`, 원격 반영은 로컬/원격 ref로 확인한다. 인계 소비 시 실제 상태를 재확인한다.
+- **다음 세션이 이어서 할 때:** 작업 트리는 clean 이고 `origin/main` 과 같다. `tests/test_migration.py` 의 v7 스키마 조회는 **커밋 이력**에서 옛 스키마를 찾으므로(`_v7_schema`) 이 커밋 이후에도 동작한다 — push 뒤 재실행해 확인했다.
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 종료했다. 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p3-r1-live` 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 증거 사본은 `p3/evidence/P3-R1-*` 에 있다.
 
 ## 11. 유지할 경계
