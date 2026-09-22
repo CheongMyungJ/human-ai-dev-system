@@ -46,6 +46,8 @@ SUMMARY_LIMIT = 200
 
 #: Task 키의 길이 상한. 키는 식별자이지 설명이 아니다.
 TASK_KEY_LIMIT = 64
+#: 계획이 적는 저장소 참조의 길이 한도. 이름이거나 등록 id 다.
+REPOSITORY_REF_LIMIT = 100
 
 #: 단계별 항목의 고정 순서. 줄이지 않는다.
 SECTION_ORDER: dict[PreparationStage, tuple[str, ...]] = {
@@ -266,6 +268,10 @@ def _compose_tasks(raw_tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "completion": str(raw.get("completion") or "").strip(),
                 "completion_summary": _short(str(raw.get("completion_summary") or "")),
                 "relates_to": str(raw.get("relates_to") or "").strip(),
+                # **이 작업이 어느 저장소를 바꾸는가**(P3-04). 계획이 적은 그대로
+                # 두고 여기서 해석하지 않는다 — 존재 여부·허용 범위의 판정은
+                # 제어부의 몫이며, 의존·기준 연결을 키로만 적는 것과 같은 규칙이다.
+                "repository": str(raw.get("repository") or "").strip()[:REPOSITORY_REF_LIMIT],
                 "depends_on": [
                     str(d).strip()[:TASK_KEY_LIMIT]
                     for d in (raw.get("depends_on") or [])
@@ -487,6 +493,9 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
                 ),
                 "order_index": index,
                 "origin": task.get("origin") or ContentOrigin.AI_PROPOSAL.value,
+                # 저장소 참조는 **해석하지 않은 채로** 올린다. 제어부가 이 Case 의
+                # 선택 저장소 안에서 해석하고, 해석되지 않으면 그 사실을 남긴다.
+                "repository": task.get("repository") or "",
                 "depends_on": list(task.get("depends_on") or []),
                 "criteria": list(task.get("criteria") or []),
             }

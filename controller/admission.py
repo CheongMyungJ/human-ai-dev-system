@@ -204,6 +204,16 @@ class AdmissionRequest:
     #: `Repository.fast_lane_state()` 의 결과(P3-R4). 결합 기록 하나로 충분한지를
     #: 정한다. 빈 dict 는 `eligible = False` 로 읽힌다 — 판정이 없으면 일반 경로다.
     fast_lane: dict[str, Any] = field(default_factory=dict)
+    #: `Repository.task_repository_state()` 의 결과(P3-04). 이 Task 가 어느 저장소를
+    #: 바꾸기로 했는지와 고를 수 있는 저장소의 수가 들어 있다. 빈 dict 는 **그래프가
+    #: 없거나 이 Task 가 그래프에 없다**이며, 그 상태는 `_check_work_graph` 가 이미
+    #: 본다 — 여기서 없음을 통과로 읽는 것이 아니라 같은 사실을 두 번 거부하지
+    #: 않는 것이다.
+    task_repository: dict[str, Any] = field(default_factory=dict)
+    #: 이 실행이 **밝힌** 대상 저장소(P3-04). 작업공간 상태에서 끌어내지 않는 이유는,
+    #: 준비되지 않은 저장소를 대상으로 적은 요청이 작업공간이 없다는 이유로 대조를
+    #: 건너뛰게 되기 때문이다 — 그 경우에도 "이 Task 의 저장소가 아니다"는 사실이다.
+    run_repository_id: str | None = None
 
 
 @dataclass
@@ -424,6 +434,78 @@ def _check_workspace_target(request: AdmissionRequest, refuse: Any) -> None:
             f"이 업무에 작업공간이 {workspace.get('repository_count')}개 있는데 이"
             " 실행의 대상 저장소가 기록되지 않았다. 어느 저장소를 보거나 고칠지"
             " 모르는 채로 실행을 배정하지 않는다",
+        )
+
+
+#: Task 가 자기 저장소를 밝혀야 하는 목적(P3-04).
+#:
+#: **조사·검토·초안은 여기 없다.** 그것들은 코드를 바꾸지 않으며, 그래프가 생기기
+#: 전에도 돌아야 한다. 무는 것은 실제로 저장소를 고치거나 그 저장소 위에서 검증을
+#: 돌리는 목적뿐이다.
+NEEDS_TASK_REPOSITORY: frozenset[RunPurpose] = frozenset(
+    {
+        RunPurpose.FEATURE_IMPLEMENTATION,
+        RunPurpose.VERIFICATION_RUN,
+    }
+)
+
+
+def _check_task_repository(request: AdmissionRequest, refuse: Any) -> None:
+    """이 실행의 대상 저장소가 **그 Task 가 바꾸기로 한 저장소인가**(P3-04).
+
+    R2 의 `_check_workspace_target` 은 "대상이 기록됐는가"를 묻고 여기서는 "그
+    대상이 맞는가"를 묻는다. 둘은 저장소가 하나뿐이면 같은 질문이지만, 두 저장소를
+    함께 바꾸는 업무에서는 다르다 — 대상을 기록했다는 이유만으로 통과하면 "UI
+    작업을 한다면서 API 저장소를 고치는 실행"이 열리고, 실행 전후 대조가 엉뚱한
+    Task 에 붙는다. 그 대조가 우리가 가진 유일한 증거다.
+
+    **소급하지 않는 자리가 둘이다.** 저장소가 하나뿐인 Case 는 아무 것도 달라지지
+    않고(고를 것이 없다), v12 이전 Task 는 `repository_id` 가 미기록이라 미기록
+    경로를 탄다. 미기록을 막는 것은 **저장소가 둘 이상인 Case** 뿐이며, 그런 Case 는
+    R2 이후에만 있고 그 안에서 저장소를 말하지 않는 계획은 덜 된 계획이다.
+    """
+    if request.purpose not in NEEDS_TASK_REPOSITORY:
+        return
+    task = request.task_repository or {}
+    if not task.get("present"):
+        # 이 Task 가 현재 그래프에 없다. `_check_work_graph` 가 이미 거부했다.
+        return
+
+    recorded = task.get("repository_id")
+    target = request.run_repository_id or (
+        (request.workspace_state or {}).get("repository_id")
+    )
+
+    if recorded:
+        if target and target != recorded:
+            refuse(
+                AdmissionRefusal.RUN_TASK_REPOSITORY_MISMATCH,
+                f"{request.task_id!r} 는 {task.get('repository_name')!r} 저장소의 작업인데"
+                f" 이 실행의 대상 저장소는 {target!r} 다."
+                " 다른 저장소의 변경을 이 작업의 결과로 적지 않는다",
+            )
+        return
+
+    # 미기록이다. 고를 것이 둘 이상일 때만 문다.
+    if (task.get("choice_count") or 0) < 2:
+        return
+    # 계획이 적었는데 해석되지 않은 것과 아무 것도 적지 않은 것은 **사람이 해야 할
+    # 일이 다르다.** 앞은 이름을 고치거나 그 저장소를 선택에 넣는 것이고 뒤는
+    # 계획이 저장소를 말하는 것이다.
+    unresolved = task.get("repository_ref")
+    if unresolved:
+        refuse(
+            AdmissionRefusal.TASK_REPOSITORY_NOT_RECORDED,
+            f"{request.task_id!r} 의 계획이 {unresolved!r} 저장소를 가리키는데 이 업무가"
+            " 고른 저장소 중에 그런 이름이 없다. 계획이 가리키는 저장소를 고치거나"
+            " 그 저장소를 이 업무의 선택에 넣는다",
+        )
+    else:
+        refuse(
+            AdmissionRefusal.TASK_REPOSITORY_NOT_RECORDED,
+            f"이 업무는 저장소를 {task.get('choice_count')}개 바꿀 수 있는데"
+            f" {request.task_id!r} 가 어느 저장소의 작업인지 계획에 없다."
+            " 어느 저장소를 고칠지 모르는 채로 그 작업의 결과를 적지 않는다",
         )
 
 
@@ -741,6 +823,9 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     # 대상 저장소는 **권한과 무관하게** 본다(P3-R2). 읽기 전용 검토도 어느 코드를
     # 보는지 정해져 있어야 한다.
     _check_workspace_target(request, refuse)
+    # 그리고 그 대상이 **이 Task 의 저장소인지**를 따로 본다(P3-04). 위 검사는
+    # "기록됐는가"이고 이것은 "맞는가"다.
+    _check_task_repository(request, refuse)
 
     if not request.tool_installed:
         refuse(

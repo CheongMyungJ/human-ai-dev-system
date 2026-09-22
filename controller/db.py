@@ -8,6 +8,7 @@ NFR-01은 "저장 완료로 응답한 기록은 프로세스 재시작 후 복�
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 def utc_now() -> str:
@@ -175,6 +176,28 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     _migrate_v11_progression(conn)
 
+    # v12: Task 가 **어느 저장소를 바꾸는가**(P3-04). 설계가 처음부터 요구한 것이고
+    #      (execution-workspace-review 19행 "Task·Run이 사용하는 Repo와 작업공간을
+    #      명시한다") R2 가 실행 쪽만 채운 채 남겨 둔 자리다.
+    #
+    #      `task.repository_id`   해석된 저장소. 옛 행은 NULL 이며 그것은 "주
+    #                             저장소"가 아니라 **미기록**이다. 작업공간에서
+    #                             유도해 채우지 않는다 — 저장소가 하나뿐이라는
+    #                             이유로 그 값을 적으면 나중에 저장소가 늘었을 때
+    #                             "계획이 그렇게 정했다"는 기록이 된다(D-62).
+    #      `task.repository_ref`  계획이 **적은 그대로**의 문자열. 해석되지 않은
+    #                             참조를 조용히 버리지 않기 위해 남긴다 —
+    #                             `task_block_unresolved` 와 같은 이유다. 버리면
+    #                             "저장소를 말하지 않은 계획"과 "선택 밖 저장소를
+    #                             가리킨 계획"이 화면에서 같아진다.
+    #
+    #      **데이터 이행 함수가 없다.** 옛 행의 올바른 값이 NULL·'' 이기 때문이며,
+    #      채울 것이 있는데 비워 둔 것이 아니다. 진입 검사 쪽에서 그 미기록이
+    #      **저장소가 둘 이상인 Case 의 새 그래프에서만** 막도록 좁힌다 — 넓히면
+    #      단일 저장소 Case 와 R2 이전 Case 의 진행 중 업무가 멈춘다.
+    _add_column_if_missing(conn, "task", "repository_id", "TEXT")
+    _add_column_if_missing(conn, "task", "repository_ref", "TEXT NOT NULL DEFAULT ''")
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -184,6 +207,24 @@ def migrate(conn: sqlite3.Connection) -> None:
         )
 
 
+#: 쓰기 트랜잭션을 **연결 단위로 직렬화한다**(P3-04).
+#:
+#: 제어부는 연결 하나를 `check_same_thread=False` 로 만들어 모든 요청이 공유한다.
+#: 그런데 FastAPI 는 동기 엔드포인트를 **스레드풀**에서 돌리므로 요청 둘이 같은
+#: 연결에 동시에 `BEGIN IMMEDIATE` 를 보낼 수 있고, 그때 SQLite 가
+#: `cannot start a transaction within a transaction` 으로 죽는다.
+#:
+#: **P3-R3 이 `BEGIN IMMEDIATE` 를 도입하면서 생긴 자리다.** 그 전에는 자동 커밋
+#: 모드라 이 충돌이 없었다. 라이브에서 실제로 났다 — Runner 가 실행 결과를 보고하는
+#: 동안 다음 실행을 만들자 500 이 떴다. 한 요청이 다른 요청 때문에 죽는 것은
+#: 어느 진입 검사로도 설명되지 않는 실패다.
+#:
+#: 재진입(`RLock`)인 이유는 같은 스레드가 트랜잭션 안에서 다른 트랜잭션 함수를
+#: 부르는 경로가 있을 수 있기 때문이다 — 그 경우는 SQLite 가 여전히 막지만, 그
+#: 실패는 **설계 문제**로 드러나야지 스레드 경합으로 가려지면 안 된다.
+_WRITE_LOCK = threading.RLock()
+
+
 @contextmanager
 def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     """하나의 쓰기 트랜잭션. 예외가 나면 되돌린다.
@@ -191,14 +232,20 @@ def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
     상태 전이와 그에 딸린 기록(배정, 이벤트, 참조)을 한 트랜잭션에 묶기 위해 쓴다.
     다만 DB와 Runner 파일·GitHub를 하나의 원자적 트랜잭션으로 가정하지는 않는다
     (design-draft.md "데이터 모델과 인터페이스 초안").
+
+    **연결을 공유하는 요청들 사이에서 직렬화된다**(P3-04). 공유 연결에 동시에
+    `BEGIN IMMEDIATE` 가 들어가면 SQLite 가 거부하며, 그것은 이 요청의 조건과
+    아무 상관 없는 실패다. 잠금은 **이 프로세스 안에서만** 보장하며, 여러 제어부
+    프로세스의 조정은 P6-03 이다.
     """
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        yield conn
-    except BaseException:
-        conn.execute("ROLLBACK")
-        raise
-    conn.execute("COMMIT")
+    with _WRITE_LOCK:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+        conn.execute("COMMIT")
 
 
 def _migrate_v8_existing_rows(conn: sqlite3.Connection) -> None:

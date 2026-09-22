@@ -1,0 +1,105 @@
+{
+  "case_id": "case-052adc0dbbf1afa1",
+  "workspaces": [
+    {
+      "case_id": "case-052adc0dbbf1afa1",
+      "repository_id": "repo-39c439143391faca",
+      "project_id": "prj-1dc41ce094ea27d5",
+      "state": "ready",
+      "branch": "hads/case-052adc0dbbf1afa1",
+      "allowance_source": "case_repository",
+      "runner_id": "runner-p3-04-live",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\repos\\repo-core",
+      "worktree_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\data\\runner\\worktrees\\case-052adc0dbbf1afa1\\repo-39c439143391faca",
+      "base_commit": "0b234ff40b05f7e4bd72417c11a0302321281d58",
+      "base_ref": "HEAD",
+      "user_tree_dirty": true,
+      "user_tree_entries": 2,
+      "failure_reason": "",
+      "requested_at": "2026-09-22T00:24:47.243751+00:00",
+      "ready_at": "2026-09-22T00:24:48.414041+00:00",
+      "repository_name": "primary",
+      "run_effects": [],
+      "outside_workspace_changed": false
+    },
+    {
+      "case_id": "case-052adc0dbbf1afa1",
+      "repository_id": "repo-87e2e6b820072678",
+      "project_id": "prj-1dc41ce094ea27d5",
+      "state": "ready",
+      "branch": "hads/case-052adc0dbbf1afa1",
+      "allowance_source": "case_repository",
+      "runner_id": "runner-p3-04-live",
+      "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\repos\\repo-report",
+      "worktree_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\data\\runner\\worktrees\\case-052adc0dbbf1afa1\\repo-87e2e6b820072678",
+      "base_commit": "233b9229476436b7ed45d0d79a43d46314181d33",
+      "base_ref": "HEAD",
+      "user_tree_dirty": true,
+      "user_tree_entries": 2,
+      "failure_reason": "",
+      "requested_at": "2026-09-22T00:24:47.246111+00:00",
+      "ready_at": "2026-09-22T00:24:49.066681+00:00",
+      "repository_name": "repo-report",
+      "run_effects": [],
+      "outside_workspace_changed": false
+    }
+  ],
+  "all_ready": true,
+  "ready_count": 2,
+  "repository_count": 2,
+  "unattributed_run_effects": [],
+  "composition": null,
+  "selection": {
+    "case_id": "case-052adc0dbbf1afa1",
+    "selected": [
+      {
+        "case_id": "case-052adc0dbbf1afa1",
+        "repository_id": "repo-39c439143391faca",
+        "selection_source": "explicit",
+        "code_write_allowed": 1,
+        "publish_allowed": 0,
+        "selected_by": "owner",
+        "reason_summary": "repo-core 의 공개 계약이 함께 바뀐다",
+        "state": "current",
+        "selected_at": "2026-09-22T00:24:47.237051+00:00",
+        "superseded_at": null,
+        "repository_name": "primary",
+        "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\repos\\repo-core",
+        "repository_source": "registered"
+      },
+      {
+        "case_id": "case-052adc0dbbf1afa1",
+        "repository_id": "repo-87e2e6b820072678",
+        "selection_source": "explicit",
+        "code_write_allowed": 1,
+        "publish_allowed": 0,
+        "selected_by": "owner",
+        "reason_summary": "repo-report 의 공개 계약이 함께 바뀐다",
+        "state": "current",
+        "selected_at": "2026-09-22T00:24:47.239058+00:00",
+        "superseded_at": null,
+        "repository_name": "repo-report",
+        "repo_path": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p3-04-live\\path-a\\repos\\repo-report",
+        "repository_source": "registered"
+      }
+    ],
+    "excluded": [],
+    "implicit_single_repository": null,
+    "journal_repository_id": null,
+    "write_allowance_implies_publish": false,
+    "enforcement": {
+      "selection": {
+        "state": "enforced",
+        "enforced_by": "P3-R2",
+        "detail": "선택·쓰기 허용이 Case×Repo 작업공간을 정한다. 미선택·명시 제외·쓰기 미허용·기록 저장소는 작업공간이 만들어지지 않는다. 허용 내 자동 추가는 기록되고 허용 밖은 사람 확인으로 되돌린다"
+      },
+      "publish": {
+        "state": "not_implemented",
+        "enforced_by": "P5",
+        "detail": "실제 push·PR·기록 이슈 게시는 구현되지 않았다"
+      }
+    }
+  },
+  "isolation": "worktree_file_layout_only",
+  "isolation_note": "worktree 는 파일 배치의 분리다. 다른 경로·자격증명 접근을 막는 OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
+}

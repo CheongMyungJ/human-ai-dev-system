@@ -1087,7 +1087,31 @@ class Repository:
         )
         latest_intent = self.latest_intent_version(run["case_id"])
         run["current_intent_version_id"] = latest_intent["id"] if latest_intent else None
+        # **이 Case 가 코드를 바꿔도 되는 저장소들**(P3-04). 계획이 Task 마다 저장소를
+        # 말해야 하는데(v12) 계획을 쓰는 실행이 그 목록을 모르면 이름을 지어내게
+        # 되고, 지어낸 이름은 해석되지 않아 그 Task 가 막힌다. 실제로 라이브에서
+        # 그렇게 됐다 — 등록 이름("primary")과 사람이 부르는 이름("repo-core")이
+        # 달랐고 계획은 후자를 적었다.
+        #
+        # **이름과 식별자뿐이다.** 경로도 본문도 들어가지 않는다 — 한 실행은
+        # 자기 작업공간 하나만 보며(D-39) 이 목록이 다른 저장소를 열어 주지 않는다.
+        run["case_repositories"] = [
+            {"repository_id": r["id"], "name": r["name"]}
+            for r in self.code_repository_choices(run["case_id"])
+        ]
         return run
+
+    def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
+        """계획이 Task 의 저장소로 고를 수 있는 것들. 이름 순이 아니라 선택 순이다."""
+        ids_ = self._code_repository_ids(case_id)
+        if not ids_:
+            return []
+        rows = self.conn.execute(
+            "SELECT id, name FROM project_repository WHERE id IN"
+            f" ({','.join('?' * len(ids_))}) ORDER BY registered_at",
+            tuple(sorted(ids_)),
+        ).fetchall()
+        return [dict(r) for r in rows]
 
     def _authoring_stage(self, case_id: str, purpose: str | None) -> str | None:
         """이 작성 실행이 만들 준비 산출물의 단계.
@@ -2492,6 +2516,11 @@ class Repository:
             objective_widened=self.objective_widened(case_id),
             material_delta_state=self.material_delta_state(case_id),
             fast_lane=self.fast_lane_state(case_id),
+            # **이 Task 가 어느 저장소의 작업인가**(P3-04). 위 `workspace_state` 는
+            # "대상이 기록됐는가"이고 이것은 "그 대상이 맞는가"다. 저장소가 하나뿐인
+            # Case 에서는 둘이 같은 질문이라 아무 것도 달라지지 않는다.
+            task_repository=self.task_repository_state(case_id, task_id),
+            run_repository_id=repository_id,
         )
         return evaluate_admission(request)
 
@@ -4562,6 +4591,18 @@ class Repository:
 
     # ------------------------------------------------- P3-01 고정 컨텍스트
 
+    #: 계획을 따라 **코드를 바꾸거나 그 위에서 확인하는** 목적(P3-04).
+    #:
+    #: 이 목적들은 산출물을 쓰지 않는다 — 계획이 이미 정한 것을 실행한다. 그래서
+    #: 고정하는 것도 "이전 버전"이 아니라 **따라야 할 것**(동의된 의도와 계획)이다.
+    WORKS_FROM_THE_PLAN: frozenset[RunPurpose] = frozenset(
+        {
+            RunPurpose.FEATURE_IMPLEMENTATION,
+            RunPurpose.VERIFICATION_RUN,
+            RunPurpose.LOCAL_EXPERIMENT,
+        }
+    )
+
     def compose_context_refs(self, case_id: str, purpose: RunPurpose) -> list[dict[str, Any]]:
         """이 목적의 작성 실행에 고정할 참조 목록.
 
@@ -4584,10 +4625,76 @@ class Repository:
                 if item["state"] == FeedbackState.RECEIVED.value:
                     add(ContextRefRole.FEEDBACK, item["artifact_id"], item["artifact_rev"])
 
+        def add_question_answers(intent_version_id: str) -> None:
+            """**사람이 답한 질문의 원문**을 고정한다(P3-04).
+
+            답변은 `intent_question.answer_artifact_id` 에 기록돼 있었지만 어떤
+            실행의 입력도 아니었다 — AI 가 묻고 사람이 답했는데 다시 쓰는 AI 가
+            그 답을 볼 수 없었다. 그 상태에서는 "필요한 질문의 답변을 반영하면
+            자동 진행한다"(intent-artifacts 104행)가 성립하지 않는다. 반영할 입력이
+            없기 때문이다.
+
+            **피드백과 합치지 않는다.** 피드백은 초안 전체에 대한 의견이고 이것은
+            **그 질문에 대한 답**이다. 한 역할로 묶으면 지시문이 "무엇에 답한
+            것인지"를 말할 수 없다.
+            """
+            for question in self.list_questions(intent_version_id):
+                if question["state"] != QuestionState.ANSWERED.value:
+                    continue
+                add(ContextRefRole.QUESTION_ANSWER, question.get("answer_artifact_id"), 1)
+
+        def add_original_request(intent: dict[str, Any]) -> None:
+            """**그 초안이 따라야 했던 요청 원문**을 고정한다(P3-04).
+
+            QG-01 은 "요청 정합성 확인"이다 — 의도가 원래 요청과 맞는가를 본다.
+            그런데 의미 검토의 고정 컨텍스트가 비어 있어서 검토자는 초안만 받아
+            각 항목이 요청에서 온 것인지 **추측해야 했다.** 라이브의 첫 검토자가
+            그것을 그대로 말했다("원래 요청이 제공되지 않아 …검토할 수 없다").
+
+            대조할 것을 주지 않고 대조를 요구하면 검토자는 **요청에 있는 내용을
+            근거 없는 가정으로** 판정한다. 실제로 그렇게 됐다.
+
+            무엇이 그 요청인가는 지어내지 않는다 — **이 Case 의 첫 초안을 쓴 실행이
+            받은 지시**가 정확히 그것이다.
+
+            **다시 쓴 버전의 지시가 아니다.** 재작성 실행이 받는 것은 "이 지적을
+            고쳐라" 같은 후속 지시이고, 그것을 요청으로 주면 검토자가 다른 것을
+            원래 요청으로 읽는다. 라이브의 검토자가 그 어긋남을 실제로 알아챘다 —
+            "요청 원문 내용이 제공되지 않아 전체 대조를 수행할 수 없다".
+
+            사람이 직접 입력한 초안(`author_run_id` 없음)에는 그런 실행이 없고,
+            그때는 **참조를 만들지 않는다.** 없는 것을 아무 지시 원문으로 채우지
+            않는다.
+            """
+            author_run_id = None
+            for version in self.list_intent_versions(intent["case_id"]):
+                if version.get("author_run_id"):
+                    author_run_id = version["author_run_id"]
+            if not author_run_id:
+                return
+            try:
+                run = self.get_run(author_run_id)
+            except NotFoundError:
+                return
+            add(
+                ContextRefRole.ORIGINAL_REQUEST,
+                run["instruction_artifact_id"],
+                run["instruction_artifact_rev"],
+            )
+
         latest = self.latest_intent_version(case_id)
         if purpose is RunPurpose.INTENT_AUTHORING:
             if latest is not None:
                 add(ContextRefRole.PREVIOUS_INTENT, latest["artifact_id"], latest["artifact_rev"])
+                add_question_answers(latest["id"])
+            add_unresolved_feedback()
+        elif purpose is RunPurpose.INTENT_GATE_REVIEW:
+            # **검토자에게 대조할 것을 준다.** 초안은 지시 원문으로 이미 간다
+            # (`assignment_payload` 가 그 원문에서 검토 대상 버전을 끌어낸다).
+            # 여기서 더하는 것은 **무엇과 맞춰 보라는 것인가**다.
+            if latest is not None:
+                add_original_request(latest)
+                add_question_answers(latest["id"])
             add_unresolved_feedback()
         elif purpose in (RunPurpose.DESIGN_AUTHORING, RunPurpose.PLAN_AUTHORING):
             if latest is not None:
@@ -4616,6 +4723,24 @@ class Repository:
                     plan = self.current_preparation(case_id, PreparationStage.COMBINED)
                 if plan is not None:
                     add(ContextRefRole.PREVIOUS_PLAN, plan["artifact_id"], plan["artifact_rev"])
+        elif purpose in self.WORKS_FROM_THE_PLAN:
+            # **코드를 바꾸는 실행에도 고정 컨텍스트를 준다**(P3-04).
+            #
+            # 여기가 비어 있었다. 구현·검증·실험 실행은 호출자가 지시 원문에 적은
+            # 것만 보고 일했고, 그러면 "무엇을 보고 만들었는가"가 시스템의 기록이
+            # 아니라 호출자가 넣은 문자열이 된다 — 고정 컨텍스트 계약이 가장 필요한
+            # 단계에서 그 계약이 없던 셈이다(review-context-contract 2절).
+            #
+            # **동의된 의도와 계획 둘뿐이다.** 설계까지 넣지 않는 이유는 계획이 이미
+            # 설계 위에 세워졌고, 구현이 따라야 하는 것은 계획이 정의한 Task 이기
+            # 때문이다. 넣을수록 좋은 것이 아니라 **따라야 할 것**을 준다.
+            if latest is not None:
+                add(ContextRefRole.AGREED_INTENT, latest["artifact_id"], latest["artifact_rev"])
+            plan = self.current_preparation(case_id, PreparationStage.PLAN)
+            if plan is None:
+                plan = self.current_preparation(case_id, PreparationStage.COMBINED)
+            if plan is not None:
+                add(ContextRefRole.CURRENT_PLAN, plan["artifact_id"], plan["artifact_rev"])
         return refs
 
     def _insert_context_refs(self, run_id: str, refs: list[dict[str, Any]]) -> None:
@@ -4719,8 +4844,12 @@ class Repository:
         return dict(row) if row else None
 
     def _graph_tasks(self, graph_id: str) -> list[dict[str, Any]]:
+        # 저장소 이름을 함께 읽는다(P3-04). 화면이 id 만 보면 사람이 어느 저장소인지
+        # 알 수 없고, 화면이 따로 조회하면 진입 검사와 다른 값을 볼 수 있다.
         rows = self.conn.execute(
-            "SELECT * FROM task WHERE graph_revision_id = ? ORDER BY order_index",
+            "SELECT t.*, pr.name AS repository_name FROM task t"
+            " LEFT JOIN project_repository pr ON pr.id = t.repository_id"
+            " WHERE t.graph_revision_id = ? ORDER BY t.order_index",
             (graph_id,),
         ).fetchall()
         tasks = [dict(r) for r in rows]
@@ -4851,11 +4980,18 @@ class Repository:
                 ),
             )
             for index, raw in enumerate(tasks, start=1):
+                # **어느 저장소를 바꾸는 작업인가**(P3-04). 해석은 여기서 하고
+                # 적힌 문자열은 그대로 남긴다 — 해석되지 않은 참조를 버리면
+                # "저장소를 말하지 않은 계획"과 "선택 밖 저장소를 가리킨 계획"이
+                # 같은 모양이 된다(`task_block_unresolved` 와 같은 규칙).
+                repository_ref = " ".join(str(raw.get("repository") or "").split())[:100]
+                repository_id = self.resolve_case_repository_ref(case_id, repository_ref)
                 self.conn.execute(
                     "INSERT INTO task (id, case_id, graph_revision_id, task_key, kind,"
                     " relates_to, summary, deliverable_summary, completion_summary,"
-                    " order_index, origin, cancelled, cancel_reason, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " order_index, origin, cancelled, cancel_reason, created_at,"
+                    " repository_id, repository_ref)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         ids.new_id("task"),
                         case_id,
@@ -4871,6 +5007,8 @@ class Repository:
                         1 if raw.get("cancelled") else 0,
                         _summary(raw.get("cancel_reason") or ""),
                         now,
+                        repository_id,
+                        repository_ref,
                     ),
                 )
             for raw in tasks:
@@ -5067,6 +5205,10 @@ class Repository:
                 "origin": t["origin"],
                 "cancelled": t["cancelled"],
                 "cancel_reason": t["cancel_reason"],
+                # **재계획이 저장소 기록을 지우지 않는다**(P3-04). 새 리비전을
+                # 만들 때 이 값을 빠뜨리면 사람이 Task 하나를 더한 것만으로
+                # 기존 Task 들이 전부 저장소 미기록이 된다.
+                "repository": t["repository_id"] or t["repository_ref"] or "",
                 "depends_on": list(t["depends_on"]),
                 "criteria": [
                     {
@@ -5120,6 +5262,11 @@ class Repository:
                     "origin": ContentOrigin.USER_REQUIREMENT.value,
                     "cancelled": False,
                     "cancel_reason": "",
+                    # 사람이 더하는 Task 도 저장소를 적는다(P3-04). 비우면 미기록이고,
+                    # 저장소가 둘 이상인 Case 에서는 그 Task 로 구현이 열리지 않는다 —
+                    # 여기서 하나를 골라 채우지 않는 이유는 그것이 사람의 판단이기
+                    # 때문이다.
+                    "repository": str(task.get("repository") or ""),
                     "depends_on": [str(d) for d in (task.get("depends_on") or [])],
                     "criteria": list(task.get("criteria") or []),
                 }
@@ -5528,6 +5675,39 @@ class Repository:
             "failure_reason": workspace["failure_reason"],
         }
 
+    def task_repository_state(self, case_id: str, task_key: str) -> dict[str, Any]:
+        """이 Task 가 **어느 저장소를 바꾸기로 했는가**(P3-04).
+
+        진입 검사와 화면이 같은 값을 본다. `present = False` 는 그래프가 없거나 이
+        Task 가 현재 그래프에 없다는 뜻이고, 그 상태는 `_check_work_graph` 가 이미
+        본다 — 같은 사실로 두 번 거부하지 않는다.
+
+        `choice_count` 가 **고를 것이 몇 개였는가**다. 하나면 계획이 말하지 않아도
+        모호하지 않으므로 미기록을 묻지 않는다. 그것이 소급을 막는 조건이다 —
+        저장소가 둘 이상인 Case 는 R2 이후에만 있다.
+        """
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return {"present": False}
+        row = self.conn.execute(
+            "SELECT t.repository_id, t.repository_ref, t.cancelled,"
+            " pr.name AS repository_name FROM task t"
+            " LEFT JOIN project_repository pr ON pr.id = t.repository_id"
+            " WHERE t.graph_revision_id = ? AND t.task_key = ?",
+            (graph["id"], task_key),
+        ).fetchone()
+        if row is None:
+            return {"present": False}
+        return {
+            "present": True,
+            "repository_id": row["repository_id"],
+            "repository_name": row["repository_name"],
+            # 계획이 **적은 그대로**. 해석됐든 아니든 남긴다 — 버리면 "저장소를
+            # 말하지 않은 계획"과 "선택 밖을 가리킨 계획"이 같은 모양이 된다.
+            "repository_ref": row["repository_ref"],
+            "choice_count": len(self._code_repository_ids(case_id)),
+        }
+
     def workspace_view(self, case_id: str) -> dict[str, Any] | None:
         """작업공간과 그 위에서 일어난 실행 효과.
 
@@ -5697,6 +5877,40 @@ class Repository:
             )
             digest.update(b"\x00")
         return digest.hexdigest()
+
+    def resolve_case_repository_ref(self, case_id: str, ref: str) -> str | None:
+        """계획이 적은 저장소 참조를 **이 Case 의 선택 안에서** 해석한다(P3-04).
+
+        해석 범위가 선택된 저장소인 것이 핵심이다. Project 의 등록 저장소 전체에서
+        찾으면 계획이 **선택 밖 저장소를 지목하는 것만으로** 허용이 넓어진 것처럼
+        보인다 — R2 가 자동 추가의 세 경계로 막은 일이다(D-38·D-63·D-64). 선택 밖
+        이름은 여기서 해석되지 않고 `repository_ref` 에 그대로 남아 사람이 무엇이
+        어긋났는지 볼 수 있다.
+
+        이름 비교는 대소문자를 구별하지 않는다. 등록 id 로 적어도 받는다.
+        """
+        value = " ".join(str(ref or "").split())
+        if not value:
+            return None
+        rows = self.conn.execute(
+            "SELECT r.repository_id, pr.name FROM case_repository r"
+            " JOIN project_repository pr ON pr.id = r.repository_id"
+            " WHERE r.case_id = ? AND r.state = ? AND r.selection_source <> ?",
+            (case_id, PolicyState.CURRENT.value, RepositorySelectionSource.EXCLUDED.value),
+        ).fetchall()
+        candidates = [(r["repository_id"], r["name"]) for r in rows]
+        if not candidates:
+            # 선택 기록이 없는 이행된 Case 는 준비된 작업공간이 그 답이다
+            # (`_code_repository_ids` 와 같은 규칙). 없던 선택을 지어내지 않는다.
+            candidates = [
+                (w["repository_id"], w["repository_name"])
+                for w in self.list_workspaces(case_id)
+            ]
+        lowered = value.casefold()
+        for repository_id, name in candidates:
+            if repository_id == value or str(name).casefold() == lowered:
+                return repository_id
+        return None
 
     def _code_repository_ids(self, case_id: str) -> set[str]:
         """이 Case 가 코드를 바꿔도 되는 저장소들.

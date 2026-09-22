@@ -229,21 +229,21 @@ FAKE_DESIGN_FULL = fake_preparation_response(
     },
 )
 
+#: 계획 산출물의 항목. **시험이 Task 만 바꿔 다시 조립할 수 있도록** 따로 둔다
+#: (P3-04에서 저장소를 밝힌 Task 가 필요해졌다).
+FAKE_PLAN_SECTIONS: dict[str, str] = {
+    "tasks": "T1 필터 함수 구현(완료 조건: 단위 시험 통과), T2 진입점 연결",
+    "verification": "표본 파일 시험 1건과 기존 회귀 시험을 돌린다",
+    "dependencies": "T2 는 T1 을 기다린다",
+    "integration_order": "T1 → T2 → 회귀 확인",
+    "human_decision_points": "대소문자 구분 여부가 정해지면 기대값을 확정한다",
+    "environment_prerequisites": "Python 3.12 와 저장소 checkout 만 필요하다",
+    "experiments": "실험은 필요하지 않다. 표본 파일로 직접 확인한다",
+    "failure_response": "시험이 실패하면 T1 로 돌아가고 통과를 주장하지 않는다",
+}
+
 #: 심층 수준까지 필수 항목을 모두 채운 계획 응답.
-FAKE_PLAN_FULL = fake_preparation_response(
-    "계획",
-    {
-        "tasks": "T1 필터 함수 구현(완료 조건: 단위 시험 통과), T2 진입점 연결",
-        "verification": "표본 파일 시험 1건과 기존 회귀 시험을 돌린다",
-        "dependencies": "T2 는 T1 을 기다린다",
-        "integration_order": "T1 → T2 → 회귀 확인",
-        "human_decision_points": "대소문자 구분 여부가 정해지면 기대값을 확정한다",
-        "environment_prerequisites": "Python 3.12 와 저장소 checkout 만 필요하다",
-        "experiments": "실험은 필요하지 않다. 표본 파일로 직접 확인한다",
-        "failure_response": "시험이 실패하면 T1 로 돌아가고 통과를 주장하지 않는다",
-    },
-    tasks=FAKE_TASKS,
-)
+FAKE_PLAN_FULL = fake_preparation_response("계획", FAKE_PLAN_SECTIONS, tasks=FAKE_TASKS)
 
 
 #: 구현 실행의 기본 응답. **파일을 실제로 바꾸지는 않는다** — 바꾸는 것은

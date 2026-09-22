@@ -1,0 +1,164 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 4,
+  "case_id": "case-052adc0dbbf1afa1",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-intent-fix1-092447216",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "feature",
+  "profile_version": "1",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "need",
+    "usage_context",
+    "desired_behavior",
+    "acceptance_cases"
+  ],
+  "fields": {
+    "goal": {
+      "text": "repo-core의 summarize() 결과에 문자 수를 추가하고, repo-report의 render() 출력에 문자 수를 표시한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "두 저장소가 동일한 요약 데이터 계약을 사용하며, 요약 결과와 표시 형식에 lines, words, chars가 모두 포함된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "repo-core의 summarize() 반환값, repo-report의 render() 출력 형식, 관련 기존 테스트 갱신 및 새 동작 테스트 추가.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "다른 호출자나 저장된 요약 데이터의 마이그레이션은 범위에 포함하지 않는다. lines와 words의 이름 변경 또는 제거도 포함하지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "chars는 Python len(text) 값으로 계산하며 공백과 개행을 포함한 코드 포인트 수를 사용한다. 자소 단위나 바이트 수를 사용하지 않는다. 기존 lines와 words 동작은 유지한다. 두 저장소를 함께 변경하고 테스트한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "need": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "usage_context": {
+      "text": "repo-core의 summarize()와 repo-report의 render()를 사용하는 기능 및 그 테스트에서 요약 정보를 생성하고 표시하는 상황.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "desired_behavior": {
+      "text": "summarize(text)는 기존 lines와 words를 유지하면서 chars=len(text)를 반환한다. render()는 '<lines>줄 <words>단어 <chars>자' 형식으로 표시한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "acceptance_cases": {
+      "text": "일반 텍스트에서 chars가 Python len(text)와 일치한다. 공백과 개행이 chars에 포함된다. lines와 words가 기존 의미와 값을 유지한다. render()가 지정된 출력 형식을 사용한다. 출력 형식 검증 테스트는 새 형식으로 갱신되고, 그 외 기존 동작 회귀 테스트와 새 chars 동작 테스트가 통과한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "desired_behavior",
+      "text": "summarize(text)의 결과에 chars 키가 있고 그 값이 len(text)와 같다.",
+      "method": "공백, 개행, 비ASCII 문자를 포함한 고정 입력으로 summarize()를 호출하고 chars와 len(text)를 비교하는 테스트를 실행한다.",
+      "summary": "chars가 Python 문자열 길이와 일치",
+      "method_summary": "고정 입력 비교 테스트"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "desired_behavior",
+      "text": "summarize(text)의 기존 lines와 words 키 및 동작이 유지된다.",
+      "method": "기존 lines/words 테스트와 chars 추가 후 갱신된 반환값 테스트를 실행한다.",
+      "summary": "기존 요약 키와 동작 유지",
+      "method_summary": "기존 및 갱신 테스트 실행"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "desired_behavior",
+      "text": "render() 출력이 '<lines>줄 <words>단어 <chars>자' 형식과 일치한다.",
+      "method": "render()의 출력 형식을 검증하는 테스트를 새 형식에 맞게 갱신하고 실행한다.",
+      "summary": "보고서 출력 형식 일치",
+      "method_summary": "render 형식 테스트 실행"
+    },
+    {
+      "key": "C-04",
+      "relates_to": "scope",
+      "text": "repo-core와 repo-report의 관련 테스트가 모두 통과하고, 출력 형식 테스트를 제외한 기존 동작에 회귀가 없다.",
+      "method": "두 저장소의 전체 관련 테스트 스위트를 실행해 결과를 확인한다.",
+      "summary": "두 저장소 테스트 통과",
+      "method_summary": "양쪽 테스트 스위트 실행"
+    }
+  ],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "low",
+        "evidence": "변경 대상 함수, 계산 규칙, 출력 형식, 호환 범위와 테스트 요구가 명시되어 있다.",
+        "judgement": "의도와 성공 기준이 비교적 명확하다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "change_scope",
+        "weight": "medium",
+        "evidence": "서로 다른 두 저장소의 생산자와 소비자를 함께 변경해야 한다.",
+        "judgement": "변경 범위는 국소적이지만 저장소 간 계약 정합성이 필요하다.",
+        "unconfirmed": "repo-report의 실제 소스와 테스트 위치는 현재 작업공간에서 확인되지 않았다."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "low",
+        "evidence": "기존 호출자는 두 저장소뿐이고 저장된 요약 데이터와 마이그레이션이 없다고 명시되어 있다.",
+        "judgement": "호환성과 데이터 생명주기 위험은 낮다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "low",
+        "evidence": "요약 문자 수 계산과 보고서 출력 변경이며 권한 처리나 민감 데이터 요구가 없다.",
+        "judgement": "권한·보안 영향은 낮다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "reversibility",
+        "weight": "low",
+        "evidence": "반환 필드와 출력 형식의 국소적 변경이며 데이터 마이그레이션이 없다.",
+        "judgement": "변경 및 실패 영향은 비교적 쉽게 되돌릴 수 있다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "medium",
+        "evidence": "현재 작업공간에서 repo-core 파일은 관찰되지만 repo-report 소스는 확인되지 않았다.",
+        "judgement": "구현 자체는 단순하나 두 번째 저장소의 실제 구조와 테스트 위치에는 불확실성이 있다.",
+        "unconfirmed": "repo-report의 위치와 render() 구현 세부"
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "evidence": "계산 규칙과 출력 형식은 직접 테스트할 수 있지만 두 저장소의 테스트를 함께 확인해야 한다.",
+        "judgement": "검증은 명확하지만 저장소 간 일관성 확인이 필요하다.",
+        "unconfirmed": "두 저장소의 통합된 테스트 실행 방식"
+      }
+    ]
+  }
+}

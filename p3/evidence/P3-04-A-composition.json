@@ -1,0 +1,50 @@
+{
+  "id": "comp-8b7c0b0d82d708e6",
+  "case_id": "case-052adc0dbbf1afa1",
+  "revision": 1,
+  "composition_hash": "fa92d8bb04985c87f3dd7cc2018644e9566ce0ef784b698e6ed603d723b79216",
+  "covers_all_code_repositories": true,
+  "state": "current",
+  "created_at": "2026-09-22T00:33:22.824210+00:00",
+  "superseded_at": null,
+  "entries": [
+    {
+      "composition_id": "comp-8b7c0b0d82d708e6",
+      "repository_id": "repo-39c439143391faca",
+      "base_commit": "0b234ff40b05f7e4bd72417c11a0302321281d58",
+      "head_commit": "0b234ff40b05f7e4bd72417c11a0302321281d58",
+      "dirty_entries": 2,
+      "tree_digest": "c02825db251a8492df7fc5b8afa0b7da125feca6ffd6193c37208aab354b1498",
+      "source": "run_effect",
+      "observed_run_id": "run-verification-T6-092447216",
+      "observed_at": "2026-09-22T00:32:59.571574+00:00",
+      "repository_name": "primary",
+      "snapshot_incomplete": false
+    },
+    {
+      "composition_id": "comp-8b7c0b0d82d708e6",
+      "repository_id": "repo-87e2e6b820072678",
+      "base_commit": "233b9229476436b7ed45d0d79a43d46314181d33",
+      "head_commit": "233b9229476436b7ed45d0d79a43d46314181d33",
+      "dirty_entries": 2,
+      "tree_digest": "82b85ddc9c47ac4c30e462601117017346d92d476576e9ca536460ab492e1464",
+      "source": "run_effect",
+      "observed_run_id": "run-integration-T7-092447216",
+      "observed_at": "2026-09-22T00:33:22.089641+00:00",
+      "repository_name": "repo-report",
+      "snapshot_incomplete": false
+    }
+  ],
+  "snapshot_complete": true,
+  "integration_verified": true,
+  "validity": {
+    "composition_id": "comp-8b7c0b0d82d708e6",
+    "linked": true,
+    "composition_hash": "fa92d8bb04985c87f3dd7cc2018644e9566ce0ef784b698e6ed603d723b79216",
+    "changed_repositories": [],
+    "stale": false,
+    "integration_verified": true,
+    "snapshot_complete": true,
+    "detail": "이 조합에 든 저장소만 본다. 들어 있지 않은 저장소의 변경은 이 근거를 무효로 만들지 않는다"
+  }
+}

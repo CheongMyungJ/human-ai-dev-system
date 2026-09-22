@@ -832,3 +832,140 @@ def test_a_v10_database_keeps_its_completion_and_review_defaults(tmp_path):
     db.migrate(conn)
     assert conn.execute("SELECT COUNT(*) c FROM conformance_check").fetchone()["c"] == before
     conn.close()
+
+
+# ===================================================================== v12
+#
+# P3-04. Task × Repository.
+
+
+def _v11_schema() -> str:
+    """`task.repository_id` 가 없는 가장 최근 커밋 스키마를 찾는다(P3-04).
+
+    `_v10_schema` 와 같은 방식이다 — **커밋된 것을 그대로 꺼내 쓴다.** 새 컬럼은
+    `schema.sql` 이 아니라 `db.py` 가 더하므로, v12 를 커밋한 뒤에도 이 함수는
+    v11 시절의 `schema.sql` 을 그대로 찾는다. 그래서 판별 문자열은 스키마 파일에
+    실제로 들어간 v12 표식(`스키마 v12`)을 쓴다.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v12" not in schema and "conformance_check" in schema:
+            return schema
+    pytest.skip("v11 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v11_database_keeps_its_tasks_without_inventing_a_repository(tmp_path):
+    """v11 → v12 (P3-04 AC-20).
+
+    **이 시험이 P3-04의 소급 위험을 지킨다.** 새 컬럼을 더하면서 기존 Task 에
+    작업공간이나 등록 저장소로 값을 채우면, 계획이 하지 않은 판단을 이행이 만든
+    것이 된다(D-62 "유도해 채우지 않는다"). 그리고 저장소가 하나뿐인 옛 Case 의
+    실행은 **그대로 배정돼야 한다** — 미기록을 모든 Case 에서 막으면 진행 중이던
+    업무가 멈춘다.
+    """
+    schema = _v11_schema()
+    path = tmp_path / "controller.sqlite3"
+
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(schema)
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (11, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old-repo','codex',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO project_repository (id, project_id, name, repo_path, source,"
+        " registered_by, registered_at)"
+        " VALUES ('repo-1','prj-1','primary','C:/tmp/old-repo','registered','owner',?)",
+        (now,),
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1','prj-1','옛 Case','feature','in_progress',?,?)",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','pc','host-1','registered',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+        " byte_size, owner_runner_id, availability, summary, created_at)"
+        " VALUES ('art-1',1,'case-1','intent','hash-1',100,'runner-1','available','의도',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
+        " status, created_at) VALUES ('iv-1','case-1',1,'art-1',1,'agreed',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO preparation_artifact (id, case_id, stage, revision, intent_version_id,"
+        " level, artifact_id, artifact_rev, author_run_id, authoring_mode, summary,"
+        " state, created_at)"
+        " VALUES ('prep-1','case-1','plan',1,'iv-1','simple','art-1',1,"
+        " 'run-plan','ai_drafted','옛 계획','current',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO work_graph_revision (id, case_id, revision, intent_version_id,"
+        " plan_preparation_id, source, reason_summary, actor, state, created_at)"
+        " VALUES ('wg-1','case-1',1,'iv-1','prep-1','plan_artifact','계획이 정의',"
+        " 'policy:plan_artifact','current',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO task (id, case_id, graph_revision_id, task_key, kind, relates_to,"
+        " summary, deliverable_summary, completion_summary, order_index, origin,"
+        " cancelled, cancel_reason, created_at)"
+        " VALUES ('task-1','case-1','wg-1','T1','implementation','goal','옛 작업',"
+        " '산출물','완료 조건',1,'ai_proposal',0,'',?)",
+        (now,),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+    repo = Repository(conn)
+
+    # --- 1. 옛 Task 는 **미기록 그대로다** ---------------------------------
+    row = conn.execute("SELECT * FROM task WHERE id = 'task-1'").fetchone()
+    assert row["repository_id"] is None
+    assert row["repository_ref"] == ""
+
+    # --- 2. 그 미기록이 **이 Case 에서는 아무 것도 막지 않는다** -----------
+    # 고를 수 있는 저장소가 하나뿐이면 모호하지 않다.
+    state = repo.task_repository_state("case-1", "T1")
+    assert state["present"] is True
+    assert state["repository_id"] is None
+    assert state["choice_count"] <= 1
+
+    # --- 3. 화면이 보는 값에도 미기록이 그대로 드러난다 --------------------
+    graph = repo.work_graph_state("case-1")
+    task = next(t for t in graph["tasks"] if t["task_key"] == "T1")
+    assert task["repository_id"] is None
+    assert task["repository_name"] is None
+
+    assert (
+        conn.execute("SELECT MAX(version) v FROM schema_version").fetchone()["v"]
+        == db.SCHEMA_VERSION
+    )
+
+    # 다시 돌려도 Task 가 늘지 않고 값이 채워지지 않는다.
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) c FROM task").fetchone()["c"] == 1
+    assert conn.execute("SELECT repository_id FROM task").fetchone()["repository_id"] is None
+    conn.close()

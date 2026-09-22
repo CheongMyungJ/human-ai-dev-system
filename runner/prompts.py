@@ -87,7 +87,10 @@ INTENT_AUTHORING_PROMPT = f"""당신은 개발 요청을 읽고 **의도 초안*
 2. 각 항목에 origin 을 붙인다.
    user_requirement(요청에 있음) / project_rule / observation(코드·환경에서 관찰) /
    ai_proposal(당신의 제안) / ai_assumption(당신의 가정).
-   **가정을 user_requirement 로 적지 마라.**
+   **가정을 user_requirement 로 적지 마라.** 그리고 반대도 마찬가지다 —
+   고정 컨텍스트의 **질문 답변에서 나온 내용은 사람이 확정한 것**이므로
+   `user_requirement` 이며 당신의 가정으로 적지 않는다. 사람이 답한 것을
+   ai_assumption 으로 적으면 그 출처를 잃는다.
 3. state 는 proposed 로 둔다. 사람이 확인하기 전에 user_confirmed 로 적지 않는다.
 4. 사람의 결정이 필요한 미정 사항은 questions 에 넣는다. 질문을 숨기거나 임의로
    답하지 않는다. summary 는 목록에 보일 짧은 한 줄을 **따로** 쓴다(본문 발췌 금지).
@@ -161,6 +164,11 @@ GATE_REVIEW_PROMPT = f"""당신은 **다른 세션이 작성한** 의도 초안�
 1. **미정 질문이 있는 것은 문제가 아니다.** 질문을 숨기거나 임의로 답한 것이 문제다.
 2. 근거가 분명하면 certainty 를 confirmed, 의심 수준이면 suspected 로 적는다.
    의심을 확정으로 올리지 않는다.
+2-1. **대조할 것은 고정 컨텍스트의 요청 원문과 질문 답변이다.** 거기 있는 내용은
+   사용자의 요구이며 AI 의 가정이 아니다 — 요청에 적힌 것을
+   `assumption_presented_as_requirement` 로 지적하지 마라. 요청 원문이 주어지지
+   않았으면 **그 사실 자체를** `other` / `advisory` 로 적고, 대조하지 못한 것을
+   확정 지적으로 올리지 마라.
 3. 위 네 가지 밖의 지적은 criterion 을 other 로 두고 severity 를 advisory 로 한다.
 4. summary 는 한 줄로 짧게 쓴다. 초안 본문을 옮겨 적지 않는다.
 5. 문제가 없으면 findings 를 빈 목록으로 둔다.
@@ -190,7 +198,35 @@ CONTEXT_LABEL = {
     "previous_design": "직전 설계안 (이 내용을 잃지 말고 고칠 곳만 고친다)",
     "current_design": "현재 설계안 (이 설계를 구현할 계획을 쓴다)",
     "previous_plan": "직전 개발계획 (이 내용을 잃지 말고 고칠 곳만 고친다)",
+    # P3-04. 구현·검증·실험이 **따라야 할 것.** 이전 버전이 아니라 현재 계획이다.
+    "current_plan": (
+        "이 업무의 **개발계획** (이 계획이 정의한 작업만 한다."
+        " 다른 작업은 다른 실행이 한다 — 여기서 미리 해 두지 않는다)"
+    ),
     "feedback": "사람이 남긴 미해결 피드백",
+    # P3-04. **사람이 그 질문에 답한 내용이다.** 피드백과 나누는 이유는 무엇에
+    # 답한 것인지가 달라지기 때문이다 — 피드백은 초안 전체에 대한 의견이고
+    # 이것은 초안이 물은 것에 대한 답이다.
+    #
+    # **출처를 함께 말한다.** 이 답에서 나온 내용은 사람이 확정한 것이며 AI 의
+    # 가정이 아니다. 그 구별이 없으면 다시 쓰는 AI 가 사용자의 확정을
+    # `ai_assumption` 으로 적고, QG-01 이 그것을 "근거 없는 가정을 확정된 사실로
+    # 서술했다"로 잡는다 — 라이브에서 실제로 그렇게 됐다. 사람이 답한 것을 AI
+    # 가정으로 적는 것은 **출처를 잃는 일**이다(FR-04).
+    # P3-04. **검토자가 대조할 것.** QG-01 은 의도가 원래 요청과 맞는가를 보는데,
+    # 그 요청을 주지 않으면 검토자는 요청에 있는 내용을 근거 없는 가정으로
+    # 판정한다 — 라이브에서 실제로 그렇게 됐다.
+    "original_request": (
+        "이 초안이 따라야 했던 **요청 원문**"
+        " (의도가 이 요청과 맞는지 대조한다. 여기 있는 내용은 사용자의 요구이며"
+        " AI 의 가정이 아니다)"
+    ),
+    "question_answer": (
+        "사람이 **미정 질문에 답한 내용**"
+        " (이 답을 초안에 반영하고 그 항목을 다시 미정으로 두지 않는다."
+        " 이 답에서 나온 내용의 origin 은 `user_requirement` 이며 `ai_assumption`"
+        " 이 아니다 — 사람이 확정한 사실이다)"
+    ),
 }
 
 CONTEXT_HEADER = """--- 고정 컨텍스트 ---
@@ -302,6 +338,7 @@ PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설�
    비워 두면 그 질문이 **모든 작업을 막는다** — 무엇을 막는지 모르기 때문이다.
    설계 단계에서 이월된 질문도 여기서 정의한 key 로 가리킬 수 있다.
 
+{REPOSITORY_RULE}
 출력 형태는 설계와 같고(sections / questions) tasks 가 더 있다.
 
 {{
@@ -314,7 +351,7 @@ PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설�
     {{"key": "T1", "kind": "investigation", "purpose": "...",
      "purpose_summary": "짧은 한 줄", "deliverable": "...",
      "deliverable_summary": "짧은 한 줄", "completion": "...",
-     "completion_summary": "짧은 한 줄",
+     "completion_summary": "짧은 한 줄", "repository": "<저장소 이름>",
      "depends_on": [], "criteria": [{{"key": "C-01", "relation": "implements"}}]}}
   ]
 }}
@@ -446,7 +483,7 @@ COMBINED_AUTHORING_PROMPT = """당신은 동의된 의도를 읽고 **하나의 
    **결합 기록이라는 이유로 중요한 선택을 조용히 확정하지 마라.**
 4. **tasks 에 작업을 하나씩 정의한다.** 형식과 규칙은 개발계획과 같다.
 5. 각 항목에 origin 을 붙인다.
-
+{REPOSITORY_RULE}
 출력은 이 형태의 JSON **하나만** 낸다. **sections 는 객체이고 키는 위 항목 이름
 그대로다** — 목록으로 내거나 이름을 바꾸면 시스템이 읽지 못해 이 실행은 실패한다.
 
@@ -465,7 +502,7 @@ COMBINED_AUTHORING_PROMPT = """당신은 동의된 의도를 읽고 **하나의 
     {{"key": "T1", "kind": "implementation", "purpose": "...",
      "purpose_summary": "짧은 한 줄", "deliverable": "...",
      "deliverable_summary": "짧은 한 줄", "completion": "...",
-     "completion_summary": "짧은 한 줄",
+     "completion_summary": "짧은 한 줄", "repository": "<저장소 이름>",
      "depends_on": [], "criteria": [{{"key": "C-01", "relation": "implements"}}]}}
   ]
 }}
@@ -483,6 +520,31 @@ STAGE_PROMPT = {
     # 새 목적이 조용히 조건 없는 실행이 된다.
     "combined": (PreparationStage.COMBINED, COMBINED_AUTHORING_PROMPT),
 }
+
+
+
+def _repository_rule(repositories: list[dict[str, Any]] | None) -> str:
+    """계획이 Task 마다 저장소를 적게 하는 규칙(P3-04).
+
+    **목록은 제어부가 준다.** Runner 가 저장소를 찾아 나서면 이 Case 가 고르지
+    않은 저장소를 계획에 적게 되고, 그것은 허용을 넓히는 요구가 된다(D-38·D-63).
+
+    **고를 것이 하나뿐이면 규칙을 넣지 않는다.** 고를 것이 없는데 고르라고 하면
+    이름을 지어내고, 지어낸 이름은 해석되지 않아 그 작업이 막힌다. 저장소가
+    하나인 Case 는 진입 검사도 이것을 묻지 않는다.
+    """
+    items = [r for r in (repositories or []) if r.get("name")]
+    if len(items) < 2:
+        return ""
+    names = "\n".join(f"   - `{r['name']}`" for r in items)
+    return (
+        "\n11. **각 작업의 `repository` 에 그 작업이 코드를 바꾸는 저장소를 적는다.**\n"
+        "   고를 수 있는 것은 아래 이름뿐이며 **그대로** 쓴다. 다른 이름을 적거나\n"
+        "   비워 두면 그 작업으로는 구현·검증 실행이 배정되지 않는다.\n"
+        f"{names}\n"
+        "   한 작업은 **저장소 하나**만 바꾼다. 두 저장소를 바꿔야 하면 작업을\n"
+        "   나눈다 — 한 실행은 작업공간 하나에서만 돌기 때문이다.\n"
+    )
 
 
 def has_prompt(purpose: str) -> bool:
@@ -504,6 +566,7 @@ def build(
     profile: str | None = None,
     profile_version: str | None = None,
     stage_hint: str | None = None,
+    repositories: list[dict[str, Any]] | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문.
 
@@ -523,7 +586,15 @@ def build(
             # 필수인지가 달라지고, 진입 조건 검사와 어긋난다.
             raise ValueError(f"{purpose} 는 작업 수준이 필요하다")
         work_level = WorkLevel(level)
-        head = template.format(level=work_level.value, sections=_stage_sections(stage, work_level))
+        head = template.format(
+            level=work_level.value,
+            sections=_stage_sections(stage, work_level),
+            REPOSITORY_RULE=(
+                _repository_rule(repositories)
+                if stage in (PreparationStage.PLAN, PreparationStage.COMBINED)
+                else ""
+            ),
+        )
     else:
         head = PROMPT_BY_PURPOSE.get(purpose)
         if head is None:
@@ -796,6 +867,10 @@ def parse_preparation(
                         str(item.get("completion_summary") or "").split()
                     )[:200],
                     "relates_to": str(item.get("relates_to") or "").strip(),
+                    # **적힌 그대로 올린다**(P3-04). 여기서 이름을 고치거나 비어
+                    # 있을 때 채우면 계획이 무엇을 말했는지가 사라진다 — 해석은
+                    # 제어부가 이 Case 의 선택 안에서 한다.
+                    "repository": " ".join(str(item.get("repository") or "").split())[:100],
                     "depends_on": [
                         str(d) for d in (item.get("depends_on") or []) if str(d).strip()
                     ],

@@ -756,7 +756,14 @@ def test_a_second_repository_diff_body_also_stays_on_the_runner(harness):
     harness.select_repository(case["id"], second["repository"]["id"])
     harness.prepare_workspace(case["id"], repository_id=primary)
     harness.prepare_workspace(case["id"], repository_id=second["repository"]["id"])
-    _prepare_both(harness, case["id"], run_prefix="run-demo", repository_id=primary)
+    # 이 시험이 쓰는 구현 Task 는 **두 번째 저장소**의 작업이다(P3-04).
+    _prepare_both(
+        harness,
+        case["id"],
+        run_prefix="run-demo",
+        repository_id=primary,
+        task_repository="ui",
+    )
 
     harness.agent.cli_executor.write_files = {f"{marker}.py": f"# {marker}\nvalue = 1\n"}
     harness.agent.cli_executor.implementation_response = (

@@ -436,7 +436,16 @@ def test_a_run_that_names_its_repository_gets_that_workspace(harness):
     target = harness.prepare_workspace(
         case["id"], repository_id=second["repository"]["id"]
     )
-    _prepare_both(harness, case["id"], run_prefix="run-demo", repository_id=primary)
+    # 이 시험의 구현 Task 는 **두 번째 저장소**의 작업이다(P3-04). 계획이 그것을
+    # 말하지 않으면 `task_repository_not_recorded` 로 막힌다 — 그 거부를 확인하는
+    # 시험은 `tests/test_task_repository.py` 에 짝으로 있다.
+    _prepare_both(
+        harness,
+        case["id"],
+        run_prefix="run-demo",
+        repository_id=primary,
+        task_repository="ui",
+    )
 
     created = harness.request_implementation(
         case["id"],
@@ -621,7 +630,13 @@ def test_a_change_in_an_unrelated_repository_does_not_invalidate_the_evidence(ha
     harness.select_repository(case["id"], primary)
     harness.select_repository(case["id"], second["repository"]["id"])
     harness.prepare_workspace(case["id"], repository_id=primary)
-    _prepare_both(harness, case["id"], run_prefix="run-demo", repository_id=primary)
+    _prepare_both(
+        harness,
+        case["id"],
+        run_prefix="run-demo",
+        repository_id=primary,
+        task_repository="primary",
+    )
 
     harness.agent.cli_executor.write_files = {"filter.py": "def only_errors(x):\n    return x\n"}
     assert harness.request_implementation(

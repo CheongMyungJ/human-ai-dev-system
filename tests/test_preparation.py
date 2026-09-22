@@ -13,6 +13,7 @@ from __future__ import annotations
 import copy
 
 from tests.conftest import (
+    FAKE_PLAN_SECTIONS,
     FAKE_TASKS,
     FAKE_TOOL_ID,
     FAKE_TOOL_MODE,
@@ -46,12 +47,26 @@ def _refusals(response) -> list[str]:
     return response.json()["detail"]["admission"]["refusals"]
 
 
+def plan_tasks_in(repository: str) -> list[dict]:
+    """`FAKE_TASKS` 와 같되 각 Task 가 **저장소를 밝힌** 계획 Task(P3-04).
+
+    저장소가 둘 이상인 Case 에서는 계획이 어느 저장소의 작업인지 말해야 하며,
+    말하지 않은 Task 로는 구현·검증이 배정되지 않는다. 저장소가 하나인 Case 의
+    시험은 이것을 쓰지 않는다 — 그 Case 에서는 아무 것도 달라지지 않는다.
+    """
+    tasks = copy.deepcopy(FAKE_TASKS)
+    for task in tasks:
+        task["repository"] = repository
+    return tasks
+
+
 def _prepare_both(
     harness,
     case_id,
     finish_first_task: bool = True,
     run_prefix: str = "",
     repository_id: str | None = None,
+    task_repository: str | None = None,
 ):
     """설계와 계획을 AI로 작성하고 둘 다 사람 검토한다.
 
@@ -65,6 +80,11 @@ def _prepare_both(
     않는다(P2-01이 일부러 만든 멱등성이다).
     """
     prefix = run_prefix or "run"
+    if task_repository is not None:
+        # 저장소가 둘 이상인 Case 다. 계획이 저장소를 말하게 한다(P3-04).
+        harness.agent.cli_executor.plan_response = fake_preparation_response(
+            "계획", FAKE_PLAN_SECTIONS, tasks=plan_tasks_in(task_repository)
+        )
     assert harness.ai_prepare(
         case_id, "design", run_id=f"{prefix}-design", repository_id=repository_id
     ).status_code == 201

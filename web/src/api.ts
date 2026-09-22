@@ -1248,6 +1248,12 @@ export interface TaskRow {
   origin: string
   cancelled: boolean
   cancel_reason: string
+  // P3-04. 이 작업이 어느 저장소를 바꾸는가. null 은 **미기록**이며 "주 저장소"가
+  // 아니다. repository_ref 가 비어 있지 않은데 이름이 없으면 계획이 적은 이름을
+  // 이 업무의 선택 안에서 찾지 못한 것이다 — 조용히 버리지 않고 그대로 보인다.
+  repository_id: string | null
+  repository_name: string | null
+  repository_ref: string
   depends_on: string[]
   criteria: TaskCriterionLink[]
   state: TaskState

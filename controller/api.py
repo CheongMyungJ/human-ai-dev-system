@@ -1898,6 +1898,10 @@ class TaskIn(BaseModel):
     deliverable_summary: str = Field(default="", max_length=200)
     completion_summary: str = Field(default="", max_length=200)
     relates_to: str = Field(default="", max_length=64)
+    #: **어느 저장소를 바꾸는 작업인가**(P3-04). 이름 또는 등록 id 이며 이 Case 가
+    #: 고른 저장소 안에서만 해석된다. 비우면 미기록이고, 저장소가 둘 이상인 Case
+    #: 에서는 그 Task 로 구현·검증이 열리지 않는다.
+    repository: str = Field(default="", max_length=100)
     depends_on: list[str] = Field(default_factory=list)
     criteria: list[dict[str, str]] = Field(default_factory=list)
 

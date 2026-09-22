@@ -71,6 +71,14 @@ function TaskCard(props: {
       </div>
       <p>{task.summary}</p>
       <dl className="task-detail">
+        <dt>대상 저장소</dt>
+        <dd>
+          {task.repository_name
+            ? task.repository_name
+            : task.repository_ref
+              ? `기록되지 않음 — 계획이 적은 «${task.repository_ref}» 를 이 업무의 선택에서 찾지 못했다`
+              : '기록되지 않음'}
+        </dd>
         <dt>산출물</dt>
         <dd>{task.deliverable_summary || '기록 없음'}</dd>
         <dt>완료 조건</dt>

@@ -404,6 +404,10 @@ class RunnerAgent:
             profile_version=assignment.get("case_profile_version"),
             # **제어부가 정한 단계**(P3-R4). Fast Lane 의 계획 작성은 결합 기록을 쓴다.
             stage_hint=assignment.get("preparation_stage"),
+            # **제어부가 준 저장소 목록**(P3-04). 계획이 Task 마다 저장소를 적어야
+            # 하므로 고를 수 있는 이름을 함께 준다. Runner 가 찾아 나서지 않는다 —
+            # 이 Case 가 고르지 않은 저장소를 계획에 적으면 허용을 넓히는 요구가 된다.
+            repositories=assignment.get("case_repositories"),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])

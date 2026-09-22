@@ -1253,3 +1253,32 @@ CREATE TABLE IF NOT EXISTS conformance_check (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conformance_case ON conformance_check(case_id);
+
+-- ===================================================================
+-- 스키마 v12 (P3-04 수직 통합)
+--
+-- **새 표가 없다.** `task` 에 컬럼 둘을 더할 뿐이며 기존 컬럼의 뜻은 바뀌지 않는다.
+--
+-- 설계는 처음부터 이것을 요구했다 — "Task·Run이 사용하는 Repo와 작업공간을
+-- 명시한다"(execution-workspace-review 19행). R2 가 `run.repository_id` 로 실행
+-- 쪽을 채웠고 Task 쪽이 비어 있었다. 저장소가 하나뿐인 동안에는 그 빈칸이 보이지
+-- 않았지만, 두 저장소를 **함께 바꾸는** 업무에서는 "UI 작업을 한다면서 API 저장소를
+-- 고치는 실행"이 조용히 통과한다. 실행 전후 대조가 우리가 가진 유일한 증거인데
+-- 그 대조가 엉뚱한 Task 에 붙는다.
+--
+-- 없음의 뜻:
+--   `repository_id IS NULL`   **미기록.** "주 저장소"가 아니다. v12 이전 Task 와
+--                             계획이 저장소를 말하지 않은 Task 가 이 값이다.
+--                             작업공간에서 유도해 채우지 않는다 — 없던 계획의
+--                             판단을 만드는 일이다(D-62).
+--   `repository_ref = ''`     계획이 아무 것도 적지 않았다
+--   `repository_ref <> ''` 이고 `repository_id IS NULL`
+--                             계획이 적었는데 **해석되지 않았다.** 조용히 버리지
+--                             않는 이유는 `task_block_unresolved` 와 같다 —
+--                             버리면 "저장소를 말하지 않은 계획"과 "선택 밖
+--                             저장소를 가리킨 계획"이 같은 모양이 된다
+-- ===================================================================
+
+-- (아래 두 컬럼은 `controller/db.py` 의 `_add_column_if_missing` 이 기존 DB 에
+--  더한다. 새로 만드는 DB 는 위 `CREATE TABLE task` 가 만들지 않으므로 같은
+--  경로로 더해진다 — 한 곳에서만 정의하기 위해서다.)

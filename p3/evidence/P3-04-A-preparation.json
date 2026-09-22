@@ -1,0 +1,1453 @@
+{
+  "case_id": "case-052adc0dbbf1afa1",
+  "sizing": {
+    "id": "sizing-d2659240cd94b616",
+    "case_id": "case-052adc0dbbf1afa1",
+    "revision": 3,
+    "intent_version_id": "intent-2e6854bd6d15c6c8",
+    "source": "ai_recommendation",
+    "recommended_level": "standard",
+    "derived_level": "standard",
+    "level": "standard",
+    "adjusted_from": null,
+    "evidence_gap": false,
+    "reason_summary": "의도 초안에 적힌 수준 판단",
+    "residual_risk_summary": "",
+    "actor": "run-intent-fix1-092447216",
+    "state": "current",
+    "created_at": "2026-09-22T00:26:41.470799+00:00",
+    "superseded_at": null,
+    "axes": [
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "change_scope",
+        "weight": "medium",
+        "judgement_summary": "변경 범위는 국소적이지만 저장소 간 계약 정합성이 필요하다.",
+        "unconfirmed_summary": "repo-report의 실제 소스와 테스트 위치는 현재 작업공간에서 확인되지 않았다."
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "compatibility_and_data",
+        "weight": "low",
+        "judgement_summary": "호환성과 데이터 생명주기 위험은 낮다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "intent_clarity",
+        "weight": "low",
+        "judgement_summary": "의도와 성공 기준이 비교적 명확하다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "permission_and_security",
+        "weight": "low",
+        "judgement_summary": "권한·보안 영향은 낮다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "reversibility",
+        "weight": "low",
+        "judgement_summary": "변경 및 실패 영향은 비교적 쉽게 되돌릴 수 있다.",
+        "unconfirmed_summary": ""
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "uncertainty",
+        "weight": "medium",
+        "judgement_summary": "구현 자체는 단순하나 두 번째 저장소의 실제 구조와 테스트 위치에는 불확실성이 있다.",
+        "unconfirmed_summary": "repo-report의 위치와 render() 구현 세부"
+      },
+      {
+        "assessment_id": "sizing-d2659240cd94b616",
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "judgement_summary": "검증은 명확하지만 저장소 간 일관성 확인이 필요하다.",
+        "unconfirmed_summary": "두 저장소의 통합된 테스트 실행 방식"
+      }
+    ]
+  },
+  "level": "standard",
+  "sizing_history": [
+    {
+      "id": "sizing-d2659240cd94b616",
+      "case_id": "case-052adc0dbbf1afa1",
+      "revision": 3,
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "source": "ai_recommendation",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": null,
+      "evidence_gap": false,
+      "reason_summary": "의도 초안에 적힌 수준 판단",
+      "residual_risk_summary": "",
+      "actor": "run-intent-fix1-092447216",
+      "state": "current",
+      "created_at": "2026-09-22T00:26:41.470799+00:00",
+      "superseded_at": null,
+      "axes": [
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "change_scope",
+          "weight": "medium",
+          "judgement_summary": "변경 범위는 국소적이지만 저장소 간 계약 정합성이 필요하다.",
+          "unconfirmed_summary": "repo-report의 실제 소스와 테스트 위치는 현재 작업공간에서 확인되지 않았다."
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "compatibility_and_data",
+          "weight": "low",
+          "judgement_summary": "호환성과 데이터 생명주기 위험은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "intent_clarity",
+          "weight": "low",
+          "judgement_summary": "의도와 성공 기준이 비교적 명확하다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "permission_and_security",
+          "weight": "low",
+          "judgement_summary": "권한·보안 영향은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "변경 및 실패 영향은 비교적 쉽게 되돌릴 수 있다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "uncertainty",
+          "weight": "medium",
+          "judgement_summary": "구현 자체는 단순하나 두 번째 저장소의 실제 구조와 테스트 위치에는 불확실성이 있다.",
+          "unconfirmed_summary": "repo-report의 위치와 render() 구현 세부"
+        },
+        {
+          "assessment_id": "sizing-d2659240cd94b616",
+          "axis": "verification_difficulty",
+          "weight": "medium",
+          "judgement_summary": "검증은 명확하지만 저장소 간 일관성 확인이 필요하다.",
+          "unconfirmed_summary": "두 저장소의 통합된 테스트 실행 방식"
+        }
+      ]
+    },
+    {
+      "id": "sizing-c513b667cb1a2981",
+      "case_id": "case-052adc0dbbf1afa1",
+      "revision": 2,
+      "intent_version_id": "intent-a7c4473d9352c1ba",
+      "source": "human_adjustment",
+      "recommended_level": "deep",
+      "derived_level": "standard",
+      "level": "deep",
+      "adjusted_from": "standard",
+      "evidence_gap": false,
+      "reason_summary": "두 저장소의 공개 계약이 함께 바뀌고 회귀 범위가 두 저장소에 걸친다",
+      "residual_risk_summary": "요청 자체는 명확해 준비가 과할 수 있다",
+      "actor": "owner",
+      "state": "superseded",
+      "created_at": "2026-09-22T00:25:44.355289+00:00",
+      "superseded_at": "2026-09-22T00:26:41.464003+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "change_scope",
+          "weight": "medium",
+          "judgement_summary": "변경 범위는 국소적이지만 저장소 간 계약 정합성이 필요하다.",
+          "unconfirmed_summary": "repo-report의 실제 소스와 테스트 위치는 현재 작업공간에서 확인되지 않았다."
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "compatibility_and_data",
+          "weight": "low",
+          "judgement_summary": "호환성과 데이터 생명주기 위험은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "intent_clarity",
+          "weight": "low",
+          "judgement_summary": "의도와 성공 기준이 비교적 명확하다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "permission_and_security",
+          "weight": "low",
+          "judgement_summary": "권한·보안 영향은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "변경 및 실패 영향은 비교적 쉽게 되돌릴 수 있다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "uncertainty",
+          "weight": "medium",
+          "judgement_summary": "구현 자체는 단순하나 두 번째 저장소의 실제 구조와 테스트 위치에는 불확실성이 있다.",
+          "unconfirmed_summary": "repo-report의 위치와 render() 구현 세부"
+        },
+        {
+          "assessment_id": "sizing-c513b667cb1a2981",
+          "axis": "verification_difficulty",
+          "weight": "medium",
+          "judgement_summary": "검증은 명확하지만 저장소 간 일관성 확인이 필요하다.",
+          "unconfirmed_summary": "두 저장소의 통합된 테스트 실행 방식"
+        }
+      ]
+    },
+    {
+      "id": "sizing-2483d9a56f9bbd3a",
+      "case_id": "case-052adc0dbbf1afa1",
+      "revision": 1,
+      "intent_version_id": "intent-a7c4473d9352c1ba",
+      "source": "ai_recommendation",
+      "recommended_level": "standard",
+      "derived_level": "standard",
+      "level": "standard",
+      "adjusted_from": null,
+      "evidence_gap": false,
+      "reason_summary": "의도 초안에 적힌 수준 판단",
+      "residual_risk_summary": "",
+      "actor": "run-intent-092447216",
+      "state": "superseded",
+      "created_at": "2026-09-22T00:25:43.557718+00:00",
+      "superseded_at": "2026-09-22T00:25:44.355289+00:00",
+      "axes": [
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "change_scope",
+          "weight": "medium",
+          "judgement_summary": "변경 범위는 국소적이지만 저장소 간 계약 정합성이 필요하다.",
+          "unconfirmed_summary": "repo-report의 실제 소스와 테스트 위치는 현재 작업공간에서 확인되지 않았다."
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "compatibility_and_data",
+          "weight": "low",
+          "judgement_summary": "호환성과 데이터 생명주기 위험은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "intent_clarity",
+          "weight": "low",
+          "judgement_summary": "의도와 성공 기준이 비교적 명확하다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "permission_and_security",
+          "weight": "low",
+          "judgement_summary": "권한·보안 영향은 낮다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "reversibility",
+          "weight": "low",
+          "judgement_summary": "변경 및 실패 영향은 비교적 쉽게 되돌릴 수 있다.",
+          "unconfirmed_summary": ""
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "uncertainty",
+          "weight": "medium",
+          "judgement_summary": "구현 자체는 단순하나 두 번째 저장소의 실제 구조와 테스트 위치에는 불확실성이 있다.",
+          "unconfirmed_summary": "repo-report의 위치와 render() 구현 세부"
+        },
+        {
+          "assessment_id": "sizing-2483d9a56f9bbd3a",
+          "axis": "verification_difficulty",
+          "weight": "medium",
+          "judgement_summary": "검증은 명확하지만 저장소 간 일관성 확인이 필요하다.",
+          "unconfirmed_summary": "두 저장소의 통합된 테스트 실행 방식"
+        }
+      ]
+    }
+  ],
+  "design": {
+    "stage": "design",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": {
+      "id": "prep-fcc3bbbf3ca4842a",
+      "case_id": "case-052adc0dbbf1afa1",
+      "stage": "design",
+      "revision": 1,
+      "artifact_id": "art-7ae4dda6d773a96e",
+      "artifact_rev": 1,
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "based_on_design_id": null,
+      "level": "standard",
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "run-design-092447216",
+      "summary": "design (run run-design-092447216)",
+      "state": "current",
+      "created_at": "2026-09-22T00:27:44.112171+00:00",
+      "superseded_at": null,
+      "sections": [
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "change_summary",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "변경 위치·동작·영향"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "requirement_mapping",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "required": true,
+          "required_at_report": true,
+          "label": "요구별 설계 대응"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "interfaces_and_data",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "인터페이스·데이터"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "failure_handling",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "실패·예외 처리"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "alternatives",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": false,
+          "required_at_report": false,
+          "label": "대안과 선택 이유"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "recovery",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": false,
+          "required_at_report": false,
+          "label": "실패·복구 경로"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "verifiability",
+          "state": "proposed",
+          "origin": "observation",
+          "required": true,
+          "required_at_report": true,
+          "label": "검증 가능성"
+        },
+        {
+          "preparation_id": "prep-fcc3bbbf3ca4842a",
+          "section": "open_questions",
+          "state": "proposed",
+          "origin": "observation",
+          "required": false,
+          "required_at_report": false,
+          "label": "미정 질문"
+        }
+      ],
+      "availability": "available",
+      "content_hash": "sha256:bf32db476453bf88cb6e4f4570e2e95ec51ce86c239631c8af35bd76665a7cff",
+      "owner_runner_id": "runner-p3-04-live",
+      "review": {
+        "id": "stagerev-94e3141380e8fc25",
+        "case_id": "case-052adc0dbbf1afa1",
+        "stage": "design",
+        "preparation_id": "prep-fcc3bbbf3ca4842a",
+        "mode": "auto_proceed",
+        "state": "auto_conditions_met",
+        "decision_id": null,
+        "actor": "stage-auto-proceed-policy",
+        "subject_content_hash": "sha256:bf32db476453bf88cb6e4f4570e2e95ec51ce86c239631c8af35bd76665a7cff",
+        "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+        "recorded_at": "2026-09-22T00:27:44.116625+00:00"
+      },
+      "missing_required_sections": []
+    },
+    "review": {
+      "id": "stagerev-94e3141380e8fc25",
+      "case_id": "case-052adc0dbbf1afa1",
+      "stage": "design",
+      "preparation_id": "prep-fcc3bbbf3ca4842a",
+      "mode": "auto_proceed",
+      "state": "auto_conditions_met",
+      "decision_id": null,
+      "actor": "stage-auto-proceed-policy",
+      "subject_content_hash": "sha256:bf32db476453bf88cb6e4f4570e2e95ec51ce86c239631c8af35bd76665a7cff",
+      "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+      "recorded_at": "2026-09-22T00:27:44.116625+00:00"
+    },
+    "state": "auto_conditions_met",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "plan": {
+    "stage": "plan",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": {
+      "id": "prep-3935e68fa4e16e04",
+      "case_id": "case-052adc0dbbf1afa1",
+      "stage": "plan",
+      "revision": 1,
+      "artifact_id": "art-0a7de8ab03c54ce7",
+      "artifact_rev": 1,
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "based_on_design_id": "prep-fcc3bbbf3ca4842a",
+      "level": "standard",
+      "authoring_mode": "ai_drafted",
+      "author_run_id": "run-plan-092447216",
+      "summary": "plan (run run-plan-092447216)",
+      "state": "current",
+      "created_at": "2026-09-22T00:28:59.669026+00:00",
+      "superseded_at": null,
+      "sections": [
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "tasks",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "작업별 목적·산출물·완료 조건"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "verification",
+          "state": "proposed",
+          "origin": "observation",
+          "required": true,
+          "required_at_report": true,
+          "label": "검증 작업"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "dependencies",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "의존 관계"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "integration_order",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": true,
+          "required_at_report": true,
+          "label": "통합 순서"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "human_decision_points",
+          "state": "proposed",
+          "origin": "observation",
+          "required": true,
+          "required_at_report": true,
+          "label": "사람 판단이 필요한 지점"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "environment_prerequisites",
+          "state": "proposed",
+          "origin": "observation",
+          "required": true,
+          "required_at_report": true,
+          "label": "실행 환경·선행 조건"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "experiments",
+          "state": "proposed",
+          "origin": "user_requirement",
+          "required": false,
+          "required_at_report": false,
+          "label": "실험·이행 검증"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "failure_response",
+          "state": "proposed",
+          "origin": "ai_proposal",
+          "required": false,
+          "required_at_report": false,
+          "label": "실패 시 대응"
+        },
+        {
+          "preparation_id": "prep-3935e68fa4e16e04",
+          "section": "open_questions",
+          "state": "proposed",
+          "origin": "observation",
+          "required": false,
+          "required_at_report": false,
+          "label": "미정 질문"
+        }
+      ],
+      "availability": "available",
+      "content_hash": "sha256:ff337bd09e68377c1a88687db553c4551162b3592551c07a764caaedf69e8a7f",
+      "owner_runner_id": "runner-p3-04-live",
+      "review": {
+        "id": "stagerev-579cf8ae45b713b4",
+        "case_id": "case-052adc0dbbf1afa1",
+        "stage": "plan",
+        "preparation_id": "prep-3935e68fa4e16e04",
+        "mode": "auto_proceed",
+        "state": "auto_conditions_met",
+        "decision_id": null,
+        "actor": "stage-auto-proceed-policy",
+        "subject_content_hash": "sha256:ff337bd09e68377c1a88687db553c4551162b3592551c07a764caaedf69e8a7f",
+        "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+        "recorded_at": "2026-09-22T00:28:59.674972+00:00"
+      },
+      "missing_required_sections": []
+    },
+    "review": {
+      "id": "stagerev-579cf8ae45b713b4",
+      "case_id": "case-052adc0dbbf1afa1",
+      "stage": "plan",
+      "preparation_id": "prep-3935e68fa4e16e04",
+      "mode": "auto_proceed",
+      "state": "auto_conditions_met",
+      "decision_id": null,
+      "actor": "stage-auto-proceed-policy",
+      "subject_content_hash": "sha256:ff337bd09e68377c1a88687db553c4551162b3592551c07a764caaedf69e8a7f",
+      "note_summary": "자동 진행 조건 충족 (사람 승인 아님)",
+      "recorded_at": "2026-09-22T00:28:59.674972+00:00"
+    },
+    "state": "auto_conditions_met",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "combined": {
+    "stage": "combined",
+    "mode": "auto_proceed",
+    "mode_source": "autonomy_derived",
+    "mode_reason": "Autonomy 에서 도출한 기본값. 설계·계획의 사람 검토는 선택 사항이다(D-16·D-65)",
+    "artifact": null,
+    "review": null,
+    "state": "not_ready",
+    "stale": false,
+    "missing_required_sections": []
+  },
+  "fast_lane": {
+    "eligible": false,
+    "blockers": [
+      {
+        "reason": "level_not_simple",
+        "detail": "효과 수준이 간소가 아니다"
+      },
+      {
+        "reason": "deferred_questions",
+        "detail": "설계·계획으로 이월한 질문이 남아 있다"
+      }
+    ]
+  },
+  "deferred_open_questions": [
+    {
+      "id": "q-a2cf79cf8c2eaab7",
+      "case_id": "case-052adc0dbbf1afa1",
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "question_key": "design:d1",
+      "summary": "repo-report 위치와 검증 경로 확인",
+      "decide_at": "design",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-22T00:27:44.115397+00:00",
+      "raised_in_stage": "design",
+      "preparation_id": "prep-fcc3bbbf3ca4842a"
+    },
+    {
+      "id": "q-fac5089f89b80ace",
+      "case_id": "case-052adc0dbbf1afa1",
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "question_key": "plan:p1",
+      "summary": "repo-report 위치와 실행 경로 확정",
+      "decide_at": "plan",
+      "state": "open",
+      "answered_by": null,
+      "answered_at": null,
+      "answer_artifact_id": null,
+      "created_at": "2026-09-22T00:28:59.670835+00:00",
+      "raised_in_stage": "plan",
+      "preparation_id": "prep-3935e68fa4e16e04"
+    }
+  ],
+  "work_graph": {
+    "case_id": "case-052adc0dbbf1afa1",
+    "present": true,
+    "stale": false,
+    "graph": {
+      "id": "wgraph-eb92f80693652b51",
+      "case_id": "case-052adc0dbbf1afa1",
+      "revision": 1,
+      "intent_version_id": "intent-2e6854bd6d15c6c8",
+      "plan_preparation_id": "prep-3935e68fa4e16e04",
+      "source": "plan_artifact",
+      "reason_summary": "plan v1 이 정의한 작업",
+      "actor": "policy:plan_artifact",
+      "state": "current",
+      "created_at": "2026-09-22T00:28:59.673976+00:00",
+      "superseded_at": null,
+      "tasks": [
+        {
+          "id": "task-bb931645729f4a93",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T1",
+          "kind": "investigation",
+          "relates_to": "",
+          "summary": "repo-report 구조와 실행 경로 확인",
+          "deliverable_summary": "파일 위치와 실행 명령 기록",
+          "completion_summary": "repo-report 작업 대상 확정",
+          "order_index": 1,
+          "origin": "observation",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-87e2e6b820072678",
+          "repository_ref": "repo-report",
+          "repository_name": "repo-report",
+          "depends_on": [],
+          "criteria": [],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T1",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-0b9295836f4c4aba",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T2",
+          "kind": "implementation",
+          "relates_to": "",
+          "summary": "summarize()에 chars 계약 추가",
+          "deliverable_summary": "repo-core 요약 계약 변경",
+          "completion_summary": "새 반환 계약 충족",
+          "order_index": 2,
+          "origin": "user_requirement",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-39c439143391faca",
+          "repository_ref": "primary",
+          "repository_name": "primary",
+          "depends_on": [],
+          "criteria": [
+            {
+              "criterion_id": "crit-1a4111272005fc58",
+              "relation": "implements"
+            },
+            {
+              "criterion_id": "crit-fdb753c2b819af75",
+              "relation": "implements"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T2",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-d901374cda46b270",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T3",
+          "kind": "verification",
+          "relates_to": "",
+          "summary": "repo-core 계약 검증",
+          "deliverable_summary": "chars·기존 동작 테스트",
+          "completion_summary": "repo-core 테스트 통과",
+          "order_index": 3,
+          "origin": "user_requirement",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-39c439143391faca",
+          "repository_ref": "primary",
+          "repository_name": "primary",
+          "depends_on": [
+            "T2"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-1a4111272005fc58",
+              "relation": "verifies"
+            },
+            {
+              "criterion_id": "crit-fdb753c2b819af75",
+              "relation": "verifies"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T3",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              },
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-ebfa0fdce78bb2e1",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T4",
+          "kind": "implementation",
+          "relates_to": "",
+          "summary": "render()에 chars 표시 추가",
+          "deliverable_summary": "보고서 출력 형식 변경",
+          "completion_summary": "render() 새 형식 구현",
+          "order_index": 4,
+          "origin": "ai_proposal",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-87e2e6b820072678",
+          "repository_ref": "repo-report",
+          "repository_name": "repo-report",
+          "depends_on": [
+            "T1",
+            "T3"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-4e87d45d4c4cad7a",
+              "relation": "implements"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T4",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              },
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+              },
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned), T3(planned)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-8676fc464ae6bc14",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T5",
+          "kind": "verification",
+          "relates_to": "",
+          "summary": "render() 출력 형식 검증",
+          "deliverable_summary": "새 출력 문자열 테스트",
+          "completion_summary": "repo-report 형식 테스트 통과",
+          "order_index": 5,
+          "origin": "user_requirement",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-87e2e6b820072678",
+          "repository_ref": "repo-report",
+          "repository_name": "repo-report",
+          "depends_on": [
+            "T4"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-4e87d45d4c4cad7a",
+              "relation": "verifies"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T5",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              },
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+              },
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-51ed0244059d74d7",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T6",
+          "kind": "verification",
+          "relates_to": "",
+          "summary": "repo-core 회귀 테스트 실행",
+          "deliverable_summary": "repo-core 전체 테스트 결과",
+          "completion_summary": "repo-core 회귀 없음",
+          "order_index": 6,
+          "origin": "observation",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-39c439143391faca",
+          "repository_ref": "primary",
+          "repository_name": "primary",
+          "depends_on": [
+            "T3"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-37257c7f63139dfa",
+              "relation": "verifies"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T6",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              },
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+              }
+            ]
+          }
+        },
+        {
+          "id": "task-ee94d72f557df79b",
+          "case_id": "case-052adc0dbbf1afa1",
+          "graph_revision_id": "wgraph-eb92f80693652b51",
+          "task_key": "T7",
+          "kind": "integration",
+          "relates_to": "",
+          "summary": "repo-report 통합 검증",
+          "deliverable_summary": "repo-report 통합 테스트 결과",
+          "completion_summary": "양 저장소 계약 정합성 확인",
+          "order_index": 7,
+          "origin": "ai_proposal",
+          "cancelled": false,
+          "cancel_reason": "",
+          "created_at": "2026-09-22T00:28:59.673976+00:00",
+          "repository_id": "repo-87e2e6b820072678",
+          "repository_ref": "repo-report",
+          "repository_name": "repo-report",
+          "depends_on": [
+            "T5"
+          ],
+          "criteria": [
+            {
+              "criterion_id": "crit-37257c7f63139dfa",
+              "relation": "verifies"
+            }
+          ],
+          "state": "planned",
+          "readiness": {
+            "task_key": "T7",
+            "state": "planned",
+            "runnable": false,
+            "blocked_by": [
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+              },
+              {
+                "reason": "deferred_questions_unresolved",
+                "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+              },
+              {
+                "reason": "task_dependencies_unmet",
+                "detail": "선행 Task 가 아직 완료되지 않았다: T5(planned)"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "tasks": [
+      {
+        "id": "task-bb931645729f4a93",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T1",
+        "kind": "investigation",
+        "relates_to": "",
+        "summary": "repo-report 구조와 실행 경로 확인",
+        "deliverable_summary": "파일 위치와 실행 명령 기록",
+        "completion_summary": "repo-report 작업 대상 확정",
+        "order_index": 1,
+        "origin": "observation",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-87e2e6b820072678",
+        "repository_ref": "repo-report",
+        "repository_name": "repo-report",
+        "depends_on": [],
+        "criteria": [],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T1",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-0b9295836f4c4aba",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T2",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "summarize()에 chars 계약 추가",
+        "deliverable_summary": "repo-core 요약 계약 변경",
+        "completion_summary": "새 반환 계약 충족",
+        "order_index": 2,
+        "origin": "user_requirement",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-39c439143391faca",
+        "repository_ref": "primary",
+        "repository_name": "primary",
+        "depends_on": [],
+        "criteria": [
+          {
+            "criterion_id": "crit-1a4111272005fc58",
+            "relation": "implements"
+          },
+          {
+            "criterion_id": "crit-fdb753c2b819af75",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T2",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-d901374cda46b270",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T3",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "repo-core 계약 검증",
+        "deliverable_summary": "chars·기존 동작 테스트",
+        "completion_summary": "repo-core 테스트 통과",
+        "order_index": 3,
+        "origin": "user_requirement",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-39c439143391faca",
+        "repository_ref": "primary",
+        "repository_name": "primary",
+        "depends_on": [
+          "T2"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-1a4111272005fc58",
+            "relation": "verifies"
+          },
+          {
+            "criterion_id": "crit-fdb753c2b819af75",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T3",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-ebfa0fdce78bb2e1",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T4",
+        "kind": "implementation",
+        "relates_to": "",
+        "summary": "render()에 chars 표시 추가",
+        "deliverable_summary": "보고서 출력 형식 변경",
+        "completion_summary": "render() 새 형식 구현",
+        "order_index": 4,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-87e2e6b820072678",
+        "repository_ref": "repo-report",
+        "repository_name": "repo-report",
+        "depends_on": [
+          "T1",
+          "T3"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-4e87d45d4c4cad7a",
+            "relation": "implements"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T4",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned), T3(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-8676fc464ae6bc14",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T5",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "render() 출력 형식 검증",
+        "deliverable_summary": "새 출력 문자열 테스트",
+        "completion_summary": "repo-report 형식 테스트 통과",
+        "order_index": 5,
+        "origin": "user_requirement",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-87e2e6b820072678",
+        "repository_ref": "repo-report",
+        "repository_name": "repo-report",
+        "depends_on": [
+          "T4"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-4e87d45d4c4cad7a",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T5",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-51ed0244059d74d7",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T6",
+        "kind": "verification",
+        "relates_to": "",
+        "summary": "repo-core 회귀 테스트 실행",
+        "deliverable_summary": "repo-core 전체 테스트 결과",
+        "completion_summary": "repo-core 회귀 없음",
+        "order_index": 6,
+        "origin": "observation",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-39c439143391faca",
+        "repository_ref": "primary",
+        "repository_name": "primary",
+        "depends_on": [
+          "T3"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-37257c7f63139dfa",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T6",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+            }
+          ]
+        }
+      },
+      {
+        "id": "task-ee94d72f557df79b",
+        "case_id": "case-052adc0dbbf1afa1",
+        "graph_revision_id": "wgraph-eb92f80693652b51",
+        "task_key": "T7",
+        "kind": "integration",
+        "relates_to": "",
+        "summary": "repo-report 통합 검증",
+        "deliverable_summary": "repo-report 통합 테스트 결과",
+        "completion_summary": "양 저장소 계약 정합성 확인",
+        "order_index": 7,
+        "origin": "ai_proposal",
+        "cancelled": false,
+        "cancel_reason": "",
+        "created_at": "2026-09-22T00:28:59.673976+00:00",
+        "repository_id": "repo-87e2e6b820072678",
+        "repository_ref": "repo-report",
+        "repository_name": "repo-report",
+        "depends_on": [
+          "T5"
+        ],
+        "criteria": [
+          {
+            "criterion_id": "crit-37257c7f63139dfa",
+            "relation": "verifies"
+          }
+        ],
+        "state": "planned",
+        "readiness": {
+          "task_key": "T7",
+          "state": "planned",
+          "runnable": false,
+          "blocked_by": [
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+            },
+            {
+              "reason": "deferred_questions_unresolved",
+              "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+            },
+            {
+              "reason": "task_dependencies_unmet",
+              "detail": "선행 Task 가 아직 완료되지 않았다: T5(planned)"
+            }
+          ]
+        }
+      }
+    ],
+    "readiness": {
+      "T1": {
+        "task_key": "T1",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          }
+        ]
+      },
+      "T2": {
+        "task_key": "T2",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          }
+        ]
+      },
+      "T3": {
+        "task_key": "T3",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T2(planned)"
+          }
+        ]
+      },
+      "T4": {
+        "task_key": "T4",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T1(planned), T3(planned)"
+          }
+        ]
+      },
+      "T5": {
+        "task_key": "T5",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T4(planned)"
+          }
+        ]
+      },
+      "T6": {
+        "task_key": "T6",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T3(planned)"
+          }
+        ]
+      },
+      "T7": {
+        "task_key": "T7",
+        "state": "planned",
+        "runnable": false,
+        "blocked_by": [
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "어떤 Task 를 막는지 연결되지 않은 이월 질문이 있어 전부 막는다: design:d1"
+          },
+          {
+            "reason": "deferred_questions_unresolved",
+            "detail": "이 Task 를 막는 사람 결정이 남아 있다: plan:p1"
+          },
+          {
+            "reason": "task_dependencies_unmet",
+            "detail": "선행 Task 가 아직 완료되지 않았다: T5(planned)"
+          }
+        ]
+      }
+    },
+    "criteria_coverage": [
+      {
+        "criterion_id": "crit-1a4111272005fc58",
+        "criterion_key": "C-01",
+        "summary": "chars가 Python 문자열 길이와 일치",
+        "implemented_by": [
+          "T2"
+        ],
+        "verified_by": [
+          "T3"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-fdb753c2b819af75",
+        "criterion_key": "C-02",
+        "summary": "기존 요약 키와 동작 유지",
+        "implemented_by": [
+          "T2"
+        ],
+        "verified_by": [
+          "T3"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-4e87d45d4c4cad7a",
+        "criterion_key": "C-03",
+        "summary": "보고서 출력 형식 일치",
+        "implemented_by": [
+          "T4"
+        ],
+        "verified_by": [
+          "T5"
+        ],
+        "has_verification_task": true
+      },
+      {
+        "criterion_id": "crit-37257c7f63139dfa",
+        "criterion_key": "C-04",
+        "summary": "두 저장소 테스트 통과",
+        "implemented_by": [],
+        "verified_by": [
+          "T6",
+          "T7"
+        ],
+        "has_verification_task": true
+      }
+    ],
+    "deferred_open_questions": [
+      {
+        "id": "q-a2cf79cf8c2eaab7",
+        "case_id": "case-052adc0dbbf1afa1",
+        "intent_version_id": "intent-2e6854bd6d15c6c8",
+        "question_key": "design:d1",
+        "summary": "repo-report 위치와 검증 경로 확인",
+        "decide_at": "design",
+        "state": "open",
+        "answered_by": null,
+        "answered_at": null,
+        "answer_artifact_id": null,
+        "created_at": "2026-09-22T00:27:44.115397+00:00",
+        "raised_in_stage": "design",
+        "preparation_id": "prep-fcc3bbbf3ca4842a"
+      },
+      {
+        "id": "q-fac5089f89b80ace",
+        "case_id": "case-052adc0dbbf1afa1",
+        "intent_version_id": "intent-2e6854bd6d15c6c8",
+        "question_key": "plan:p1",
+        "summary": "repo-report 위치와 실행 경로 확정",
+        "decide_at": "plan",
+        "state": "open",
+        "answered_by": null,
+        "answered_at": null,
+        "answer_artifact_id": null,
+        "created_at": "2026-09-22T00:28:59.670835+00:00",
+        "raised_in_stage": "plan",
+        "preparation_id": "prep-3935e68fa4e16e04"
+      }
+    ],
+    "question_blocks": {
+      "q-fac5089f89b80ace": [
+        "T4",
+        "T5",
+        "T7"
+      ]
+    },
+    "unresolved_block_refs": []
+  }
+}
