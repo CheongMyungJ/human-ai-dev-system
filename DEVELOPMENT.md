@@ -20,9 +20,9 @@
 | 활성 plan | **[P3-PLAN-04](plans/P3-PLAN-04.md)**. 시험 기능은 사용자 결정으로 A(생산자→소비자 계약 변경)다(11절). 완료된 `P3-PLAN-R4`~`P3-PLAN-03`을 다시 열지 않음 |
 | 다음 순서 | P3-04 수직 통합 → P4 → P5 → P6 |
 | 마지막 제품 검증 | P3-04 보고 기준 **pytest 415 + P1 계약 unittest 18 통과**, 스키마 **v12**, `npm run build` 성공. 실제 codex 로 **두 저장소 기능 흐름 전체**(의도→게이트→설계→계획→일곱 Task→조합)를 확인. [P3-04 근거](p3/evidence/P3-04-results.md). R4의 395·R3의 341·R2의 313·R1의 286·P3-03의 242는 그 시점 수치로 보존 |
-| 이 문서 개정 시작 상태 | `main`, HEAD `ae52816`, 작업 트리 clean으로 관측. **이 세션의 변경은 아직 커밋하지 않았다** — 커밋·push 는 사용자 확인 뒤에 한다 |
+| 이 문서 개정 시작 상태 | `main`, HEAD `ae52816`, 작업 트리 clean으로 관측. 이 세션의 변경은 **사용자 지시로 커밋해 `origin/main`에 push했다**. 실제 커밋은 `git log --oneline ae52816..HEAD`, 원격 반영은 로컬/원격 ref로 확인 |
 | 남은 제품 결정 | 없음. **P3-04의 시험 기능은 사용자 결정으로 A 로 확정했다**(2026-09-22). `autonomy = NULL` 은 R4에서 controlled 취급으로 확정 |
-| 외부 반영 허용 | **없다.** P3-04 의 변경은 아직 커밋도 push도 하지 않았다. 시험 저장소에 원격을 붙이지 않았고 외부 쓰기는 일어나지 않았다. 커밋·push 는 사용자 확인 뒤에만 한다 |
+| 외부 반영 허용 | 사용자의 후속 지시로 P3-04 변경의 커밋과 `origin/main` push를 허용받아 반영했다. **이 허용은 그 커밋에만 적용되며 이후 새 변경·PR·병합으로 확대되지 않는다.** 다음 세션의 변경은 다시 확인받는다. 시험 저장소에는 원격을 붙이지 않았고 제품의 외부 게시는 일어나지 않았다(P5) |
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
 
@@ -188,10 +188,10 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 - **가장 중요한 결과:** **검증이 돌지 않자 Case 가 닫히지 않았다.** 이 호스트의 CLI sandbox 가 Python 에 닿지 못해 네 검증 실행이 모두 명령을 실행하고 실패했고, 기준은 `unverified` 로 남았으며 결과 후보도 종료 기록도 만들어지지 않았다. R4 의 "여는 쪽이 더 위험하다"의 반대편 증거이며 `auto_on_conditions` 가 **조건을 지난다**는 뜻이다. **같은 세션의 앞선 시도는 정확히 반대로 끝났다** — 하네스가 거짓 근거를 먹이자 Case 가 자동 완료됐다. 근거의 진위는 여전히 시스템이 판정하지 않는다(P4-01).
 - **검증:** **pytest 415 + P1 계약 unittest 18 통과**(R4 시점 395 → +20), `npm run build` 성공, 커밋된 v11 스키마로 만든 실제 DB 의 v12 이행. 동시성 시험은 **잠금을 지우면 같은 예외로 실패하는 것을 확인하고** 넣었다.
 - **다음 행동:** **P3-04 를 이어서 한다.** 남은 것은 (1) **경로 B — controlled** `\.venv\Scripts\python.exe p3\live\path_bc.py --path b`, (2) **경로 C — 예산 도달** `--path c`, (3) 제어부 강제 종료 후 v12 기록 복원. 스크립트는 이미 있고 경로 A 와 같은 흐름을 탄다. P4 를 먼저 시작하지 않는다.
-- **사람에게 물어야 할 것:** **이 세션의 변경을 커밋·push 할 것인가.** 아직 아무 것도 커밋하지 않았다.
-- **작업공간:** 시작 `main`/`ae52816`, clean 관측. **작업 트리에 미커밋 변경이 남아 있다** — 새 파일 `plans/P3-PLAN-04.md`, `tests/test_task_repository.py`, `p3/live/{driver,fixtures,path_a,path_bc}.py`, `p3/evidence/P3-04-*` 와 수정 파일들(`controller/{admission,api,db,repository,schema.sql}`, `domain/{models,prep_doc}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_data_boundary,test_migration,test_preparation,test_repositories}.py`, `web/src/{api.ts,WorkGraphPanel.tsx}`). 인계 소비 시 `git status` 로 실제 상태를 재확인한다.
+- **사람에게 물어야 할 것:** 없다. **커밋·push 는 사용자 지시로 이미 했다**(그 허용은 이 변경에만 적용된다). 남은 경로 B·C 는 새 제품 판단 없이 진행할 수 있다.
+- **작업공간:** 시작 `main`/`ae52816`, clean 관측. 아래를 **사용자 지시로 커밋하고 `origin/main`에 push했다** — 새 파일 `plans/P3-PLAN-04.md`, `tests/test_task_repository.py`, `p3/live/{driver,fixtures,path_a,path_bc}.py`, `p3/evidence/P3-04-*` 와 수정 파일들(`controller/{admission,api,db,repository,schema.sql}`, `domain/{models,prep_doc}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_data_boundary,test_migration,test_preparation,test_repositories}.py`, `web/src/{api.ts,WorkGraphPanel.tsx}`). 실제 커밋은 `git log --oneline ae52816..HEAD`, 원격 반영은 로컬/원격 ref로 확인한다. 인계 소비 시 실제 상태를 재확인한다.
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 종료했다(스크립트가 `finally` 에서 정리한다). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p3-04-live` 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 증거 사본은 `p3/evidence/P3-04-*` 에 있다. R1~R4 의 라이브 데이터도 그대로 있다.
-- **다음 세션이 이어서 할 때:** `tests/test_migration.py` 의 옛 스키마 조회는 **커밋 이력**에서 찾는다(`_v11_schema()` 는 `스키마 v12` 표식이 없는 가장 최근 `schema.sql` 을 고른다) — **v12 를 커밋한 뒤 재실행해 확인해야 한다.** 그리고 라이브 하네스를 다시 쓸 때 셋을 기억한다: 검토의 지시 원문은 **의도 문서 자체**여야 하고, 실행은 **그래프가 정한 순서**로 요청해야 하며, 실행 id 는 **회차마다 달라야 한다**(멱등 함정).
+- **다음 세션이 이어서 할 때:** 작업 트리는 clean 이고 `origin/main` 과 같다. `tests/test_migration.py` 의 옛 스키마 조회는 **커밋 이력**에서 찾는다(`_v11_schema()` 는 `스키마 v12` 표식이 없는 가장 최근 `schema.sql` 을 고른다) — **push 뒤 재실행해 확인했다**(7건 통과). 그리고 라이브 하네스를 다시 쓸 때 셋을 기억한다: 검토의 지시 원문은 **의도 문서 자체**여야 하고, 실행은 **그래프가 정한 순서**로 요청해야 하며, 실행 id 는 **회차마다 달라야 한다**(멱등 함정).
 
 ### 이전 인계 — S-014 / 2026-09-22 / P3-R4 자동 실행·진입·완료 경로
 
