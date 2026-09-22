@@ -625,6 +625,10 @@ function QualityGatesPanel(props: { detail: CaseDetail }) {
       <p className="muted small">
         적용 설정, 실제 검사, 품질 판정과 repair 누적은 서로 다른 상태다. OFF나 업무상
         미적용을 통과로 표시하지 않으며 최초 실패는 repair 1회로 세지 않는다.
+        <br />
+        P4-02: <strong>요청한 설정과 실제 적용된 설정</strong>은 다를 수 있다. 진행 중
+        검증이 있으면 변경은 예약되고 그 검증 1회가 끝난 뒤 반영된다. 예약은 취소
+        명령이 아니며, 예약만으로 진행 중 검사가 멈추거나 그 결과가 무효화되지 않는다.
       </p>
       <table>
         <thead>
@@ -634,7 +638,7 @@ function QualityGatesPanel(props: { detail: CaseDetail }) {
             <th>요구 검사</th>
             <th>현재 판정</th>
             <th>repair</th>
-            <th>근거</th>
+            <th>근거 · 변경</th>
           </tr>
         </thead>
         <tbody>
@@ -643,13 +647,41 @@ function QualityGatesPanel(props: { detail: CaseDetail }) {
               <td>
                 <span className="mono">{gate.gate}</span> · {gate.label}
               </td>
-              <td>{gate.setting}</td>
+              <td>
+                {gate.setting}
+                {gate.applied_at && (
+                  <>
+                    <br />
+                    <span className="muted small">적용 {gate.applied_at}</span>
+                  </>
+                )}
+                {gate.requested_at && gate.requested_at !== gate.applied_at && (
+                  <>
+                    <br />
+                    <span className="muted small">요청 {gate.requested_at}</span>
+                  </>
+                )}
+              </td>
               <td>{gate.inspection_required}</td>
               <td>
                 {gate.latest_run ? (
                   <>
                     {GATE_VERDICT_LABEL[gate.latest_run.verdict]}
                     {gate.latest_run.validity && ` · ${gate.latest_run.validity}`}
+                    {gate.latest_run.status === 'running' && (
+                      <>
+                        <br />
+                        <span className="muted small">검사 중</span>
+                      </>
+                    )}
+                    {gate.latest_run.late_result && (
+                      <>
+                        <br />
+                        <span className="muted small">
+                          늦게 도착한 결과 · 현재 정책의 통과가 아니다
+                        </span>
+                      </>
+                    )}
                   </>
                 ) : (
                   <span className="muted">검사 안 함</span>
@@ -664,6 +696,17 @@ function QualityGatesPanel(props: { detail: CaseDetail }) {
                 <span className="mono">{gate.source}</span>
                 <br />
                 <span className="muted">{gate.reason}</span>
+                {gate.reserved.map((reservation) => (
+                  <div key={reservation.policy_id} className="muted">
+                    예약 · {reservation.setting}
+                    {reservation.inspection && ` · ${reservation.inspection}`}
+                    {reservation.repair_limit !== null &&
+                      ` · 한도 ${reservation.repair_limit}`}
+                    <br />
+                    검증 1회 종료 뒤 반영 (요청 {reservation.requested_at} ·{' '}
+                    {reservation.requested_by})
+                  </div>
+                ))}
               </td>
             </tr>
           ))}

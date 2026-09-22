@@ -177,6 +177,11 @@ class RunIn(BaseModel):
     #: 생략할 수 있다. 둘 이상인데 생략하면 `workspace_target_not_recorded` 로
     #: 거부된다 — 어느 저장소를 고칠지 모르는 채로 쓰기를 열지 않는다.
     repository_id: str | None = None
+    #: **이 요청이 기대한 게이트 정책**(P4-02). `{"QG-04": 2}` 또는
+    #: `{"QG-04": {"revision": 2, "task_key": "T1"}}`. 적으면 저장과 배정 사이의
+    #: 변경이 `quality_gate_policy_changed` 로 거부된다. 적지 않으면 이 검사는
+    #: 만들어지지 않는다 — 기대를 말하지 않은 요청에 없는 기대를 지어내지 않는다.
+    expected_gate_policy: dict[str, Any] | None = None
 
 
 class RunnerRegisterIn(BaseModel):
@@ -503,6 +508,7 @@ def create_run(
             instruction_artifact_rev=payload.instruction_artifact_rev,
             session=payload.session,
             repository_id=payload.repository_id,
+            expected_gate_policy=payload.expected_gate_policy,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -1306,6 +1312,49 @@ class QualityGateRunIn(BaseModel):
     blocked: bool = False
 
 
+class QualityGateRunStartIn(BaseModel):
+    """진행 중 검증 1회를 연다(P4-02). 판정·증거는 아직 없다."""
+
+    task_key: str = Field(default="", max_length=120)
+    gate: GateId
+    subject_key: str = Field(min_length=1, max_length=160)
+    input_hash: str = Field(min_length=1, max_length=128)
+    context_refs: list[str] = Field(default_factory=list)
+    criteria_refs: list[str] = Field(default_factory=list)
+    author_run_id: str | None = None
+
+
+class QualityGateRunCompleteIn(BaseModel):
+    inspection_used: str
+    evidence_refs: list[str] = Field(default_factory=list)
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    author_run_id: str | None = None
+    reviewer_run_id: str | None = None
+    blocked: bool = False
+
+
+class QualityGateRunStopIn(BaseModel):
+    actor: str = Field(min_length=1, max_length=120)
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+class QualityPolicyCancelIn(BaseModel):
+    task_key: str = Field(default="", max_length=120)
+    actor: str = Field(min_length=1, max_length=120)
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+class QualityChangeEventIn(BaseModel):
+    kind: str
+    change_ref: str = Field(min_length=1, max_length=160)
+    changed_refs: list[str] = Field(default_factory=list)
+    summary: str = Field(min_length=1, max_length=200)
+    actor: str = Field(min_length=1, max_length=120)
+    #: 영향 범위를 확인했는가. False 면 판정은 `unknown` 이고 재검증 대상이다 —
+    #: 확인하지 못한 것을 "무관하다"로 적지 않는다.
+    scope_known: bool = True
+
+
 class RemediationAttemptIn(BaseModel):
     kind: str
     task_key: str = Field(default="", max_length=120)
@@ -1405,6 +1454,103 @@ def create_quality_gate_run(
         )
     except (NotFoundError, ConflictError, ValueError) as exc:
         raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.post("/api/cases/{case_id}/quality-gate-runs/open", status_code=201)
+def open_quality_gate_run(
+    request: Request, case_id: str, payload: QualityGateRunStartIn
+) -> dict[str, Any]:
+    """검증 1회를 연다. 이 실행이 도는 동안 설정 변경은 예약된다(P4-02)."""
+    try:
+        return _repo(request).start_quality_gate_run(
+            case_id,
+            payload.gate,
+            subject_key=payload.subject_key,
+            input_hash=payload.input_hash,
+            context_refs=payload.context_refs,
+            criteria_refs=payload.criteria_refs,
+            task_key=payload.task_key,
+            author_run_id=payload.author_run_id,
+        )
+    except (NotFoundError, ConflictError, ValueError) as exc:
+        raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.post("/api/quality-gate-runs/{gate_run_id}/complete")
+def complete_quality_gate_run(
+    request: Request, gate_run_id: str, payload: QualityGateRunCompleteIn
+) -> dict[str, Any]:
+    """검증 1회를 닫고 그 실행을 기다리던 예약을 반영한다(P4-02)."""
+    try:
+        return _repo(request).complete_quality_gate_run(
+            gate_run_id,
+            inspection_used=payload.inspection_used,
+            evidence_refs=payload.evidence_refs,
+            findings=payload.findings,
+            author_run_id=payload.author_run_id,
+            reviewer_run_id=payload.reviewer_run_id,
+            blocked=payload.blocked,
+        )
+    except (NotFoundError, ConflictError, ValueError) as exc:
+        raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.post("/api/quality-gate-runs/{gate_run_id}/stop-request")
+def stop_quality_gate_run(
+    request: Request, gate_run_id: str, payload: QualityGateRunStopIn
+) -> dict[str, Any]:
+    """취소를 **요청**한다. 실제 종료 확인이 아니다."""
+    try:
+        return _repo(request).request_quality_gate_run_stop(
+            gate_run_id, actor=payload.actor, reason_summary=payload.reason_summary
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/quality-gates/{gate}/policy/cancel-reservation")
+def cancel_quality_gate_reservation(
+    request: Request, case_id: str, gate: GateId, payload: QualityPolicyCancelIn
+) -> dict[str, Any]:
+    """예약을 취소한다. 이미 적용된 정책은 되돌리지 않는다."""
+    try:
+        return _repo(request).cancel_reserved_quality_gate_policy(
+            case_id,
+            gate,
+            task_key=payload.task_key,
+            actor=payload.actor,
+            reason_summary=payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/quality-change-events", status_code=201)
+def create_quality_change_event(
+    request: Request, case_id: str, payload: QualityChangeEventIn
+) -> dict[str, Any]:
+    """요청·코드·권한 변경을 기록하고 영향받는 검사만 재검증 대상으로 만든다."""
+    try:
+        return _repo(request).record_quality_change_event(
+            case_id,
+            kind=payload.kind,
+            change_ref=payload.change_ref,
+            changed_refs=payload.changed_refs,
+            summary=payload.summary,
+            actor=payload.actor,
+            scope_known=payload.scope_known,
+        )
+    except (NotFoundError, ConflictError, ValueError) as exc:
+        raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.get("/api/cases/{case_id}/quality-change-events")
+def list_quality_change_events(request: Request, case_id: str) -> list[dict[str, Any]]:
+    try:
+        _repo(request).get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return _repo(request).list_quality_change_events(case_id)
 
 
 @router.get("/api/cases/{case_id}/quality-gates/{gate}/remediation/{subject_key}")

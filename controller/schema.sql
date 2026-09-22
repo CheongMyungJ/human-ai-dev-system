@@ -1411,3 +1411,60 @@ CREATE TABLE IF NOT EXISTS remediation_attempt (
 
 CREATE INDEX IF NOT EXISTS idx_remediation_attempt_cycle
     ON remediation_attempt(cycle_id, sequence_no);
+
+
+-- ===================================================================
+-- 스키마 v14 (P4-02 변경·예약)
+--
+-- 게이트 설정 변경은 진행 중 검증 1회가 끝난 뒤 반영된다(D-30). 그래서 정책 행에
+-- `요청 시각`과 `적용 시각`이 따로 있고, 예약 행은 `pending` 으로 남아 유효 정책
+-- 조회에 섞이지 않는다. 예약만으로 진행 중 검사를 무효화하지 않기 때문이다.
+--
+-- 아래 두 표는 **변경이 어떤 증거를 무효화했는가**를 남긴다. 재검증과 재사용을
+-- 둘 다 기록하는 이유는, 재사용이 "아무 일도 없었다"가 아니라 **이유와 참조 버전이
+-- 있는 판단**이기 때문이다(gate-operations 3절). 영향을 확인하지 못한 경우는
+-- `unknown` 이며 재사용으로 적지 않는다.
+--
+-- 정책·실행 표에 더한 시간축 컬럼은 `db.py` 의 v14 이행이 붙인다. 기존 DB 에도
+-- 같은 컬럼이 필요하기 때문이며, v12 의 `task.repository_id` 와 같은 방식이다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS quality_change_event (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    kind              TEXT NOT NULL,  -- request | code | permission
+    change_ref        TEXT NOT NULL,  -- 바뀐 대상의 참조(원문 아님)
+    changed_refs_json TEXT NOT NULL,  -- 영향 계산에 쓰는 참조 목록
+    scope_known       INTEGER NOT NULL DEFAULT 1,
+    summary           TEXT NOT NULL,
+    recorded_by       TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    CHECK (kind IN ('request', 'code', 'permission')),
+    CHECK (length(change_ref) <= 160),
+    CHECK (length(summary) <= 200),
+    -- 참조 100개 × 160자에 JSON 구분자를 더한 상한이다. 런타임이 항목마다
+    -- 검사하지만 DB 제약도 함께 둔다 — 내부 호출이 본문을 밀어 넣을 수 있는
+    -- 자리를 하나만 남기지 않는다(P4-01 검토에서 고친 것과 같은 이유).
+    CHECK (length(changed_refs_json) <= 17000),
+    CHECK (scope_known IN (0, 1))
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_change_event_case
+    ON quality_change_event(case_id, created_at);
+
+CREATE TABLE IF NOT EXISTS quality_revalidation (
+    id                 TEXT PRIMARY KEY,
+    change_event_id    TEXT NOT NULL REFERENCES quality_change_event(id),
+    gate_run_id        TEXT NOT NULL REFERENCES quality_gate_run(id),
+    decision           TEXT NOT NULL,  -- revalidate | reuse | unknown
+    reason_summary     TEXT NOT NULL,
+    referenced_version TEXT NOT NULL,  -- 재사용 판단이 기댄 입력 버전(해시)
+    created_at         TEXT NOT NULL,
+    UNIQUE (change_event_id, gate_run_id),
+    CHECK (decision IN ('revalidate', 'reuse', 'unknown')),
+    CHECK (length(reason_summary) <= 200),
+    CHECK (length(referenced_version) <= 128)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_revalidation_run
+    ON quality_revalidation(gate_run_id, created_at);

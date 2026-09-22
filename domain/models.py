@@ -555,6 +555,18 @@ class AdmissionRefusal(str, Enum):
     RUN_TASK_REPOSITORY_MISMATCH = "run_task_repository_mismatch"
     TASK_REPOSITORY_NOT_RECORDED = "task_repository_not_recorded"
 
+    # --- P4-02 변경·예약 ---------------------------------------------------
+    #
+    # `quality_gate_not_passed` 와 **다른 질문이다.** 저쪽은 "이 게이트가 통과했는가",
+    # 이쪽은 "이 요청이 기대한 정책이 **아직도 그 정책인가**" 이다. 통과한 결과를
+    # 들고 온 배정 요청이라도 저장과 배정 사이에 정책이 바뀌었으면 시작하지 않는다
+    # (gate-operations 3절 7항).
+    #
+    # **예약만 있는 상태는 이 사유가 아니다.** 예약은 현재 정책을 바꾸지 않으며
+    # 차단도 아니다 — 그것까지 막으면 설정을 바꾸려는 사람이 진행 중 업무를 멈추게
+    # 된다(D-30 은 정반대를 요구한다).
+    QUALITY_GATE_POLICY_CHANGED = "quality_gate_policy_changed"
+
 
 class GateId(str, Enum):
     """P4-01까지 구현한 품질 게이트.

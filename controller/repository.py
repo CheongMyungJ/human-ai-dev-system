@@ -2435,6 +2435,53 @@ class Repository:
             dict(task_row) if task_row else None,
         )
 
+    def _reserved_quality_policy_rows(
+        self, case_id: str, gate: GateId, task_key: str = ""
+    ) -> list[dict[str, Any]]:
+        """아직 반영되지 않은 예약 설정(P4-02).
+
+        **유효 정책에 섞지 않는다.** 이 행들은 "요청됐다"이고 현재 적용된 것은
+        여전히 `current` 행이다. 둘을 합치면 예약만으로 진행 중 검사가 무효화된
+        것처럼 보인다(D-30).
+        """
+        scopes = [""] if not task_key else [task_key, ""]
+        rows: list[dict[str, Any]] = []
+        for scope in scopes:
+            rows.extend(
+                dict(r)
+                for r in self.conn.execute(
+                    "SELECT * FROM quality_gate_policy WHERE case_id = ? AND task_key = ?"
+                    " AND gate = ? AND state = 'pending' ORDER BY revision",
+                    (case_id, scope, gate.value),
+                )
+            )
+        return rows
+
+    def _running_quality_gate_run(
+        self, case_id: str, gate: GateId, task_key: str = "", subject_key: str | None = None
+    ) -> dict[str, Any] | None:
+        """이 범위에서 **진행 중인 검증 1회**.
+
+        범위 겹침이 중요하다. Case 전체 설정 변경(`task_key = ''`)은 그 게이트의
+        **어느 Task 검증이든** 돌고 있으면 기다린다. Task 범위 변경은 그 Task 의
+        검증만 기다린다. 넓은 변경이 좁은 검증을 못 본 척하면 진행 중 검사가 시작
+        당시 정책을 유지한다는 약속이 깨진다.
+        """
+        sql = (
+            "SELECT * FROM quality_gate_run WHERE case_id = ? AND gate = ?"
+            " AND status = 'running'"
+        )
+        args: tuple[Any, ...] = (case_id, gate.value)
+        if task_key:
+            sql += " AND task_key = ?"
+            args += (task_key,)
+        if subject_key is not None:
+            sql += " AND subject_key = ?"
+            args += (subject_key,)
+        sql += " ORDER BY created_at LIMIT 1"
+        row = self.conn.execute(sql, args).fetchone()
+        return dict(row) if row else None
+
     def _current_quality_task(self, case_id: str, task_key: str) -> dict[str, Any] | None:
         if not task_key:
             return None
@@ -2536,6 +2583,31 @@ class Repository:
             "reason": reason,
             "repair_limit": repair_limit,
             "policy_revision": applied_row["revision"] if applied_row else 0,
+            # **요청 시각과 적용 시각을 나눠 준다**(P4-02). 즉시 적용된 행은 둘이
+            # 같고, 예약을 거쳐 반영된 행은 다르다. 추천만 적용 중이면 둘 다 없다 —
+            # 사람이 설정한 적이 없다는 뜻이며 `0` 으로 적지 않는다.
+            "requested_at": applied_row["requested_at"] if applied_row else None,
+            "applied_at": applied_row["applied_at"] if applied_row else None,
+            "apply_boundary": applied_row["apply_boundary"] if applied_row else None,
+            "reserved": [
+                {
+                    "policy_id": row["id"],
+                    "revision": row["revision"],
+                    "task_key": row["task_key"] or None,
+                    "setting": row["setting"],
+                    "inspection": row["inspection"],
+                    "repair_limit": row["repair_limit"],
+                    "requested_at": row["requested_at"],
+                    "requested_by": row["set_by"],
+                    "reason": row["reason_summary"],
+                    "apply_after_run_id": row["apply_after_run_id"],
+                    "apply_boundary": row["apply_boundary"],
+                }
+                for row in self._reserved_quality_policy_rows(case_id, gate, task_key)
+            ],
+            "running_gate_run_id": (
+                (self._running_quality_gate_run(case_id, gate, task_key) or {}).get("id")
+            ),
             "latest_run": self._quality_gate_run_dict(dict(latest_run)) if latest_run else None,
             "remediation": dict(cycle) if cycle else None,
         }
@@ -2649,52 +2721,194 @@ class Repository:
         ).fetchone()
         revision = int(row["r"] or 0) + 1
         now = utc_now()
+        # **여기가 P4-02의 갈림길이다.** 그 범위에 진행 중인 검증 1회가 있으면
+        # 변경을 적용하지 않고 예약한다(D-30). 예약은 취소 명령이 아니다 — 돌고
+        # 있는 검사는 시작 당시 정책 그대로 끝나고, 반영은 그 뒤다.
+        running = self._running_quality_gate_run(case_id, gate, task_key)
+        previous_inspection = current["inspection_required"]
         with transaction(self.conn):
+            if running is not None:
+                self.conn.execute(
+                    "INSERT INTO quality_gate_policy"
+                    " (id, case_id, task_key, gate, revision, setting, inspection, repair_limit,"
+                    " source, set_by, reason_summary, state, created_at, requested_at,"
+                    " apply_after_run_id, apply_boundary)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+                    (
+                        ids.new_id("qpol"), case_id, task_key, gate.value, revision, setting,
+                        requested_inspection.value if requested_inspection else None,
+                        repair_limit,
+                        "task_explicit" if task_key else "case_explicit",
+                        actor, reason, now, now, running["id"],
+                        quality.PolicyApplyBoundary.VERIFICATION_END.value,
+                    ),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE quality_gate_policy SET state = 'superseded', superseded_at = ?"
+                    " WHERE case_id = ? AND task_key = ? AND gate = ? AND state = 'current'",
+                    (now, case_id, task_key, gate.value),
+                )
+                self.conn.execute(
+                    "INSERT INTO quality_gate_policy"
+                    " (id, case_id, task_key, gate, revision, setting, inspection, repair_limit,"
+                    " source, set_by, reason_summary, state, created_at, requested_at,"
+                    " applied_at, apply_boundary)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?)",
+                    (
+                        ids.new_id("qpol"), case_id, task_key, gate.value, revision, setting,
+                        requested_inspection.value if requested_inspection else None,
+                        repair_limit,
+                        "task_explicit" if task_key else "case_explicit",
+                        actor, reason, now, now, now,
+                        quality.PolicyApplyBoundary.IMMEDIATE.value,
+                    ),
+                )
+                self._apply_quality_policy_effects(
+                    case_id,
+                    gate,
+                    task_key,
+                    previous_inspection=previous_inspection,
+                    repair_limit=repair_limit,
+                    now=now,
+                )
+        return self.effective_quality_gate_policy(case_id, gate, task_key)
+
+    def _apply_quality_policy_effects(
+        self,
+        case_id: str,
+        gate: GateId,
+        task_key: str,
+        *,
+        previous_inspection: str,
+        repair_limit: int | None,
+        now: str,
+    ) -> None:
+        """설정이 **실제로 반영될 때** 기존 판정·repair 한도에 미치는 효과.
+
+        `needs_recheck` 를 만드는 것은 **검사 강도 변경 하나**다(P4-02). ON/OFF
+        토글은 그 게이트를 쓸지 말지를 정할 뿐 이미 끝난 검사가 무엇을 보았는지
+        바꾸지 않으므로, 토글만으로 같은 테스트를 다시 돌릴 이유가 없다
+        (gate-operations 5절). repair 한도는 다음 차수의 허용량이라 마찬가지다.
+
+        반대로 한도 변경은 **이미 쓴 차수를 보존**한다. 소진 상태였던 주기는 여유가
+        생긴 만큼만 다시 열리며 사용량이 0으로 돌아가지 않는다.
+        """
+        try:
+            new_inspection = self.effective_quality_gate_policy(case_id, gate, task_key)[
+                "inspection_required"
+            ]
+        except NotFoundError:
+            # 그 사이 Task 가 현재 그래프에서 빠졌다. 정책 행은 그대로 남기고
+            # 강도 효과만 계산하지 않는다 — 없는 Task 의 판정을 지어내지 않는다.
+            new_inspection = previous_inspection
+        if quality.policy_change_invalidates_verdict(
+            previous_inspection=previous_inspection, new_inspection=new_inspection
+        ):
+            sql = (
+                "UPDATE quality_gate_run SET validity = 'needs_recheck'"
+                " WHERE case_id = ? AND gate = ? AND validity = 'current'"
+                " AND status <> 'running'"
+            )
+            args: tuple[Any, ...] = (case_id, gate.value)
+            if task_key:
+                sql += " AND task_key = ?"
+                args += (task_key,)
+            self.conn.execute(sql, args)
+        if repair_limit is not None:
+            sql = (
+                "UPDATE remediation_cycle SET repair_limit = ?,"
+                " state = CASE WHEN state = 'exhausted' AND used_attempts + reserved_attempts < ?"
+                " THEN 'active' ELSE state END, updated_at = ?"
+                " WHERE case_id = ? AND gate = ? AND state <> 'passed'"
+            )
+            args = (repair_limit, repair_limit, now, case_id, gate.value)
+            if task_key:
+                sql += " AND task_key = ?"
+                args += (task_key,)
+            self.conn.execute(sql, args)
+
+    def _release_reserved_quality_policies(
+        self, case_id: str, gate_run_id: str, now: str
+    ) -> list[str]:
+        """검증 1회가 끝났다. 그 실행을 기다리던 예약을 요청 순서대로 반영한다.
+
+        순서가 계약이다 — `현재 결과 보존 → 예약 적용 → 재평가`(gate-operations
+        5절). 호출자가 판정을 **먼저** 저장하므로 여기서는 2·3 만 한다. 판정이
+        실패여도 반영한다. 통과만 기다리면 OFF 요청이 영원히 걸린다.
+        """
+        rows = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM quality_gate_policy WHERE apply_after_run_id = ?"
+                " AND state = 'pending' ORDER BY revision",
+                (gate_run_id,),
+            )
+        ]
+        applied: list[str] = []
+        for row in rows:
+            gate = GateId(row["gate"])
+            scope = row["task_key"]
+            try:
+                previous_inspection = self.effective_quality_gate_policy(
+                    case_id, gate, scope
+                )["inspection_required"]
+            except NotFoundError:
+                previous_inspection = row["inspection"] or ""
             self.conn.execute(
                 "UPDATE quality_gate_policy SET state = 'superseded', superseded_at = ?"
                 " WHERE case_id = ? AND task_key = ? AND gate = ? AND state = 'current'",
-                (now, case_id, task_key, gate.value),
+                (now, case_id, scope, row["gate"]),
             )
             self.conn.execute(
-                "INSERT INTO quality_gate_policy"
-                " (id, case_id, task_key, gate, revision, setting, inspection, repair_limit,"
-                " source, set_by, reason_summary, state, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)",
-                (
-                    ids.new_id("qpol"), case_id, task_key, gate.value, revision, setting,
-                    requested_inspection.value if requested_inspection else None,
-                    repair_limit,
-                    "task_explicit" if task_key else "case_explicit",
-                    actor, reason, now,
-                ),
+                "UPDATE quality_gate_policy SET state = 'current', applied_at = ?"
+                " WHERE id = ?",
+                (now, row["id"]),
             )
-            if setting != "inherit" or requested_inspection is not None:
-                sql = (
-                    "UPDATE quality_gate_run SET validity = 'needs_recheck'"
-                    " WHERE case_id = ? AND gate = ? AND validity = 'current'"
-                )
-                args: tuple[Any, ...] = (case_id, gate.value)
-                if task_key:
-                    sql += " AND task_key = ?"
-                    args += (task_key,)
-                self.conn.execute(sql, args)
-            if repair_limit is not None:
-                if task_key:
-                    self.conn.execute(
-                        "UPDATE remediation_cycle SET repair_limit = ?,"
-                        " state = CASE WHEN state = 'exhausted' AND used_attempts + reserved_attempts < ?"
-                        " THEN 'active' ELSE state END, updated_at = ?"
-                        " WHERE case_id = ? AND gate = ? AND task_key = ? AND state <> 'passed'",
-                        (repair_limit, repair_limit, now, case_id, gate.value, task_key),
-                    )
-                else:
-                    self.conn.execute(
-                        "UPDATE remediation_cycle SET repair_limit = ?,"
-                        " state = CASE WHEN state = 'exhausted' AND used_attempts + reserved_attempts < ?"
-                        " THEN 'active' ELSE state END, updated_at = ?"
-                        " WHERE case_id = ? AND gate = ? AND state <> 'passed'",
-                        (repair_limit, repair_limit, now, case_id, gate.value),
-                    )
+            self._apply_quality_policy_effects(
+                case_id,
+                gate,
+                scope,
+                previous_inspection=previous_inspection,
+                repair_limit=row["repair_limit"],
+                now=now,
+            )
+            applied.append(row["id"])
+        return applied
+
+    def cancel_reserved_quality_gate_policy(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        task_key: str = "",
+        actor: str,
+        reason_summary: str,
+    ) -> dict[str, Any]:
+        """예약을 취소한다. **이미 적용된 것은 되돌리지 않는다.**
+
+        취소는 "반영하지 말라"이고 롤백은 "반영한 것을 없던 일로 하라"다. 뒤쪽은
+        하지 않는다 — 이미 그 정책으로 판정·배정이 일어났을 수 있다.
+        """
+        self.get_case(case_id)
+        reason = _summary(reason_summary)
+        if not reason.strip():
+            raise ConflictError("a reservation cancel needs a reason")
+        rows = self.conn.execute(
+            "SELECT id FROM quality_gate_policy WHERE case_id = ? AND task_key = ?"
+            " AND gate = ? AND state = 'pending'",
+            (case_id, task_key, gate.value),
+        ).fetchall()
+        if not rows:
+            raise NotFoundError("no reserved quality gate policy in this scope")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE quality_gate_policy SET state = 'cancelled', cancelled_at = ?,"
+                " cancelled_by = ?, cancel_reason = ?"
+                " WHERE case_id = ? AND task_key = ? AND gate = ? AND state = 'pending'",
+                (now, actor, reason, case_id, task_key, gate.value),
+            )
         return self.effective_quality_gate_policy(case_id, gate, task_key)
 
     def _quality_gate_run_dict(self, row: dict[str, Any]) -> dict[str, Any]:
@@ -2705,6 +2919,16 @@ class Repository:
             (row["id"],),
         ).fetchall()
         row["findings"] = [dict(f) for f in findings]
+        row["late_result"] = bool(row.get("late_result"))
+        row["revalidations"] = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT v.*, e.kind, e.change_ref FROM quality_revalidation v"
+                " JOIN quality_change_event e ON e.id = v.change_event_id"
+                " WHERE v.gate_run_id = ? ORDER BY v.created_at",
+                (row["id"],),
+            )
+        ]
         return row
 
     def get_quality_gate_run(self, gate_run_id: str) -> dict[str, Any]:
@@ -2715,33 +2939,17 @@ class Repository:
             raise NotFoundError(f"quality gate run not found: {gate_run_id}")
         return self._quality_gate_run_dict(dict(row))
 
-    def record_quality_gate_run(
+    # ------------------------------------------------ 검증 1회: 입력 고정과 판정
+
+    def _validate_quality_run_inputs(
         self,
-        case_id: str,
-        gate: GateId,
         *,
         subject_key: str,
         input_hash: str,
-        inspection_used: str,
         context_refs: list[str],
         criteria_refs: list[str],
         evidence_refs: list[str],
-        findings: list[dict[str, Any]],
-        task_key: str = "",
-        author_run_id: str | None = None,
-        reviewer_run_id: str | None = None,
-        blocked: bool = False,
-    ) -> dict[str, Any]:
-        """QG-02~07의 한 평가를 기록하고 판정을 **발견에서** 계산한다."""
-        if gate is GateId.QG_01:
-            raise ConflictError("QG-01 uses the intent gate and conformance records")
-        policy = self.effective_quality_gate_policy(case_id, gate, task_key)
-        if not policy["applied"]:
-            raise ConflictError("an off or not-applicable gate cannot record a pass")
-        used = quality.InspectionMethod(inspection_used)
-        required = quality.InspectionMethod(policy["inspection_required"])
-        if not quality.inspection_satisfies(required, used):
-            raise ConflictError("the recorded inspection does not satisfy the gate policy")
+    ) -> None:
         if not subject_key.strip() or not input_hash.strip():
             raise ConflictError("a quality gate run needs a subject key and input hash")
         _quality_ref(input_hash, field="input_hash", maximum=128)
@@ -2762,6 +2970,29 @@ class Repository:
                     "quality gate inputs store short reference identifiers, not bodies"
                 )
 
+    def _quality_policy_fingerprint(self, gate: GateId, policy: dict[str, Any]) -> str:
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "gate": gate.value,
+                    "setting": policy["setting"],
+                    "inspection": policy["inspection_required"],
+                    "revision": policy["policy_revision"],
+                    "repair_limit": policy["repair_limit"],
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def _resolve_quality_sessions(
+        self,
+        case_id: str,
+        *,
+        used: quality.InspectionMethod,
+        author_run_id: str | None,
+        reviewer_run_id: str | None,
+        evidence_refs: list[str],
+    ) -> tuple[str | None, str | None]:
         author_session = None
         if author_run_id:
             author = self.get_run(author_run_id)
@@ -2792,7 +3023,11 @@ class Repository:
                 raise ConflictError("an independent review must use a separate session")
             if not evidence_refs:
                 raise ConflictError("an independent gate review needs evidence references")
+        return author_session, reviewer_session
 
+    def _normalize_quality_findings(
+        self, findings: list[dict[str, Any]], criteria_refs: list[str]
+    ) -> tuple[list[dict[str, Any]], bool, bool]:
         normalized: list[dict[str, Any]] = []
         blocking = False
         hold = False
@@ -2832,6 +3067,108 @@ class Repository:
                     "evidence_artifact_id": evidence_artifact_id,
                 }
             )
+        return normalized, blocking, hold
+
+    def _insert_quality_findings(
+        self, gate_run_id: str, normalized: list[dict[str, Any]], now: str
+    ) -> None:
+        for item in normalized:
+            self.conn.execute(
+                "INSERT INTO quality_gate_finding"
+                " (id, gate_run_id, finding_key, criterion, severity, blocking, certainty,"
+                " target, summary, evidence_artifact_id, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                (
+                    ids.new_id("qfind"), gate_run_id, item["finding_key"], item["criterion"],
+                    item["severity"], item["blocking"], item["certainty"], item["target"],
+                    item["summary"], item["evidence_artifact_id"], now,
+                ),
+            )
+
+    def _settle_remediation_for_verdict(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        subject_key: str,
+        task_key: str,
+        gate_run_id: str,
+        verdict: str,
+        repair_limit: int,
+        now: str,
+    ) -> None:
+        if verdict == GateVerdict.FAIL.value:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO remediation_cycle"
+                " (id, case_id, gate, subject_key, task_key, initial_gate_run_id, repair_limit,"
+                " used_attempts, reserved_attempts, state, created_at, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'active', ?, ?)",
+                (
+                    ids.new_id("repair"), case_id, gate.value, subject_key, task_key, gate_run_id,
+                    repair_limit, now, now,
+                ),
+            )
+            self.conn.execute(
+                "UPDATE remediation_cycle SET state = CASE"
+                " WHEN used_attempts + reserved_attempts >= repair_limit"
+                " THEN 'exhausted' ELSE 'active' END, updated_at = ?"
+                " WHERE case_id = ? AND gate = ? AND subject_key = ?",
+                (now, case_id, gate.value, subject_key),
+            )
+        elif verdict == GateVerdict.PASS.value:
+            self.conn.execute(
+                "UPDATE remediation_cycle SET state = 'passed', updated_at = ?"
+                " WHERE case_id = ? AND gate = ? AND subject_key = ?",
+                (now, case_id, gate.value, subject_key),
+            )
+
+    def record_quality_gate_run(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        subject_key: str,
+        input_hash: str,
+        inspection_used: str,
+        context_refs: list[str],
+        criteria_refs: list[str],
+        evidence_refs: list[str],
+        findings: list[dict[str, Any]],
+        task_key: str = "",
+        author_run_id: str | None = None,
+        reviewer_run_id: str | None = None,
+        blocked: bool = False,
+    ) -> dict[str, Any]:
+        """QG-02~07의 한 평가를 **한 번에** 기록하고 판정을 발견에서 계산한다.
+
+        규칙 검사처럼 시작과 끝이 같은 순간인 검증이 이 경로를 쓴다. 그때는 설정
+        변경이 끼어들 틈이 없으므로 예약 경계가 생기지 않는다. 진행 중 상태가 필요한
+        검증은 `start_quality_gate_run` + `complete_quality_gate_run` 을 쓴다(P4-02).
+        """
+        if gate is GateId.QG_01:
+            raise ConflictError("QG-01 uses the intent gate and conformance records")
+        policy = self.effective_quality_gate_policy(case_id, gate, task_key)
+        if not policy["applied"]:
+            raise ConflictError("an off or not-applicable gate cannot record a pass")
+        used = quality.InspectionMethod(inspection_used)
+        required = quality.InspectionMethod(policy["inspection_required"])
+        if not quality.inspection_satisfies(required, used):
+            raise ConflictError("the recorded inspection does not satisfy the gate policy")
+        self._validate_quality_run_inputs(
+            subject_key=subject_key,
+            input_hash=input_hash,
+            context_refs=context_refs,
+            criteria_refs=criteria_refs,
+            evidence_refs=evidence_refs,
+        )
+        author_session, reviewer_session = self._resolve_quality_sessions(
+            case_id,
+            used=used,
+            author_run_id=author_run_id,
+            reviewer_run_id=reviewer_run_id,
+            evidence_refs=evidence_refs,
+        )
+        normalized, blocking, hold = self._normalize_quality_findings(findings, criteria_refs)
         verdict = (
             GateVerdict.BLOCKED.value if blocked else
             GateVerdict.FAIL.value if blocking else
@@ -2839,18 +3176,7 @@ class Repository:
             GateVerdict.PASS.value
         )
         status = "blocked" if blocked else "completed"
-        fingerprint = hashlib.sha256(
-            json.dumps(
-                {
-                    "gate": gate.value,
-                    "setting": policy["setting"],
-                    "inspection": policy["inspection_required"],
-                    "revision": policy["policy_revision"],
-                    "repair_limit": policy["repair_limit"],
-                },
-                sort_keys=True,
-            ).encode("utf-8")
-        ).hexdigest()
+        fingerprint = self._quality_policy_fingerprint(gate, policy)
         gate_run_id = ids.new_id("qrun")
         now = utc_now()
         with transaction(self.conn):
@@ -2864,52 +3190,457 @@ class Repository:
                 " (id, case_id, task_key, gate, subject_key, input_hash, policy_fingerprint,"
                 " inspection_required, inspection_used, status, verdict, validity,"
                 " context_refs_json, criteria_refs_json, evidence_refs_json, author_run_id,"
-                " reviewer_run_id, author_session_ref, reviewer_session_ref, created_at, completed_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " reviewer_run_id, author_session_ref, reviewer_session_ref, created_at,"
+                " completed_at, started_policy_revision, late_result)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
                 (
                     gate_run_id, case_id, task_key, gate.value, subject_key, input_hash,
                     fingerprint, required.value, used.value, status, verdict,
                     json.dumps(context_refs), json.dumps(criteria_refs), json.dumps(evidence_refs),
                     author_run_id, reviewer_run_id, author_session, reviewer_session, now, now,
+                    policy["policy_revision"],
                 ),
             )
-            for item in normalized:
-                self.conn.execute(
-                    "INSERT INTO quality_gate_finding"
-                    " (id, gate_run_id, finding_key, criterion, severity, blocking, certainty,"
-                    " target, summary, evidence_artifact_id, state, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
-                    (
-                        ids.new_id("qfind"), gate_run_id, item["finding_key"], item["criterion"],
-                        item["severity"], item["blocking"], item["certainty"], item["target"],
-                        item["summary"], item["evidence_artifact_id"], now,
-                    ),
-                )
-            if verdict == GateVerdict.FAIL.value:
-                self.conn.execute(
-                    "INSERT OR IGNORE INTO remediation_cycle"
-                    " (id, case_id, gate, subject_key, task_key, initial_gate_run_id, repair_limit,"
-                    " used_attempts, reserved_attempts, state, created_at, updated_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'active', ?, ?)",
-                    (
-                        ids.new_id("repair"), case_id, gate.value, subject_key, task_key, gate_run_id,
-                        policy["repair_limit"], now, now,
-                    ),
-                )
-                self.conn.execute(
-                    "UPDATE remediation_cycle SET state = CASE"
-                    " WHEN used_attempts + reserved_attempts >= repair_limit"
-                    " THEN 'exhausted' ELSE 'active' END, updated_at = ?"
-                    " WHERE case_id = ? AND gate = ? AND subject_key = ?",
-                    (now, case_id, gate.value, subject_key),
-                )
-            elif verdict == GateVerdict.PASS.value:
-                self.conn.execute(
-                    "UPDATE remediation_cycle SET state = 'passed', updated_at = ?"
-                    " WHERE case_id = ? AND gate = ? AND subject_key = ?",
-                    (now, case_id, gate.value, subject_key),
-                )
+            self._insert_quality_findings(gate_run_id, normalized, now)
+            self._settle_remediation_for_verdict(
+                case_id,
+                gate,
+                subject_key=subject_key,
+                task_key=task_key,
+                gate_run_id=gate_run_id,
+                verdict=verdict,
+                repair_limit=policy["repair_limit"],
+                now=now,
+            )
         return self.get_quality_gate_run(gate_run_id)
+
+    def start_quality_gate_run(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        subject_key: str,
+        input_hash: str,
+        context_refs: list[str],
+        criteria_refs: list[str],
+        task_key: str = "",
+        author_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """검증 1회를 **연다**(P4-02).
+
+        시작 시점의 정책 리비전·검사 강도를 이 실행에 고정한다. 중간에 설정이
+        바뀌어도 이 검사는 시작 당시 정책으로 끝나며, 그 변경은 예약으로 남는다.
+
+        **이전 통과를 지금 지우지 않는다.** 시작만으로 `historical` 로 내리면 끝내지
+        못한 검증 하나가 유효한 증거를 없애 버린다. 대체는 종료 시점에 한다.
+        """
+        if gate is GateId.QG_01:
+            raise ConflictError("QG-01 uses the intent gate and conformance records")
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        policy = self.effective_quality_gate_policy(case_id, gate, task_key)
+        if not policy["applied"]:
+            raise ConflictError("an off or not-applicable gate cannot open a verification")
+        self._validate_quality_run_inputs(
+            subject_key=subject_key,
+            input_hash=input_hash,
+            context_refs=context_refs,
+            criteria_refs=criteria_refs,
+            evidence_refs=[],
+        )
+        if self._running_quality_gate_run(case_id, gate, task_key, subject_key) is not None:
+            raise ConflictError("a verification for this subject is already running")
+        author_session, _ = self._resolve_quality_sessions(
+            case_id,
+            used=quality.InspectionMethod.RULE,
+            author_run_id=author_run_id,
+            reviewer_run_id=None,
+            evidence_refs=[],
+        )
+        gate_run_id = ids.new_id("qrun")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO quality_gate_run"
+                " (id, case_id, task_key, gate, subject_key, input_hash, policy_fingerprint,"
+                " inspection_required, inspection_used, status, verdict, validity,"
+                " context_refs_json, criteria_refs_json, evidence_refs_json, author_run_id,"
+                " reviewer_run_id, author_session_ref, reviewer_session_ref, created_at,"
+                " started_policy_revision, late_result)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', ?, 'current', ?, ?, '[]', ?,"
+                " NULL, ?, NULL, ?, ?, 0)",
+                (
+                    gate_run_id, case_id, task_key, gate.value, subject_key, input_hash,
+                    self._quality_policy_fingerprint(gate, policy),
+                    policy["inspection_required"], policy["inspection_required"],
+                    GateVerdict.NOT_RUN.value,
+                    json.dumps(context_refs), json.dumps(criteria_refs),
+                    author_run_id, author_session, now, policy["policy_revision"],
+                ),
+            )
+        return self.get_quality_gate_run(gate_run_id)
+
+    def request_quality_gate_run_stop(
+        self, gate_run_id: str, *, actor: str, reason_summary: str
+    ) -> dict[str, Any]:
+        """검증 1회의 **취소를 요청한다.** 종료 확인이 아니다.
+
+        상태를 `completed` 로 바꾸지 않는 것이 핵심이다. CLI·도구의 취소 지원 능력은
+        버전마다 다르고, 요청 뒤 늦게 도착한 결과도 원래 실행에 저장해야 한다
+        (gate-operations 5절). 그래서 요청 사실만 적고 실제 종료는 결과가 말한다.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM quality_gate_run WHERE id = ?", (gate_run_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"quality gate run not found: {gate_run_id}")
+        if row["status"] != "running":
+            raise ConflictError("only a running verification can be asked to stop")
+        reason = _summary(reason_summary)
+        if not reason.strip():
+            raise ConflictError("a stop request needs a reason")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE quality_gate_run SET stop_requested_at = ?, stop_requested_by = ?,"
+                " stop_reason = ? WHERE id = ? AND stop_requested_at IS NULL",
+                (now, actor, reason, gate_run_id),
+            )
+        return self.get_quality_gate_run(gate_run_id)
+
+    def _late_gate_result_reason(self, row: dict[str, Any]) -> str:
+        """이 결과가 **늦은 결과**인가. 이유 문자열, 아니면 빈 문자열.
+
+        늦었다는 것은 "결과가 틀렸다"가 아니라 **그 사이 조건이 바뀌어 지금의 통과로
+        쓸 수 없다**는 뜻이다. 결과는 그대로 보존하고 원래 실행에 귀속시킨다.
+        """
+        if row.get("stop_requested_at"):
+            return "취소 요청 뒤 도착한 결과다"
+        case_id = row["case_id"]
+        gate = GateId(row["gate"])
+        try:
+            policy = self.effective_quality_gate_policy(case_id, gate, row["task_key"])
+        except NotFoundError:
+            return "검증 대상 Task 가 현재 작업 그래프에 없다"
+        if not policy["applied"]:
+            return "게이트가 적용되지 않는 상태로 바뀐 뒤 도착한 결과다"
+        started = row.get("started_policy_revision")
+        if started is not None and int(started) != int(policy["policy_revision"]):
+            return "시작 당시 정책 리비전과 현재 정책이 다르다"
+        newer = self.conn.execute(
+            "SELECT 1 FROM quality_gate_run WHERE case_id = ? AND gate = ?"
+            " AND subject_key = ? AND id <> ? AND validity = 'current'"
+            " AND status <> 'running' AND created_at > ?",
+            (case_id, gate.value, row["subject_key"], row["id"], row["created_at"]),
+        ).fetchone()
+        if newer is not None:
+            return "같은 대상의 더 새로운 검증이 이미 현재 판정이다"
+        return ""
+
+    def complete_quality_gate_run(
+        self,
+        gate_run_id: str,
+        *,
+        inspection_used: str,
+        evidence_refs: list[str],
+        findings: list[dict[str, Any]],
+        author_run_id: str | None = None,
+        reviewer_run_id: str | None = None,
+        blocked: bool = False,
+    ) -> dict[str, Any]:
+        """검증 1회를 닫는다. 그리고 **그 실행을 기다리던 예약을 반영한다**(P4-02).
+
+        판정은 **시작 당시 고정한 검사 강도**로 검사한다. 중간에 바뀐 현재 정책으로
+        다시 재는 것은 "예약만으로 진행 중 검사를 무효화하지 않는다"는 계약을 뒤에서
+        깨는 일이다.
+
+        순서는 `현재 결과 보존 → 예약 적용 → 재평가` 다(gate-operations 5절).
+        판정이 실패여도 예약을 반영한다.
+        """
+        row = self.conn.execute(
+            "SELECT * FROM quality_gate_run WHERE id = ?", (gate_run_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"quality gate run not found: {gate_run_id}")
+        run = dict(row)
+        if run["status"] != "running":
+            raise ConflictError("this verification is not running")
+        case_id = run["case_id"]
+        gate = GateId(run["gate"])
+        task_key = run["task_key"]
+        context_refs = json.loads(run["context_refs_json"])
+        criteria_refs = json.loads(run["criteria_refs_json"])
+        used = quality.InspectionMethod(inspection_used)
+        required = quality.InspectionMethod(run["inspection_required"])
+        if not quality.inspection_satisfies(required, used):
+            raise ConflictError("the recorded inspection does not satisfy the gate policy")
+        self._validate_quality_run_inputs(
+            subject_key=run["subject_key"],
+            input_hash=run["input_hash"],
+            context_refs=context_refs,
+            criteria_refs=criteria_refs,
+            evidence_refs=evidence_refs,
+        )
+        author_session, reviewer_session = self._resolve_quality_sessions(
+            case_id,
+            used=used,
+            author_run_id=author_run_id or run["author_run_id"],
+            reviewer_run_id=reviewer_run_id,
+            evidence_refs=evidence_refs,
+        )
+        normalized, blocking, hold = self._normalize_quality_findings(findings, criteria_refs)
+        verdict = (
+            GateVerdict.BLOCKED.value if blocked else
+            GateVerdict.FAIL.value if blocking else
+            GateVerdict.HOLD.value if hold else
+            GateVerdict.PASS.value
+        )
+        status = "blocked" if blocked else "completed"
+        late_reason = self._late_gate_result_reason(run)
+        now = utc_now()
+        with transaction(self.conn):
+            if not late_reason:
+                self.conn.execute(
+                    "UPDATE quality_gate_run SET validity = 'historical'"
+                    " WHERE case_id = ? AND gate = ? AND subject_key = ? AND id <> ?"
+                    " AND validity = 'current'",
+                    (case_id, gate.value, run["subject_key"], gate_run_id),
+                )
+            self.conn.execute(
+                "UPDATE quality_gate_run SET status = ?, verdict = ?, validity = ?,"
+                " inspection_used = ?, evidence_refs_json = ?, author_run_id = ?,"
+                " reviewer_run_id = ?, author_session_ref = ?, reviewer_session_ref = ?,"
+                " completed_at = ?, late_result = ? WHERE id = ?",
+                (
+                    status, verdict,
+                    "historical" if late_reason else "current",
+                    used.value, json.dumps(evidence_refs),
+                    author_run_id or run["author_run_id"], reviewer_run_id,
+                    author_session, reviewer_session, now,
+                    1 if late_reason else 0, gate_run_id,
+                ),
+            )
+            self._insert_quality_findings(gate_run_id, normalized, now)
+            if not late_reason:
+                # 늦은 결과는 repair 주기를 만들지도 진행시키지도 않는다. 옛 조건의
+                # 결과가 지금의 수정 차수를 예약하면 한도가 조용히 새어 나간다.
+                policy = self.effective_quality_gate_policy(case_id, gate, task_key)
+                self._settle_remediation_for_verdict(
+                    case_id,
+                    gate,
+                    subject_key=run["subject_key"],
+                    task_key=task_key,
+                    gate_run_id=gate_run_id,
+                    verdict=verdict,
+                    repair_limit=policy["repair_limit"],
+                    now=now,
+                )
+            # **검증 1회가 끝났다.** 늦은 결과여도 이 실행은 끝났으므로 그것을
+            # 기다리던 예약은 반영한다 — 기다릴 대상이 사라지면 예약이 영원히 걸린다.
+            self._release_reserved_quality_policies(case_id, gate_run_id, now)
+        result = self.get_quality_gate_run(gate_run_id)
+        result["late_reason"] = late_reason
+        return result
+
+    # ------------------------------------------------ P4-02 변경 영향과 부분 재검증
+
+    def record_quality_change_event(
+        self,
+        case_id: str,
+        *,
+        kind: str,
+        change_ref: str,
+        changed_refs: list[str],
+        summary: str,
+        actor: str,
+        scope_known: bool = True,
+    ) -> dict[str, Any]:
+        """요청·코드·권한이 바뀌었다. **영향받는 증거만** 다시 보게 만든다.
+
+        전부 다시 돌리지도, 전부 그대로 두지도 않는다. 바뀐 참조를 입력으로 가진
+        검사만 `needs_recheck` 가 되고 나머지는 **이유와 참조 버전을 적은 뒤**
+        재사용된다(gate-operations 3절). 재사용도 판단이므로 기록을 남긴다.
+
+        범위를 확인할 수 없으면 `unknown` 이며 재검증 대상이다. 확인하지 못한 것을
+        "무관하다"로 적지 않는다.
+
+        진행 중 검증은 다르게 다룬다 — 판정이 아직 없으므로 무효화할 것이 없고,
+        대신 **취소를 요청**해 둔다. 그 결과가 나중에 도착하면 늦은 결과로 원래
+        실행에 저장되고 지금 조건의 통과로 쓰이지 않는다.
+        """
+        self.get_case(case_id)
+        # **종료된 Case 의 증거를 지금 와서 재검증 대상으로 만들지 않는다.** 완료 후
+        # 수정은 연결된 새 Case 다(D-33). 여기서 열어 주면 종료 기록이 조용히
+        # 바뀐다 — 예약과 달리 이 경로는 곧바로 판정의 유효성을 내린다.
+        self.guard_open_case(case_id)
+        try:
+            change_kind = quality.ChangeKind(kind)
+        except ValueError:
+            raise ConflictError(f"unknown quality change kind: {kind}")
+        _quality_ref(change_ref, field="change_ref")
+        if len(changed_refs) > 100:
+            raise ConflictError("a change reference list is too large")
+        for ref in changed_refs:
+            _quality_ref(ref, field="changed_ref")
+        reason_summary = _summary(summary)
+        if not reason_summary.strip():
+            raise ConflictError("a quality change event needs a summary")
+
+        event_id = ids.new_id("qchg")
+        now = utc_now()
+        rows = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM quality_gate_run WHERE case_id = ?"
+                " AND (validity = 'current' OR status = 'running')"
+                " ORDER BY created_at",
+                (case_id,),
+            )
+        ]
+        decisions: list[dict[str, Any]] = []
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO quality_change_event"
+                " (id, case_id, kind, change_ref, changed_refs_json, scope_known, summary,"
+                " recorded_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event_id, case_id, change_kind.value, change_ref,
+                    json.dumps(changed_refs), 1 if scope_known else 0,
+                    reason_summary, actor, now,
+                ),
+            )
+            for row in rows:
+                impact = quality.change_impact(
+                    change_kind,
+                    changed_refs=changed_refs,
+                    context_refs=json.loads(row["context_refs_json"]),
+                    criteria_refs=json.loads(row["criteria_refs_json"]),
+                    scope_known=scope_known,
+                )
+                self.conn.execute(
+                    "INSERT INTO quality_revalidation"
+                    " (id, change_event_id, gate_run_id, decision, reason_summary,"
+                    " referenced_version, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("qreval"), event_id, row["id"], impact.decision.value,
+                        _summary(impact.reason), row["input_hash"], now,
+                    ),
+                )
+                if impact.needs_recheck:
+                    if row["status"] == "running":
+                        self.conn.execute(
+                            "UPDATE quality_gate_run SET stop_requested_at = ?,"
+                            " stop_requested_by = ?, stop_reason = ?"
+                            " WHERE id = ? AND stop_requested_at IS NULL",
+                            (
+                                now, actor,
+                                _summary(f"입력이 바뀌었다: {impact.reason}"),
+                                row["id"],
+                            ),
+                        )
+                    else:
+                        self.conn.execute(
+                            "UPDATE quality_gate_run SET validity = 'needs_recheck'"
+                            " WHERE id = ? AND validity = 'current'",
+                            (row["id"],),
+                        )
+                decisions.append(
+                    {
+                        "gate_run_id": row["id"],
+                        "gate": row["gate"],
+                        "task_key": row["task_key"] or None,
+                        "subject_key": row["subject_key"],
+                        "status": row["status"],
+                        "decision": impact.decision.value,
+                        "reason": impact.reason,
+                        "referenced_version": row["input_hash"],
+                    }
+                )
+        return {
+            "event": self.get_quality_change_event(event_id),
+            "decisions": decisions,
+        }
+
+    def get_quality_change_event(self, event_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM quality_change_event WHERE id = ?", (event_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"quality change event not found: {event_id}")
+        event = dict(row)
+        event["changed_refs"] = json.loads(event.pop("changed_refs_json"))
+        event["scope_known"] = bool(event["scope_known"])
+        return event
+
+    def list_quality_change_events(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT id FROM quality_change_event WHERE case_id = ? ORDER BY created_at",
+            (case_id,),
+        ).fetchall()
+        events = []
+        for row in rows:
+            event = self.get_quality_change_event(row["id"])
+            event["decisions"] = [
+                dict(r)
+                for r in self.conn.execute(
+                    "SELECT * FROM quality_revalidation WHERE change_event_id = ?"
+                    " ORDER BY created_at",
+                    (row["id"],),
+                )
+            ]
+            events.append(event)
+        return events
+
+    def quality_gate_policy_drift(
+        self, case_id: str, expected: dict[str, Any] | None
+    ) -> list[dict[str, Any]]:
+        """배정 요청이 기대한 정책과 **지금의** 정책이 다른가(P4-02).
+
+        저장과 배정 사이에 정책이 바뀌면 옛 배정 요청으로 실행을 시작하지 않는다
+        (gate-operations 3절 7항). 예약만 있는 상태는 현재 정책을 바꾸지 않으므로
+        여기에 걸리지 않는다 — 예약은 차단이 아니다.
+
+        `expected` 는 `{"QG-04": {"revision": 2, "task_key": "T1"}}` 또는
+        `{"QG-04": 2}` 형태다. 기대를 적지 않은 요청은 이 검사를 만들지 않는다.
+        """
+        if not expected:
+            return []
+        drift: list[dict[str, Any]] = []
+        for raw_gate, raw_value in expected.items():
+            try:
+                gate = GateId(raw_gate)
+            except ValueError:
+                raise ConflictError(f"unknown quality gate: {raw_gate}")
+            if isinstance(raw_value, dict):
+                revision = raw_value.get("revision")
+                task_key = str(raw_value.get("task_key") or "")
+            else:
+                revision = raw_value
+                task_key = ""
+            if revision is None:
+                continue
+            try:
+                policy = self.effective_quality_gate_policy(case_id, gate, task_key)
+            except NotFoundError:
+                drift.append(
+                    {
+                        "gate": gate.value,
+                        "expected_revision": int(revision),
+                        "current_revision": None,
+                        "reason": "기대한 Task 가 현재 작업 그래프에 없다",
+                    }
+                )
+                continue
+            if int(policy["policy_revision"]) != int(revision):
+                drift.append(
+                    {
+                        "gate": gate.value,
+                        "expected_revision": int(revision),
+                        "current_revision": int(policy["policy_revision"]),
+                        "reason": "저장과 배정 사이에 게이트 정책이 바뀌었다",
+                    }
+                )
+        return drift
 
     def remediation_state(self, case_id: str, gate: GateId, subject_key: str) -> dict[str, Any]:
         row = self.conn.execute(
@@ -2942,6 +3673,28 @@ class Repository:
         if session_ref is not None:
             _quality_ref(session_ref, field="session_ref", maximum=200)
         consumes = kind == "product_repair"
+        # **OFF 가 반영되면 그 게이트만을 위한 새 수정 차수를 배정하지 않는다**(P4-02).
+        # 주기·사용량·발견·실패 판정은 그대로 남는다 — 끄는 것은 "이 게이트로 더
+        # 막지 않는다"이고 "관찰한 결함이 사라졌다"가 아니다(gate-operations 5절).
+        # 환경 복구는 게이트 전용 작업이 아니고 차수를 소비하지도 않으므로 막지 않는다.
+        if consumes:
+            cycle_scope = self.conn.execute(
+                "SELECT task_key FROM remediation_cycle WHERE case_id = ? AND gate = ?"
+                " AND subject_key = ?",
+                (case_id, gate.value, subject_key),
+            ).fetchone()
+            if cycle_scope is not None:
+                try:
+                    scoped = self.effective_quality_gate_policy(
+                        case_id, gate, cycle_scope["task_key"]
+                    )
+                except NotFoundError:
+                    scoped = self.effective_quality_gate_policy(case_id, gate)
+                if not scoped["applied"]:
+                    raise ConflictError(
+                        "the gate is off; no new repair cycle is assigned for it."
+                        " the recorded failure and used attempts are kept"
+                    )
         if author_run_id:
             run = self.get_run(author_run_id)
             if run["case_id"] != case_id:
@@ -3086,6 +3839,7 @@ class Repository:
         session: str = "new",
         target_intent_version_id: str | None = None,
         repository_id: str | None = None,
+        expected_gate_policy: dict[str, Any] | None = None,
     ) -> AdmissionResult:
         """진입 조건을 검사한다. **판단 근거를 전부 DB에서 다시 읽는다.**
 
@@ -3168,6 +3922,10 @@ class Repository:
             quality_gate_blockers=self.quality_gate_blockers_for_run(
                 case_id, purpose, task_id
             ),
+            # **배정 직전 재확인**(P4-02). 요청이 기대한 정책을 적었을 때만 생긴다.
+            quality_gate_policy_drift=self.quality_gate_policy_drift(
+                case_id, expected_gate_policy
+            ),
         )
         return evaluate_admission(request)
 
@@ -3248,6 +4006,7 @@ class Repository:
         instruction_artifact_rev: int,
         session: str = "new",
         repository_id: str | None = None,
+        expected_gate_policy: dict[str, Any] | None = None,
     ) -> tuple[dict[str, Any] | None, bool, AdmissionResult | None, dict[str, Any] | None]:
         """**Run을 만드는 유일한 경로.** 진입 검사를 통과해야 만들어진다.
 
@@ -3279,6 +4038,7 @@ class Repository:
             instruction_artifact_rev=instruction_artifact_rev,
             session=session,
             repository_id=repository_id,
+            expected_gate_policy=expected_gate_policy,
         )
         if not result.admitted:
             check = self.record_admission(

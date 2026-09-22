@@ -221,6 +221,9 @@ class AdmissionRequest:
     #: Profile 추천의 기존 QG-02/03 조건은 준비 판정이 이미 강제하므로 중복하지 않고,
     #: 사용자가 별도 게이트를 명시한 경우에만 이 추가 조건이 생긴다.
     quality_gate_blockers: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-02. 요청이 기대한 게이트 정책과 **지금의** 정책이 다른 목록. 비어 있으면
+    #: 기대를 적지 않았거나 그대로다. 예약(`pending`)은 여기에 오지 않는다.
+    quality_gate_policy_drift: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -993,6 +996,19 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
             + ", ".join(
                 f"{item['gate']}({item['verdict']})"
                 for item in request.quality_gate_blockers
+            ),
+        )
+
+    # **저장과 배정 사이의 변경을 본다**(P4-02). 위 검사가 "통과했는가"라면 이것은
+    # "그 통과를 만든 정책이 아직 그대로인가"다. 옛 배정 요청만으로 시작하지 않는다.
+    if request.quality_gate_policy_drift:
+        refuse(
+            AdmissionRefusal.QUALITY_GATE_POLICY_CHANGED,
+            "요청이 기대한 게이트 정책이 그 사이 바뀌었다: "
+            + ", ".join(
+                f"{item['gate']}(기대 {item['expected_revision']} →"
+                f" 현재 {item['current_revision']})"
+                for item in request.quality_gate_policy_drift
             ),
         )
 

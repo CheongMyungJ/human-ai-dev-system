@@ -586,6 +586,25 @@ export interface QualityGateRun {
   validity?: 'current' | 'needs_recheck' | 'historical'
   inspection_required?: 'rule' | 'light' | 'independent'
   inspection_used?: 'rule' | 'light' | 'independent'
+  // P4-02. 늦게 도착해 **원래 실행에만** 귀속된 결과인가. 현재 정책의 통과가
+  // 아니며 새 수정 차수도 만들지 않는다.
+  late_result?: boolean
+  stop_requested_at?: string | null
+}
+
+/** P4-02. 아직 반영되지 않은 설정 변경. 현재 정책과 **합치지 않는다.** */
+export interface ReservedGatePolicy {
+  policy_id: string
+  revision: number
+  task_key: string | null
+  setting: 'on' | 'off' | 'inherit'
+  inspection: 'rule' | 'light' | 'independent' | null
+  repair_limit: number | null
+  requested_at: string
+  requested_by: string
+  reason: string
+  apply_after_run_id: string | null
+  apply_boundary: 'immediate' | 'verification_end' | null
 }
 
 export interface QualityGatePolicy {
@@ -598,6 +617,13 @@ export interface QualityGatePolicy {
   source: string
   reason: string
   repair_limit: number
+  // P4-02. 요청 시각과 실제 적용 시각은 다를 수 있다. 예약을 거쳐 반영된
+  // 설정이 그렇다. 사람이 설정한 적이 없으면 둘 다 null 이다.
+  requested_at: string | null
+  applied_at: string | null
+  apply_boundary: 'immediate' | 'verification_end' | null
+  reserved: ReservedGatePolicy[]
+  running_gate_run_id: string | null
   latest_run: QualityGateRun | null
   remediation: RemediationCycle | null
 }
@@ -651,6 +677,8 @@ export const REFUSAL_LABEL: Record<string, string> = {
   open_intent_questions: '의도 단계에서 결정할 질문이 남아 있다',
   intent_gate_not_passed: 'QG-01 의도 품질 게이트를 통과하지 않았다',
   quality_gate_not_passed: '명시한 품질 게이트를 현재 입력에서 통과하지 않았다',
+  quality_gate_policy_changed:
+    '요청이 기대한 게이트 정책이 저장과 배정 사이에 바뀌었다',
   intent_original_not_available: '의도 원문을 지금 읽을 수 없다',
   instruction_not_available: '지시 원문을 실행자가 읽을 수 없다',
   permission_not_allowed_in_stage: '이 단계에서 배정하지 않는 권한이다',

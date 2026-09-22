@@ -224,3 +224,114 @@ def inspection_satisfies(required: InspectionMethod, used: InspectionMethod) -> 
     }
     return order[used] >= order[required]
 
+
+# ---------------------------------------------------------------- P4-02 변경·예약
+
+
+class PolicyApplyBoundary(str, Enum):
+    """설정 변경이 **언제** 적용되는가.
+
+    `immediate`는 그 범위에 진행 중 검증이 없어 바로 반영된 경우이고,
+    `verification_end`는 진행 중 검증 1회가 끝난 뒤 반영되도록 예약된 경우다(D-30).
+    Runner 단절의 정지 경계(현재 도구 호출 종료)와 같은 값이 아니다.
+    """
+
+    IMMEDIATE = "immediate"
+    VERIFICATION_END = "verification_end"
+
+
+class PolicyState(str, Enum):
+    PENDING = "pending"
+    CURRENT = "current"
+    SUPERSEDED = "superseded"
+    CANCELLED = "cancelled"
+
+
+class ChangeKind(str, Enum):
+    """게이트 판정의 유효성을 다시 보게 만드는 변경의 종류."""
+
+    REQUEST = "request"
+    CODE = "code"
+    PERMISSION = "permission"
+
+
+class ImpactDecision(str, Enum):
+    """한 게이트 실행에 대한 영향 판정.
+
+    `unknown`은 `reuse`의 완곡한 표현이 아니다. 변경 범위를 확인하지 못했다는
+    사실이며 재검증 대상에 포함된다 — 영향을 확인할 수 없을 때 독립이라고
+    추측하지 않는다(design-draft 4절).
+    """
+
+    REVALIDATE = "revalidate"
+    REUSE = "reuse"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class ChangeImpact:
+    decision: ImpactDecision
+    reason: str
+
+    @property
+    def needs_recheck(self) -> bool:
+        return self.decision in (ImpactDecision.REVALIDATE, ImpactDecision.UNKNOWN)
+
+
+_CHANGE_REVALIDATE_REASON: dict[ChangeKind, str] = {
+    ChangeKind.REQUEST: "바뀐 요청·기준이 이 검사의 입력에 있다",
+    ChangeKind.CODE: "바뀐 저장소·스냅샷이 이 검사의 입력에 있다",
+    ChangeKind.PERMISSION: "바뀐 권한 범위가 이 검사의 기준·문맥에 있다",
+}
+
+_CHANGE_REUSE_REASON: dict[ChangeKind, str] = {
+    ChangeKind.REQUEST: "바뀐 요청·기준 참조가 이 검사의 입력에 없다",
+    ChangeKind.CODE: "이 검사는 바뀐 저장소를 입력으로 보지 않았다",
+    ChangeKind.PERMISSION: "이 검사의 기준·문맥이 바뀐 권한 범위와 무관하다",
+}
+
+
+def change_impact(
+    kind: ChangeKind,
+    *,
+    changed_refs: list[str],
+    context_refs: list[str],
+    criteria_refs: list[str],
+    scope_known: bool = True,
+) -> ChangeImpact:
+    """한 변경이 한 게이트 실행의 증거를 무효화하는지 판정한다.
+
+    참조 비교만 한다. 본문을 읽지 않으며 "아마 무관하다"를 만들지 않는다.
+    범위를 모르면 `unknown`이고, 그것은 재검증 대상이다.
+    """
+
+    if not scope_known:
+        return ChangeImpact(
+            ImpactDecision.UNKNOWN,
+            "변경 범위가 확인되지 않아 영향 없음으로 추측하지 않는다",
+        )
+    changed = {ref for ref in changed_refs if ref}
+    if not changed:
+        return ChangeImpact(
+            ImpactDecision.UNKNOWN,
+            "바뀐 대상 참조가 비어 있어 영향을 계산할 수 없다",
+        )
+    inputs = {ref for ref in context_refs if ref} | {ref for ref in criteria_refs if ref}
+    if changed & inputs:
+        return ChangeImpact(ImpactDecision.REVALIDATE, _CHANGE_REVALIDATE_REASON[kind])
+    return ChangeImpact(ImpactDecision.REUSE, _CHANGE_REUSE_REASON[kind])
+
+
+def policy_change_invalidates_verdict(
+    *, previous_inspection: str | None, new_inspection: str | None
+) -> bool:
+    """설정 변경이 기존 판정을 `needs_recheck`로 내리는가.
+
+    **검사 강도 변경 하나**다. ON/OFF 토글은 그 게이트를 쓸지 말지를 정할 뿐 이미
+    끝난 검사가 무엇을 보았는지 바꾸지 않고, repair 한도는 다음 수정 차수의
+    허용량이다. 토글만으로 같은 검사를 다시 돌릴 이유는 없다(gate-operations 5절).
+    """
+
+    if previous_inspection is None or new_inspection is None:
+        return False
+    return previous_inspection != new_inspection

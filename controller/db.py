@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 
 def utc_now() -> str:
@@ -201,6 +201,45 @@ def migrate(conn: sqlite3.Connection) -> None:
     # v13: QG-02~07과 repair. 새 표만 추가하며 기존 QG-01 판정이나 실패를
     # 일반 게이트/repair로 추정해 복제하지 않는다. schema.sql의 CREATE IF NOT
     # EXISTS가 빈 모델을 만들고, 실제 정책은 현재 사실에서 도출한다(P4-01).
+
+    # v14: 설정 변경의 **예약**과 변경 영향(P4-02). 새 표 둘은 schema.sql 이 만들고
+    #      여기서는 기존 두 표에 시간축을 더한다.
+    #
+    #      `quality_gate_policy.requested_at`  요청한 시각.
+    #      `quality_gate_policy.applied_at`    실제 반영된 시각. **둘을 나누는 것이
+    #                            이 작업의 핵심이다** — 예약 행은 요청 시각만 갖는다.
+    #      `quality_gate_policy.apply_after_run_id` 어느 검증 1회가 끝나면 반영되는가.
+    #      `quality_gate_policy.apply_boundary` immediate | verification_end.
+    #      `quality_gate_policy.cancelled_*`   예약 취소의 주체·이유·시각.
+    #      `quality_gate_run.started_policy_revision` 시작 시점에 **고정한** 정책
+    #                            리비전. v13 이전 행은 NULL 이며 그것은 0 이 아니라
+    #                            **미기록**이다 — 그때는 시작 경계가 없었다.
+    #      `quality_gate_run.late_result`  늦게 도착해 원래 실행에만 귀속된 결과인가.
+    #                            옛 행은 0 이고 그것은 정확하다.
+    #      `quality_gate_run.stop_requested_*` 취소 **요청**의 시각·이유. 실제 종료
+    #                            확인과 다른 값이다.
+    #
+    #      기존 `current` 정책에는 `applied_at = created_at`, `apply_boundary =
+    #      'immediate'` 를 채운다. v13 까지는 예약 경로가 없어 **모든 적용이 즉시**
+    #      였기 때문이며, 없는 관측을 지어내는 것이 아니다. 예약·취소·재검증 행은
+    #      만들지 않는다.
+    _add_column_if_missing(conn, "quality_gate_policy", "requested_at", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "applied_at", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "apply_after_run_id", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "apply_boundary", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "cancelled_at", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "cancelled_by", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_policy", "cancel_reason", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_run", "started_policy_revision", "INTEGER")
+    _add_column_if_missing(
+        conn, "quality_gate_run", "late_result", "INTEGER NOT NULL DEFAULT 0"
+    )
+    # 취소 **요청**이다. 실제 종료 확인이 아니며 그래서 별도 컬럼이다 —
+    # 요청 뒤 도착한 결과도 원래 실행에 저장한다(gate-operations 5절).
+    _add_column_if_missing(conn, "quality_gate_run", "stop_requested_at", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_run", "stop_reason", "TEXT")
+    _add_column_if_missing(conn, "quality_gate_run", "stop_requested_by", "TEXT")
+    _migrate_v14_policy_application(conn)
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
@@ -643,6 +682,29 @@ def _migrate_v10_budget_reservations(conn: sqlite3.Connection) -> None:
         "  reserved_at, settled_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         rows,
+    )
+
+
+
+def _migrate_v14_policy_application(conn: sqlite3.Connection) -> None:
+    """v13 까지의 정책 행에 적용 시각과 적용 경계를 채운다(P4-02).
+
+    **되돌아보며 추정하는 값이 아니다.** v13 까지는 예약 경로 자체가 없었으므로
+    기록된 모든 정책 행은 만들어진 순간에 적용됐다. 그래서 `applied_at` 은
+    `created_at` 이고 경계는 `immediate` 다. 반대로 `started_policy_revision` 은
+    채우지 않는다 — 그때는 시작 시점에 고정한 리비전이라는 것이 없었고, 지금
+    현재 리비전을 적으면 "그 검사가 이 정책으로 돌았다"는 없는 사실이 생긴다.
+
+    예약·취소 행이나 재검증 판정도 만들지 않는다. 이행은 멱등이다.
+    """
+    conn.execute(
+        "UPDATE quality_gate_policy SET requested_at = created_at"
+        " WHERE requested_at IS NULL"
+    )
+    conn.execute(
+        "UPDATE quality_gate_policy SET applied_at = created_at,"
+        " apply_boundary = 'immediate'"
+        " WHERE applied_at IS NULL AND state IN ('current', 'superseded')"
     )
 
 

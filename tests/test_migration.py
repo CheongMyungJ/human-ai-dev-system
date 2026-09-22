@@ -1038,9 +1038,134 @@ def test_a_v12_database_keeps_qg01_and_invents_no_gate_pass_or_repair(tmp_path):
         "remediation_cycle", "remediation_attempt",
     ):
         assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
-    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+    # **현재 스키마까지 올라간다.** 고정 숫자를 쓰지 않는 이유는 이 시험이 묻는
+    # 것이 "13이 됐는가"가 아니라 "v12 기록이 지금 스키마에서 보존되는가"이기
+    # 때문이다. v13→v14 자체는 아래 전용 시험이 본다.
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+    )
 
     db.migrate(conn)
     assert conn.execute("SELECT COUNT(*) FROM gate_result").fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM remediation_cycle").fetchone()[0] == 0
+    conn.close()
+
+
+# ===================================================================== v14
+#
+# P4-02. 정책 행에 **요청 시각과 적용 시각**이 생겼다. v13 까지는 예약 경로가
+# 아예 없었으므로 기록된 모든 정책은 만들어진 순간 적용된 것이고, 이행은 그
+# 사실만 적는다. 없던 예약·취소·재검증을 지어내지 않는다.
+
+
+def _v13_schema() -> str:
+    """P4-02 표가 없고 v13 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v13" in schema and "스키마 v14" not in schema:
+            return schema
+    pytest.skip("v13 스키마를 가진 커밋을 찾지 못했다")
+
+
+def _v13_database(path) -> str:
+    """정책 한 줄과 통과 한 줄이 있는 v13 DB 를 만든다."""
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v13_schema())
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (13, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1','prj-1','v13 Case','feature','in_progress',?,?)", (now, now)
+    )
+    old.execute(
+        "INSERT INTO quality_gate_policy (id, case_id, task_key, gate, revision, setting,"
+        " inspection, repair_limit, source, set_by, reason_summary, state, created_at)"
+        " VALUES ('qpol-1','case-1','','QG-06',1,'on',NULL,3,'case_explicit','owner',"
+        "'한도를 올린다','current',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO quality_gate_run (id, case_id, task_key, gate, subject_key, input_hash,"
+        " policy_fingerprint, inspection_required, inspection_used, status, verdict, validity,"
+        " context_refs_json, criteria_refs_json, evidence_refs_json, created_at, completed_at)"
+        " VALUES ('qrun-1','case-1','','QG-06','case','hash-1','fp-1','rule','rule',"
+        "'completed','fail','current','[\"request@1\"]','[\"criterion-1\"]','[]',?,?)",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO remediation_cycle (id, case_id, gate, subject_key, task_key,"
+        " initial_gate_run_id, repair_limit, used_attempts, reserved_attempts, state,"
+        " created_at, updated_at)"
+        " VALUES ('rc-1','case-1','QG-06','case','','qrun-1',3,1,0,'active',?,?)",
+        (now, now),
+    )
+    old.commit()
+    old.close()
+    return now
+
+
+def test_a_v13_database_gets_an_application_time_and_invents_no_reservation(tmp_path):
+    """v13 → v14: 적용 시각만 채우고 예약·취소·재검증을 만들지 않는다."""
+    path = tmp_path / "controller.sqlite3"
+    created_at = _v13_database(path)
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    policy = conn.execute(
+        "SELECT * FROM quality_gate_policy WHERE id = 'qpol-1'"
+    ).fetchone()
+    # v13 까지는 예약 경로가 없었다. 그래서 만들어진 순간이 적용 순간이다.
+    assert policy["state"] == "current"
+    assert policy["applied_at"] == created_at
+    assert policy["requested_at"] == created_at
+    assert policy["apply_boundary"] == "immediate"
+    assert policy["cancelled_at"] is None
+
+    run = conn.execute("SELECT * FROM quality_gate_run WHERE id = 'qrun-1'").fetchone()
+    # **0 이 아니라 NULL 이다.** 그때는 시작 시점에 고정한 리비전이 없었고, 지금
+    # 값을 적으면 "그 검사가 이 정책으로 돌았다"는 없는 사실이 생긴다.
+    assert run["started_policy_revision"] is None
+    assert run["late_result"] == 0
+    assert run["stop_requested_at"] is None
+    assert run["verdict"] == "fail"
+    assert run["validity"] == "current"
+
+    # 기존 repair 누적은 그대로다.
+    cycle = conn.execute("SELECT * FROM remediation_cycle WHERE id = 'rc-1'").fetchone()
+    assert cycle["used_attempts"] == 1
+    assert cycle["repair_limit"] == 3
+
+    # 새 기록을 지어내지 않는다.
+    for table in ("quality_change_event", "quality_revalidation"):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT COUNT(*) FROM quality_gate_policy WHERE state IN ('pending','cancelled')"
+    ).fetchone()[0] == 0
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+    )
+
+    # 반복 이행이 멱등이다.
+    db.migrate(conn)
+    again = conn.execute(
+        "SELECT applied_at, requested_at FROM quality_gate_policy WHERE id = 'qpol-1'"
+    ).fetchone()
+    assert again["applied_at"] == created_at
+    assert again["requested_at"] == created_at
+    assert conn.execute("SELECT COUNT(*) FROM quality_gate_policy").fetchone()[0] == 1
     conn.close()
