@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 
 def utc_now() -> str:
@@ -197,6 +197,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     #      단일 저장소 Case 와 R2 이전 Case 의 진행 중 업무가 멈춘다.
     _add_column_if_missing(conn, "task", "repository_id", "TEXT")
     _add_column_if_missing(conn, "task", "repository_ref", "TEXT NOT NULL DEFAULT ''")
+
+    # v13: QG-02~07과 repair. 새 표만 추가하며 기존 QG-01 판정이나 실패를
+    # 일반 게이트/repair로 추정해 복제하지 않는다. schema.sql의 CREATE IF NOT
+    # EXISTS가 빈 모델을 만들고, 실제 정책은 현재 사실에서 도출한다(P4-01).
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

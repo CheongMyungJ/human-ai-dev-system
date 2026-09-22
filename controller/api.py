@@ -51,6 +51,7 @@ from domain.models import (
     DecisionKind,
     DelegationBasisKind,
     EvidenceKind,
+    GateId,
     IntentField,
     Permission,
     PreparationStage,
@@ -354,6 +355,7 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 게이트 판정과 진입 검사 기록을 함께 준다. 사람이 "왜 실행이 시작되지
     # 않았는가"를 다른 화면을 찾아다니지 않고 알 수 있어야 한다(FR-14).
     case["gate"] = repo.gate_state(case_id)
+    case["quality_gates"] = repo.quality_gate_state(case_id)
     case["admission_checks"] = repo.list_admission_checks(case_id)
     # 수준·설계·계획·검토 상태도 같은 응답에 담는다(P3-01). 화면이 "지금 무엇이
     # 빠져 있어 구현이 열리지 않는가"를 한 화면에서 알 수 있어야 한다(FR-14).
@@ -1280,6 +1282,42 @@ class GateReviewIn(BaseModel):
     findings: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class QualityGatePolicyIn(BaseModel):
+    task_key: str = Field(default="", max_length=120)
+    setting: str = "inherit"
+    inspection: str | None = None
+    repair_limit: int | None = Field(default=None, ge=0)
+    actor: str = Field(min_length=1, max_length=120)
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+class QualityGateRunIn(BaseModel):
+    task_key: str = Field(default="", max_length=120)
+    gate: GateId
+    subject_key: str = Field(min_length=1, max_length=160)
+    input_hash: str = Field(min_length=1, max_length=128)
+    inspection_used: str
+    context_refs: list[str] = Field(default_factory=list)
+    criteria_refs: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+    findings: list[dict[str, Any]] = Field(default_factory=list)
+    author_run_id: str | None = None
+    reviewer_run_id: str | None = None
+    blocked: bool = False
+
+
+class RemediationAttemptIn(BaseModel):
+    kind: str
+    task_key: str = Field(default="", max_length=120)
+    session_ref: str | None = Field(default=None, max_length=200)
+    author_run_id: str | None = None
+
+
+class RemediationCompleteIn(BaseModel):
+    outcome: str = Field(min_length=1, max_length=80)
+    verification_run_id: str | None = None
+
+
 @router.get("/api/cases/{case_id}/gate")
 def get_gate(request: Request, case_id: str) -> dict[str, Any]:
     """최신 의도 버전에 대한 QG-01 상태."""
@@ -1312,6 +1350,108 @@ def run_gate_rules(request: Request, case_id: str, intent_id: str) -> dict[str, 
         if intent["case_id"] != case_id:
             raise NotFoundError(f"intent version not in case {case_id}: {intent_id}")
         return repo.evaluate_gate_rules(intent_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/quality-gates")
+def get_quality_gates(
+    request: Request, case_id: str, task_key: str = ""
+) -> dict[str, Any]:
+    try:
+        return _repo(request).quality_gate_state(case_id, task_key)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/cases/{case_id}/quality-gates/{gate}/policy")
+def put_quality_gate_policy(
+    request: Request, case_id: str, gate: GateId, payload: QualityGatePolicyIn
+) -> dict[str, Any]:
+    try:
+        return _repo(request).set_quality_gate_policy(
+            case_id,
+            gate,
+            task_key=payload.task_key,
+            setting=payload.setting,
+            inspection=payload.inspection,
+            repair_limit=payload.repair_limit,
+            actor=payload.actor,
+            reason_summary=payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError, ValueError) as exc:
+        raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.post("/api/cases/{case_id}/quality-gate-runs", status_code=201)
+def create_quality_gate_run(
+    request: Request, case_id: str, payload: QualityGateRunIn
+) -> dict[str, Any]:
+    try:
+        return _repo(request).record_quality_gate_run(
+            case_id,
+            payload.gate,
+            subject_key=payload.subject_key,
+            input_hash=payload.input_hash,
+            inspection_used=payload.inspection_used,
+            context_refs=payload.context_refs,
+            criteria_refs=payload.criteria_refs,
+            evidence_refs=payload.evidence_refs,
+            findings=payload.findings,
+            task_key=payload.task_key,
+            author_run_id=payload.author_run_id,
+            reviewer_run_id=payload.reviewer_run_id,
+            blocked=payload.blocked,
+        )
+    except (NotFoundError, ConflictError, ValueError) as exc:
+        raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+
+
+@router.get("/api/cases/{case_id}/quality-gates/{gate}/remediation/{subject_key}")
+def get_remediation(
+    request: Request, case_id: str, gate: GateId, subject_key: str
+) -> dict[str, Any]:
+    try:
+        return _repo(request).remediation_state(case_id, gate, subject_key)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post(
+    "/api/cases/{case_id}/quality-gates/{gate}/remediation/{subject_key}/attempts",
+    status_code=201,
+)
+def start_remediation(
+    request: Request,
+    case_id: str,
+    gate: GateId,
+    subject_key: str,
+    payload: RemediationAttemptIn,
+) -> dict[str, Any]:
+    try:
+        return _repo(request).start_remediation_attempt(
+            case_id,
+            gate,
+            subject_key,
+            kind=payload.kind,
+            task_key=payload.task_key,
+            session_ref=payload.session_ref,
+            author_run_id=payload.author_run_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/remediation-attempts/{attempt_id}/complete")
+def complete_remediation(
+    request: Request, attempt_id: str, payload: RemediationCompleteIn
+) -> dict[str, Any]:
+    try:
+        return _repo(request).complete_remediation_attempt(
+            attempt_id,
+            outcome=payload.outcome,
+            verification_run_id=payload.verification_run_id,
+        )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
 

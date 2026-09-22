@@ -40,6 +40,7 @@ import { WorkspacePanel } from './WorkspacePanel'
 const PURPOSE_OPTIONS: { value: RunPurpose; label: string }[] = [
   { value: 'limited_analysis', label: '제한 작업 (읽기·결과 작성)' },
   { value: 'intent_gate_review', label: 'QG-01 의미 검토 (별도 세션)' },
+  { value: 'quality_gate_review', label: 'QG-02~07 의미 검토 (별도 세션)' },
   { value: 'design_authoring', label: '설계안 작성 (동의된 의도 위에)' },
   { value: 'plan_authoring', label: '개발계획 작성 (검토된 설계 위에)' },
   { value: 'feature_implementation', label: '기능 구현 (작업공간이 준비되면 쓰기가 열린다)' },
@@ -320,7 +321,9 @@ function CaseDetailPanel(props: {
   // 의미 검토는 AI가 글을 써야 하므로 코딩 CLI만 고를 수 있다. 제한 작업은
   // 골격 실행기로도 할 수 있으므로 설치된 도구를 모두 보여 준다.
   const cliTools = codingCliTools(props.runners).map((t) => t.tool_id)
-  const toolOptions = purpose === 'intent_gate_review' ? cliTools : installedTools
+  const isReviewerPurpose =
+    purpose === 'intent_gate_review' || purpose === 'quality_gate_review'
+  const toolOptions = isReviewerPurpose ? cliTools : installedTools
   const [toolId, setToolId] = useState(toolOptions[0] ?? 'codex')
   useEffect(() => {
     if (toolOptions.length > 0 && !toolOptions.includes(toolId)) setToolId(toolOptions[0])
@@ -441,6 +444,7 @@ function CaseDetailPanel(props: {
       <PolicyPanel detail={detail} onChanged={props.onChanged} />
 
       <GatePanel detail={detail} onChanged={props.onChanged} />
+      <QualityGatesPanel detail={detail} />
 
       {/* 수준·설계·계획과 단계별 검토. 게이트 판정과 **다른 기록**이므로 패널을
           나눈다 — 게이트 통과가 설계 검토가 아니고, 검토가 게이트를 통과시키지도
@@ -488,7 +492,7 @@ function CaseDetailPanel(props: {
           try {
             const created = await api.createRun(detail.id, artifact.artifact_id, id, {
               purpose,
-              role: purpose === 'intent_gate_review' ? 'reviewer' : 'author',
+              role: isReviewerPurpose ? 'reviewer' : 'author',
               tool_id: toolId,
               mode: toolId === 'claude' ? 'print' : 'exec',
               permission,
@@ -608,6 +612,61 @@ function CaseDetailPanel(props: {
               </td>
             </tr>
           )}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+function QualityGatesPanel(props: { detail: CaseDetail }) {
+  return (
+    <section className="subpanel">
+      <h3>품질 게이트 적용안 · repair</h3>
+      <p className="muted small">
+        적용 설정, 실제 검사, 품질 판정과 repair 누적은 서로 다른 상태다. OFF나 업무상
+        미적용을 통과로 표시하지 않으며 최초 실패는 repair 1회로 세지 않는다.
+      </p>
+      <table>
+        <thead>
+          <tr>
+            <th>게이트</th>
+            <th>적용</th>
+            <th>요구 검사</th>
+            <th>현재 판정</th>
+            <th>repair</th>
+            <th>근거</th>
+          </tr>
+        </thead>
+        <tbody>
+          {props.detail.quality_gates.gates.map((gate) => (
+            <tr key={gate.gate}>
+              <td>
+                <span className="mono">{gate.gate}</span> · {gate.label}
+              </td>
+              <td>{gate.setting}</td>
+              <td>{gate.inspection_required}</td>
+              <td>
+                {gate.latest_run ? (
+                  <>
+                    {GATE_VERDICT_LABEL[gate.latest_run.verdict]}
+                    {gate.latest_run.validity && ` · ${gate.latest_run.validity}`}
+                  </>
+                ) : (
+                  <span className="muted">검사 안 함</span>
+                )}
+              </td>
+              <td>
+                {gate.remediation
+                  ? `${gate.remediation.used_attempts} 사용 + ${gate.remediation.reserved_attempts} 예약 / ${gate.remediation.repair_limit}`
+                  : `0 / ${gate.repair_limit}`}
+              </td>
+              <td className="small">
+                <span className="mono">{gate.source}</span>
+                <br />
+                <span className="muted">{gate.reason}</span>
+              </td>
+            </tr>
+          ))}
         </tbody>
       </table>
     </section>

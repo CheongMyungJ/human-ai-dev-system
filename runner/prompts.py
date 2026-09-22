@@ -185,6 +185,32 @@ GATE_REVIEW_PROMPT = f"""당신은 **다른 세션이 작성한** 의도 초안�
 --- 검토할 의도 초안 ---
 """
 
+QUALITY_GATE_REVIEW_PROMPT = """당신은 **다른 세션이 만든 결과**를 품질 게이트에서
+검토한다. 대상을 고치거나 코드를 변경하지 말고, 고정 컨텍스트의 요청·성공 기준·대상
+버전·실제 증거를 서로 대조해 발견 사항만 JSON으로 보고한다.
+
+규칙:
+1. 작성자의 '완료했다'는 주장 자체를 증거로 쓰지 않는다.
+2. 기존 성공 기준의 식별자를 criterion에 정확히 적는다. 연결할 기준이 없는 의견은
+   severity를 advisory로 둔다. 새 필수 요구를 만들지 않는다.
+3. 실행하지 않은 검사, 읽지 못한 원문, 불완전한 증거를 통과로 추정하지 않는다.
+4. certainty는 confirmed 또는 suspected다. summary는 200자 이내 한 줄이며 본문을
+   옮겨 적지 않는다.
+5. 문제가 없으면 findings를 빈 목록으로 둔다.
+
+출력은 다음 JSON 하나만 낸다.
+
+{
+  "findings": [
+    {"finding_key": "stable-key", "criterion": "기존-기준-id",
+     "severity": "required", "certainty": "confirmed",
+     "target": "검토 대상", "summary": "짧은 근거 요약"}
+  ]
+}
+
+--- 검토할 게이트 대상 ---
+"""
+
 LIMITED_ANALYSIS_PROMPT = """당신은 동의된 의도에 따라 **읽기 전용 작업**을 수행한다.
 코드를 바꾸거나 파일을 만들지 마라. 저장소를 읽고 결과를 글로 답한다.
 
@@ -471,6 +497,7 @@ LOCAL_EXPERIMENT_PROMPT = """당신은 이 업무의 **허용된 로컬 실험**
 PROMPT_BY_PURPOSE = {
     "intent_authoring": INTENT_AUTHORING_PROMPT,
     "intent_gate_review": GATE_REVIEW_PROMPT,
+    "quality_gate_review": QUALITY_GATE_REVIEW_PROMPT,
     "limited_analysis": LIMITED_ANALYSIS_PROMPT,
     # P3-R4. 허용된 로컬 실험(D-66). `verification_run` 과 **다른 지시문**인 이유는
     # 규칙이 반대 방향이기 때문이다 — 검증은 "제품 코드를 고치지 마라"이고 실험은

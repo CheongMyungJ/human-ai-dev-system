@@ -389,6 +389,9 @@ class RunPurpose(str, Enum):
 
     INTENT_AUTHORING = "intent_authoring"
     INTENT_GATE_REVIEW = "intent_gate_review"
+    #: P4-01. QG-02~07의 조건부 **독립 의미 검토**. QG-01은 기존 목적을
+    #: 그대로 유지해 과거 실행·프롬프트 계약을 바꾸지 않는다.
+    QUALITY_GATE_REVIEW = "quality_gate_review"
     LIMITED_ANALYSIS = "limited_analysis"
     #: P3-01. 설계와 계획은 **서로 다른 목적**이다. 하나로 합치면 두 산출물의
     #: 검토가 한 실행에 묶여 "각각 독립적인 검토 옵션"을 지킬 수 없다.
@@ -440,6 +443,7 @@ class AdmissionRefusal(str, Enum):
     INTENT_NOT_AGREED = "intent_not_agreed"
     OPEN_INTENT_QUESTIONS = "open_intent_questions"
     INTENT_GATE_NOT_PASSED = "intent_gate_not_passed"
+    QUALITY_GATE_NOT_PASSED = "quality_gate_not_passed"
     INTENT_ORIGINAL_NOT_AVAILABLE = "intent_original_not_available"
     INSTRUCTION_NOT_AVAILABLE = "instruction_not_available"
     PERMISSION_NOT_ALLOWED_IN_STAGE = "permission_not_allowed_in_stage"
@@ -553,10 +557,19 @@ class AdmissionRefusal(str, Enum):
 
 
 class GateId(str, Enum):
-    """이번 단계가 구현하는 게이트. QG-02~07은 아직 값으로 두지 않는다 —
-    정의만 있고 동작이 없는 게이트를 상태표에 노출하지 않기 위해서다."""
+    """P4-01까지 구현한 품질 게이트.
+
+    QG-08은 지식 채택(P4-06·07)의 실제 모델과 함께 추가한다. 이름만 먼저
+    노출하면 아직 없는 지식 채택 검사를 통과한 것처럼 보이기 때문이다.
+    """
 
     QG_01 = "QG-01"
+    QG_02 = "QG-02"
+    QG_03 = "QG-03"
+    QG_04 = "QG-04"
+    QG_05 = "QG-05"
+    QG_06 = "QG-06"
+    QG_07 = "QG-07"
 
 
 class GateVerdict(str, Enum):

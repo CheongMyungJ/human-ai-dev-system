@@ -540,11 +540,19 @@ class RunnerAgent:
                 produced["gate_findings"] = prompts.parse_gate_review(output.final_message)
                 produced["intent_version_id"] = target
                 produced["produced"] = "gate_review"
+            elif purpose == RunPurpose.QUALITY_GATE_REVIEW.value:
+                # 일반 게이트의 대상·기준 연결은 제어부가 별도 API에서 검증한다.
+                # Runner는 원문을 가진 채 발견만 구조화하며 스스로 통과를 선언하지 않는다.
+                produced["quality_gate_findings"] = prompts.parse_gate_review(
+                    output.final_message
+                )
+                produced["produced"] = "quality_gate_review"
         except (ValueError, KeyError) as exc:
             output.outcome = RunOutcome.FAILED
             produced["produced"] = "none"
             produced["failure"] = f"{type(exc).__name__}: {exc}"
             produced.pop("gate_findings", None)
+            produced.pop("quality_gate_findings", None)
         return produced
 
     def _produce_implementation(self, output: Any) -> dict[str, Any]:

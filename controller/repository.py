@@ -26,7 +26,7 @@ from controller.db import (
     transaction,
     utc_now,
 )
-from domain import ids, prep_doc, profiles
+from domain import ids, prep_doc, profiles, quality
 from domain import progression
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
@@ -231,6 +231,19 @@ def _summary(text: str) -> str:
     if len(one_line) <= MAX_SUMMARY:
         return one_line
     return one_line[: MAX_SUMMARY - 1] + "…"
+
+
+def _quality_ref(value: Any, *, field: str, maximum: int = 160) -> str:
+    """P4 게이트 표에 본문 대신 들어가는 짧은 식별 참조를 검증한다."""
+    if (
+        not isinstance(value, str)
+        or not value.strip()
+        or len(value) > maximum
+        or "\n" in value
+        or "\r" in value
+    ):
+        raise ConflictError(f"{field} must be a short reference identifier, not a body")
+    return value
 
 
 def _field_name(field: str) -> str:
@@ -2400,6 +2413,637 @@ class Repository:
         ).fetchall()
         return [self.get_gate_result(r["id"]) for r in rows]
 
+    # ------------------------------------------------------ P4-01 일반 게이트·repair
+
+    def _quality_policy_rows(
+        self, case_id: str, gate: GateId, task_key: str = ""
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        case_row = self.conn.execute(
+            "SELECT * FROM quality_gate_policy WHERE case_id = ? AND task_key = ''"
+            " AND gate = ? AND state = 'current'",
+            (case_id, gate.value),
+        ).fetchone()
+        task_row = None
+        if task_key:
+            task_row = self.conn.execute(
+                "SELECT * FROM quality_gate_policy WHERE case_id = ? AND task_key = ?"
+                " AND gate = ? AND state = 'current'",
+                (case_id, task_key, gate.value),
+            ).fetchone()
+        return (
+            dict(case_row) if case_row else None,
+            dict(task_row) if task_row else None,
+        )
+
+    def _current_quality_task(self, case_id: str, task_key: str) -> dict[str, Any] | None:
+        if not task_key:
+            return None
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return None
+        row = self.conn.execute(
+            "SELECT * FROM task WHERE graph_revision_id = ? AND task_key = ?",
+            (graph["id"], task_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def effective_quality_gate_policy(
+        self, case_id: str, gate: GateId, task_key: str = ""
+    ) -> dict[str, Any]:
+        """추천과 Case/Task 명시 설정을 합친 현재 정책.
+
+        설정과 판정을 합치지 않는다. 이 응답이 `off`라고 해서 마지막 실패나 성공
+        기준이 사라지지 않으며, 최신 실행은 별도 필드로 붙는다.
+        """
+        case = self.get_case(case_id)
+        task = self._current_quality_task(case_id, task_key)
+        if task_key and task is None:
+            raise NotFoundError(f"task not found in the current work graph: {task_key}")
+
+        repo_state = self.case_repository_state(case_id)
+        repository_count = len(repo_state["selected"])
+        if repository_count == 0 and repo_state["implicit_single_repository"]:
+            repository_count = 1
+        level = self.current_level(case_id)
+        qg01_requirement = self.conformance_requirement(case_id)
+        base = quality.recommended_policy(
+            gate,
+            profile=case.get("profile"),
+            level=level.value if level else None,
+            task_kind=task.get("kind") if task else None,
+            repository_count=repository_count,
+            risk_requires_independent=self.case_requires_independent_review(case_id),
+            qg01_independent=(
+                qg01_requirement["required_method"]
+                == ConformanceMethod.INDEPENDENT.value
+            ),
+        )
+        case_row, task_row = self._quality_policy_rows(case_id, gate, task_key)
+        rows = [r for r in (task_row, case_row) if r is not None]
+
+        setting = base.setting
+        inspection = base.inspection
+        source = base.source.value
+        reason = base.reason
+        repair_limit = base.repair_limit
+        applied_row: dict[str, Any] | None = None
+        for row in rows:
+            if row["setting"] != "inherit":
+                setting = quality.GateSetting.ON if row["setting"] == "on" else quality.GateSetting.OFF
+                source = row["source"]
+                reason = row["reason_summary"]
+                applied_row = applied_row or row
+                break
+        for row in rows:
+            if row["inspection"]:
+                requested = quality.InspectionMethod(row["inspection"])
+                # 명시 설정은 검사를 강화할 수 있지만 위험/깊이가 요구한 방식을
+                # 낮추지 못한다. OFF는 검사 자체를 생략하는 별도 선택이다.
+                if quality.inspection_satisfies(inspection, requested):
+                    inspection = requested
+                    applied_row = applied_row or row
+                break
+        for row in rows:
+            if row["repair_limit"] is not None:
+                repair_limit = int(row["repair_limit"])
+                applied_row = applied_row or row
+                break
+
+        if gate is GateId.QG_01:
+            setting = quality.GateSetting.REQUIRED
+            source = quality.GatePolicySource.SYSTEM_REQUIRED.value
+
+        latest_run = self.conn.execute(
+            "SELECT * FROM quality_gate_run WHERE case_id = ? AND gate = ?"
+            " AND task_key = ? ORDER BY created_at DESC LIMIT 1",
+            (case_id, gate.value, task_key),
+        ).fetchone()
+        cycle = None
+        if latest_run:
+            cycle = self.conn.execute(
+                "SELECT * FROM remediation_cycle WHERE case_id = ? AND gate = ?"
+                " AND subject_key = ?",
+                (case_id, gate.value, latest_run["subject_key"]),
+            ).fetchone()
+        return {
+            "gate": gate.value,
+            "label": quality.GATE_LABELS[gate],
+            "task_key": task_key or None,
+            "setting": setting.value,
+            "applied": setting in (quality.GateSetting.REQUIRED, quality.GateSetting.ON),
+            "inspection_required": inspection.value,
+            "source": source,
+            "reason": reason,
+            "repair_limit": repair_limit,
+            "policy_revision": applied_row["revision"] if applied_row else 0,
+            "latest_run": self._quality_gate_run_dict(dict(latest_run)) if latest_run else None,
+            "remediation": dict(cycle) if cycle else None,
+        }
+
+    def quality_gate_state(self, case_id: str, task_key: str = "") -> dict[str, Any]:
+        policies = [
+            self.effective_quality_gate_policy(case_id, gate, task_key)
+            for gate in GateId
+        ]
+        # QG-01은 기존 실제 판정과 검사 방식을 연결한다. 일반 표로 복제하지 않는다.
+        qg01 = next(p for p in policies if p["gate"] == GateId.QG_01.value)
+        qg01["latest_run"] = {
+            "legacy_qg01": True,
+            **self.gate_state(case_id),
+            "conformance": self.conformance_state(case_id),
+        }
+        return {"case_id": case_id, "task_key": task_key or None, "gates": policies}
+
+    def quality_gate_blockers_for_run(
+        self, case_id: str, purpose: RunPurpose, task_key: str
+    ) -> list[dict[str, str]]:
+        """현재 실행이 의존하는 **명시 ON** 게이트의 미통과 목록.
+
+        Profile 추천 QG-02/03의 기본 조건은 기존 preparation/work-graph 판정이 이미
+        강제한다. 여기서는 사용자가 Case/Task에 별도 게이트를 명시했을 때 그것을
+        기록만 하고 무시하는 구멍을 닫는다. QG-04 이후의 종료 경계 연결은 P4-02~05의
+        부분 재검증·완료 작업에서 확장한다.
+        """
+        requirements: list[tuple[GateId, str]] = []
+        if purpose is RunPurpose.PLAN_AUTHORING:
+            requirements = [(GateId.QG_02, "")]
+        elif purpose is RunPurpose.FEATURE_IMPLEMENTATION:
+            requirements = [(GateId.QG_02, ""), (GateId.QG_03, task_key)]
+        elif purpose is RunPurpose.VERIFICATION_RUN:
+            requirements = [(GateId.QG_04, task_key)]
+
+        blockers: list[dict[str, str]] = []
+        for gate, scoped_task in requirements:
+            # 그래프/Task가 아직 없거나 요청한 Task가 그래프 밖이면 기존
+            # `_check_work_graph`가 정확한 거부 사유를 낸다. 여기서 Task 정책을
+            # 조회해 404로 바꾸면 진입 검사의 구조화된 거부 기록이 사라진다.
+            if scoped_task and self._current_quality_task(case_id, scoped_task) is None:
+                continue
+            policy = self.effective_quality_gate_policy(case_id, gate, scoped_task)
+            # revision 0은 추천/기존 조건이고 기존 준비 판정이 담당한다. 명시 정책만
+            # 일반 게이트 실행을 추가 조건으로 만든다.
+            if policy["policy_revision"] == 0 or not policy["applied"]:
+                continue
+            latest = policy["latest_run"]
+            if not latest or latest.get("verdict") != GateVerdict.PASS.value or latest.get(
+                "validity"
+            ) != quality.GateValidity.CURRENT.value:
+                blockers.append(
+                    {
+                        "gate": gate.value,
+                        "verdict": (latest or {}).get("verdict", GateVerdict.NOT_RUN.value),
+                    }
+                )
+        return blockers
+
+    def set_quality_gate_policy(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        task_key: str = "",
+        setting: str = "inherit",
+        inspection: str | None = None,
+        repair_limit: int | None = None,
+        actor: str,
+        reason_summary: str,
+    ) -> dict[str, Any]:
+        self.get_case(case_id)
+        self.guard_open_case(case_id)
+        if task_key and self._current_quality_task(case_id, task_key) is None:
+            raise NotFoundError(f"task not found in the current work graph: {task_key}")
+        if setting not in {"on", "off", "inherit"}:
+            raise ConflictError("quality gate setting must be on, off, or inherit")
+        if gate is GateId.QG_01 and setting == "off":
+            raise ConflictError("QG-01 is required and cannot be turned off")
+        requested_inspection = quality.InspectionMethod(inspection) if inspection else None
+        current = self.effective_quality_gate_policy(case_id, gate, task_key)
+        if requested_inspection and not quality.inspection_satisfies(
+            quality.InspectionMethod(current["inspection_required"]), requested_inspection
+        ):
+            raise ConflictError("a quality gate setting cannot lower the required inspection")
+        if repair_limit is not None and repair_limit < 0:
+            raise ConflictError("repair limit must be zero or greater")
+        if repair_limit is not None:
+            scope_sql = " AND task_key = ?" if task_key else ""
+            params: tuple[Any, ...] = (
+                (case_id, gate.value, task_key)
+                if task_key
+                else (case_id, gate.value)
+            )
+            consumed = self.conn.execute(
+                "SELECT MAX(used_attempts + reserved_attempts) AS n"
+                " FROM remediation_cycle WHERE case_id = ? AND gate = ?" + scope_sql,
+                params,
+            ).fetchone()
+            if int((consumed or {})["n"] or 0) > repair_limit:
+                raise ConflictError("repair limit cannot be lower than attempts already used or reserved")
+        reason = _summary(reason_summary)
+        if not reason.strip():
+            raise ConflictError("a quality gate policy change needs a reason")
+
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM quality_gate_policy"
+            " WHERE case_id = ? AND task_key = ? AND gate = ?",
+            (case_id, task_key, gate.value),
+        ).fetchone()
+        revision = int(row["r"] or 0) + 1
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE quality_gate_policy SET state = 'superseded', superseded_at = ?"
+                " WHERE case_id = ? AND task_key = ? AND gate = ? AND state = 'current'",
+                (now, case_id, task_key, gate.value),
+            )
+            self.conn.execute(
+                "INSERT INTO quality_gate_policy"
+                " (id, case_id, task_key, gate, revision, setting, inspection, repair_limit,"
+                " source, set_by, reason_summary, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?)",
+                (
+                    ids.new_id("qpol"), case_id, task_key, gate.value, revision, setting,
+                    requested_inspection.value if requested_inspection else None,
+                    repair_limit,
+                    "task_explicit" if task_key else "case_explicit",
+                    actor, reason, now,
+                ),
+            )
+            if setting != "inherit" or requested_inspection is not None:
+                sql = (
+                    "UPDATE quality_gate_run SET validity = 'needs_recheck'"
+                    " WHERE case_id = ? AND gate = ? AND validity = 'current'"
+                )
+                args: tuple[Any, ...] = (case_id, gate.value)
+                if task_key:
+                    sql += " AND task_key = ?"
+                    args += (task_key,)
+                self.conn.execute(sql, args)
+            if repair_limit is not None:
+                if task_key:
+                    self.conn.execute(
+                        "UPDATE remediation_cycle SET repair_limit = ?,"
+                        " state = CASE WHEN state = 'exhausted' AND used_attempts + reserved_attempts < ?"
+                        " THEN 'active' ELSE state END, updated_at = ?"
+                        " WHERE case_id = ? AND gate = ? AND task_key = ? AND state <> 'passed'",
+                        (repair_limit, repair_limit, now, case_id, gate.value, task_key),
+                    )
+                else:
+                    self.conn.execute(
+                        "UPDATE remediation_cycle SET repair_limit = ?,"
+                        " state = CASE WHEN state = 'exhausted' AND used_attempts + reserved_attempts < ?"
+                        " THEN 'active' ELSE state END, updated_at = ?"
+                        " WHERE case_id = ? AND gate = ? AND state <> 'passed'",
+                        (repair_limit, repair_limit, now, case_id, gate.value),
+                    )
+        return self.effective_quality_gate_policy(case_id, gate, task_key)
+
+    def _quality_gate_run_dict(self, row: dict[str, Any]) -> dict[str, Any]:
+        for field in ("context_refs_json", "criteria_refs_json", "evidence_refs_json"):
+            row[field.removesuffix("_json")] = json.loads(row.pop(field))
+        findings = self.conn.execute(
+            "SELECT * FROM quality_gate_finding WHERE gate_run_id = ? ORDER BY created_at",
+            (row["id"],),
+        ).fetchall()
+        row["findings"] = [dict(f) for f in findings]
+        return row
+
+    def get_quality_gate_run(self, gate_run_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM quality_gate_run WHERE id = ?", (gate_run_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"quality gate run not found: {gate_run_id}")
+        return self._quality_gate_run_dict(dict(row))
+
+    def record_quality_gate_run(
+        self,
+        case_id: str,
+        gate: GateId,
+        *,
+        subject_key: str,
+        input_hash: str,
+        inspection_used: str,
+        context_refs: list[str],
+        criteria_refs: list[str],
+        evidence_refs: list[str],
+        findings: list[dict[str, Any]],
+        task_key: str = "",
+        author_run_id: str | None = None,
+        reviewer_run_id: str | None = None,
+        blocked: bool = False,
+    ) -> dict[str, Any]:
+        """QG-02~07의 한 평가를 기록하고 판정을 **발견에서** 계산한다."""
+        if gate is GateId.QG_01:
+            raise ConflictError("QG-01 uses the intent gate and conformance records")
+        policy = self.effective_quality_gate_policy(case_id, gate, task_key)
+        if not policy["applied"]:
+            raise ConflictError("an off or not-applicable gate cannot record a pass")
+        used = quality.InspectionMethod(inspection_used)
+        required = quality.InspectionMethod(policy["inspection_required"])
+        if not quality.inspection_satisfies(required, used):
+            raise ConflictError("the recorded inspection does not satisfy the gate policy")
+        if not subject_key.strip() or not input_hash.strip():
+            raise ConflictError("a quality gate run needs a subject key and input hash")
+        _quality_ref(input_hash, field="input_hash", maximum=128)
+        if not context_refs or not criteria_refs:
+            raise ConflictError("a quality gate review needs request/context and criterion references")
+        for collection in (context_refs, criteria_refs, evidence_refs):
+            if len(collection) > 100:
+                raise ConflictError("a quality gate reference list is too large")
+            if any(
+                not isinstance(ref, str)
+                or not ref.strip()
+                or len(ref) > 160
+                or "\n" in ref
+                or "\r" in ref
+                for ref in collection
+            ):
+                raise ConflictError(
+                    "quality gate inputs store short reference identifiers, not bodies"
+                )
+
+        author_session = None
+        if author_run_id:
+            author = self.get_run(author_run_id)
+            if author["case_id"] != case_id:
+                raise ConflictError("author run belongs to another case")
+            if author["status"] != RunStatus.FINISHED.value or author.get(
+                "outcome"
+            ) != RunOutcome.COMPLETED.value:
+                raise ConflictError("the referenced author run is not successfully completed")
+            author_session = author.get("session_ref")
+        reviewer_session = None
+        if used is quality.InspectionMethod.INDEPENDENT:
+            if not reviewer_run_id:
+                raise ConflictError("an independent gate review needs a reviewer run")
+            reviewer = self.get_run(reviewer_run_id)
+            if reviewer["case_id"] != case_id:
+                raise ConflictError("reviewer run belongs to another case")
+            if reviewer["role"] != RunRole.REVIEWER.value:
+                raise ConflictError("an independent gate review needs the reviewer role")
+            if reviewer["purpose"] != RunPurpose.QUALITY_GATE_REVIEW.value:
+                raise ConflictError("the run purpose is not quality_gate_review")
+            if reviewer["status"] != RunStatus.FINISHED.value or reviewer.get(
+                "outcome"
+            ) != RunOutcome.COMPLETED.value:
+                raise ConflictError("the reviewer run is not successfully completed")
+            reviewer_session = reviewer.get("session_ref")
+            if author_session and reviewer_session and author_session == reviewer_session:
+                raise ConflictError("an independent review must use a separate session")
+            if not evidence_refs:
+                raise ConflictError("an independent gate review needs evidence references")
+
+        normalized: list[dict[str, Any]] = []
+        blocking = False
+        hold = False
+        allowed_criteria = set(criteria_refs)
+        for index, raw in enumerate(findings, start=1):
+            finding_key = _quality_ref(
+                raw.get("finding_key") or f"finding-{index}", field="finding_key", maximum=120
+            )
+            criterion = _quality_ref(
+                raw.get("criterion") or "unspecified", field="criterion", maximum=120
+            )
+            target = _quality_ref(
+                raw.get("target") or "subject", field="target", maximum=120
+            )
+            evidence_artifact_id = raw.get("evidence_artifact_id")
+            if evidence_artifact_id is not None:
+                evidence_artifact_id = _quality_ref(
+                    evidence_artifact_id, field="evidence_artifact_id"
+                )
+            requested_required = str(raw.get("severity") or "advisory") == "required"
+            certainty = str(raw.get("certainty") or "suspected")
+            # AI/검토자가 기존 필수 기준에 연결하지 못한 의견으로 새 필수 요구를
+            # 만들지 못한다. 의견은 보존하되 advisory로 내린다.
+            severity = "required" if requested_required and criterion in allowed_criteria else "advisory"
+            item_blocks = severity == "required" and certainty == "confirmed"
+            blocking = blocking or item_blocks
+            hold = hold or (severity == "required" and certainty != "confirmed")
+            normalized.append(
+                {
+                    "finding_key": finding_key,
+                    "criterion": criterion,
+                    "severity": severity,
+                    "blocking": 1 if item_blocks else 0,
+                    "certainty": certainty if certainty in {"confirmed", "suspected"} else "suspected",
+                    "target": target,
+                    "summary": _summary(raw.get("summary") or "(요약 없음)"),
+                    "evidence_artifact_id": evidence_artifact_id,
+                }
+            )
+        verdict = (
+            GateVerdict.BLOCKED.value if blocked else
+            GateVerdict.FAIL.value if blocking else
+            GateVerdict.HOLD.value if hold else
+            GateVerdict.PASS.value
+        )
+        status = "blocked" if blocked else "completed"
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                {
+                    "gate": gate.value,
+                    "setting": policy["setting"],
+                    "inspection": policy["inspection_required"],
+                    "revision": policy["policy_revision"],
+                    "repair_limit": policy["repair_limit"],
+                },
+                sort_keys=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        gate_run_id = ids.new_id("qrun")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE quality_gate_run SET validity = 'historical'"
+                " WHERE case_id = ? AND gate = ? AND subject_key = ? AND validity = 'current'",
+                (case_id, gate.value, subject_key),
+            )
+            self.conn.execute(
+                "INSERT INTO quality_gate_run"
+                " (id, case_id, task_key, gate, subject_key, input_hash, policy_fingerprint,"
+                " inspection_required, inspection_used, status, verdict, validity,"
+                " context_refs_json, criteria_refs_json, evidence_refs_json, author_run_id,"
+                " reviewer_run_id, author_session_ref, reviewer_session_ref, created_at, completed_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'current', ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    gate_run_id, case_id, task_key, gate.value, subject_key, input_hash,
+                    fingerprint, required.value, used.value, status, verdict,
+                    json.dumps(context_refs), json.dumps(criteria_refs), json.dumps(evidence_refs),
+                    author_run_id, reviewer_run_id, author_session, reviewer_session, now, now,
+                ),
+            )
+            for item in normalized:
+                self.conn.execute(
+                    "INSERT INTO quality_gate_finding"
+                    " (id, gate_run_id, finding_key, criterion, severity, blocking, certainty,"
+                    " target, summary, evidence_artifact_id, state, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                    (
+                        ids.new_id("qfind"), gate_run_id, item["finding_key"], item["criterion"],
+                        item["severity"], item["blocking"], item["certainty"], item["target"],
+                        item["summary"], item["evidence_artifact_id"], now,
+                    ),
+                )
+            if verdict == GateVerdict.FAIL.value:
+                self.conn.execute(
+                    "INSERT OR IGNORE INTO remediation_cycle"
+                    " (id, case_id, gate, subject_key, task_key, initial_gate_run_id, repair_limit,"
+                    " used_attempts, reserved_attempts, state, created_at, updated_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'active', ?, ?)",
+                    (
+                        ids.new_id("repair"), case_id, gate.value, subject_key, task_key, gate_run_id,
+                        policy["repair_limit"], now, now,
+                    ),
+                )
+                self.conn.execute(
+                    "UPDATE remediation_cycle SET state = CASE"
+                    " WHEN used_attempts + reserved_attempts >= repair_limit"
+                    " THEN 'exhausted' ELSE 'active' END, updated_at = ?"
+                    " WHERE case_id = ? AND gate = ? AND subject_key = ?",
+                    (now, case_id, gate.value, subject_key),
+                )
+            elif verdict == GateVerdict.PASS.value:
+                self.conn.execute(
+                    "UPDATE remediation_cycle SET state = 'passed', updated_at = ?"
+                    " WHERE case_id = ? AND gate = ? AND subject_key = ?",
+                    (now, case_id, gate.value, subject_key),
+                )
+        return self.get_quality_gate_run(gate_run_id)
+
+    def remediation_state(self, case_id: str, gate: GateId, subject_key: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM remediation_cycle WHERE case_id = ? AND gate = ? AND subject_key = ?",
+            (case_id, gate.value, subject_key),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError("remediation cycle not found")
+        out = dict(row)
+        attempts = self.conn.execute(
+            "SELECT * FROM remediation_attempt WHERE cycle_id = ? ORDER BY sequence_no",
+            (out["id"],),
+        ).fetchall()
+        out["attempts"] = [dict(a) for a in attempts]
+        return out
+
+    def start_remediation_attempt(
+        self,
+        case_id: str,
+        gate: GateId,
+        subject_key: str,
+        *,
+        kind: str,
+        task_key: str = "",
+        session_ref: str | None = None,
+        author_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        if kind not in {"product_repair", "environment_recovery"}:
+            raise ConflictError("unknown remediation attempt kind")
+        if session_ref is not None:
+            _quality_ref(session_ref, field="session_ref", maximum=200)
+        consumes = kind == "product_repair"
+        if author_run_id:
+            run = self.get_run(author_run_id)
+            if run["case_id"] != case_id:
+                raise ConflictError("repair run belongs to another case")
+        attempt_id = ids.new_id("attempt")
+        now = utc_now()
+        limit_exhausted = False
+        with transaction(self.conn):
+            row = self.conn.execute(
+                "SELECT * FROM remediation_cycle WHERE case_id = ? AND gate = ?"
+                " AND subject_key = ?",
+                (case_id, gate.value, subject_key),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("remediation cycle not found")
+            cycle = dict(row)
+            if cycle["state"] == "passed":
+                raise ConflictError("the remediation cycle already passed")
+            if consumes and cycle["used_attempts"] + cycle["reserved_attempts"] >= cycle["repair_limit"]:
+                self.conn.execute(
+                    "UPDATE remediation_cycle SET state = 'exhausted', updated_at = ? WHERE id = ?",
+                    (now, cycle["id"]),
+                )
+                limit_exhausted = True
+            else:
+                sequence_no = int(
+                    self.conn.execute(
+                        "SELECT COUNT(*) AS n FROM remediation_attempt WHERE cycle_id = ?",
+                        (cycle["id"],),
+                    ).fetchone()["n"]
+                ) + 1
+                repair_no = (
+                    cycle["used_attempts"] + cycle["reserved_attempts"] + 1
+                    if consumes
+                    else None
+                )
+                if consumes:
+                    self.conn.execute(
+                        "UPDATE remediation_cycle SET reserved_attempts = reserved_attempts + 1,"
+                        " state = 'active', updated_at = ? WHERE id = ?",
+                        (now, cycle["id"]),
+                    )
+                self.conn.execute(
+                    "INSERT INTO remediation_attempt"
+                    " (id, cycle_id, sequence_no, repair_no, kind, task_key, session_ref, author_run_id,"
+                    " state, started_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?)",
+                    (
+                        attempt_id, cycle["id"], sequence_no, repair_no, kind, task_key,
+                        session_ref, author_run_id, now,
+                    ),
+                )
+        if limit_exhausted:
+            raise ConflictError("repair limit exhausted")
+        return self.remediation_state(case_id, gate, subject_key)
+
+    def complete_remediation_attempt(
+        self,
+        attempt_id: str,
+        *,
+        outcome: str,
+        verification_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        attempt = self.conn.execute(
+            "SELECT a.*, c.case_id, c.gate, c.subject_key, c.repair_limit"
+            " FROM remediation_attempt a JOIN remediation_cycle c ON c.id = a.cycle_id"
+            " WHERE a.id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if attempt is None:
+            raise NotFoundError(f"remediation attempt not found: {attempt_id}")
+        if verification_run_id:
+            run = self.get_run(verification_run_id)
+            if run["case_id"] != attempt["case_id"]:
+                raise ConflictError("verification run belongs to another case")
+        now = utc_now()
+        consumes = attempt["kind"] == "product_repair"
+        with transaction(self.conn):
+            current = self.conn.execute(
+                "SELECT state FROM remediation_attempt WHERE id = ?", (attempt_id,)
+            ).fetchone()
+            if current is None or current["state"] != "reserved":
+                raise ConflictError("the remediation attempt is already settled")
+            self.conn.execute(
+                "UPDATE remediation_attempt SET state = 'completed', outcome = ?,"
+                " verification_run_id = ?, completed_at = ? WHERE id = ?",
+                (outcome[:80], verification_run_id, now, attempt_id),
+            )
+            if consumes:
+                self.conn.execute(
+                    "UPDATE remediation_cycle SET reserved_attempts = reserved_attempts - 1,"
+                    " used_attempts = used_attempts + 1, updated_at = ? WHERE id = ?",
+                    (now, attempt["cycle_id"]),
+                )
+            self.conn.execute(
+                "UPDATE remediation_cycle SET state = 'exhausted', updated_at = ?"
+                " WHERE id = ? AND used_attempts >= repair_limit AND state <> 'passed'",
+                (now, attempt["cycle_id"]),
+            )
+        return self.remediation_state(
+            attempt["case_id"], GateId(attempt["gate"]), attempt["subject_key"]
+        )
+
     # ------------------------------------------------------ FR-29 진입 조건 검사
 
     def _planned_reservation_for(
@@ -2521,6 +3165,9 @@ class Repository:
             # Case 에서는 둘이 같은 질문이라 아무 것도 달라지지 않는다.
             task_repository=self.task_repository_state(case_id, task_id),
             run_repository_id=repository_id,
+            quality_gate_blockers=self.quality_gate_blockers_for_run(
+                case_id, purpose, task_id
+            ),
         )
         return evaluate_admission(request)
 
@@ -4695,6 +5342,21 @@ class Repository:
             if latest is not None:
                 add_original_request(latest)
                 add_question_answers(latest["id"])
+            add_unresolved_feedback()
+        elif purpose is RunPurpose.QUALITY_GATE_REVIEW:
+            # QG-02~07 검토에는 작성자의 완료 주장만 주지 않는다. 지시 원문이
+            # 검토 대상이고, 아래 고정 참조가 그것을 대조할 요청·기준·현재 산출물이다.
+            if latest is not None:
+                add_original_request(latest)
+                add(ContextRefRole.AGREED_INTENT, latest["artifact_id"], latest["artifact_rev"])
+            design = self.current_preparation(case_id, PreparationStage.DESIGN)
+            plan = self.current_preparation(case_id, PreparationStage.PLAN)
+            if plan is None:
+                plan = self.current_preparation(case_id, PreparationStage.COMBINED)
+            if design is not None:
+                add(ContextRefRole.CURRENT_DESIGN, design["artifact_id"], design["artifact_rev"])
+            if plan is not None:
+                add(ContextRefRole.CURRENT_PLAN, plan["artifact_id"], plan["artifact_rev"])
             add_unresolved_feedback()
         elif purpose in (RunPurpose.DESIGN_AUTHORING, RunPurpose.PLAN_AUTHORING):
             if latest is not None:
@@ -7870,8 +8532,9 @@ class Repository:
                 m.value: BUDGET_MEASUREMENT[m].value for m in BudgetMetric
             },
             "reservation_contract": reservation_contract(),
-            "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 예산과 별개이며"
-            " 아직 모델이 없다(P4-01). 이 집계를 repair 횟수로 쓰지 않는다",
+            "repair_limit_note": "품질 수정 한도(D-29 기본 2회)는 P4-01의"
+            " remediation_cycle에 별도로 누적한다. 이 예산 집계를 repair 횟수로"
+            " 쓰거나 repair 여유를 예산으로 쓰지 않는다",
             "enforcement": self.ENFORCEMENT["budget"],
         }
 

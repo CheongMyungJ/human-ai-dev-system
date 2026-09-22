@@ -969,3 +969,78 @@ def test_a_v11_database_keeps_its_tasks_without_inventing_a_repository(tmp_path)
     assert conn.execute("SELECT COUNT(*) c FROM task").fetchone()["c"] == 1
     assert conn.execute("SELECT repository_id FROM task").fetchone()["repository_id"] is None
     conn.close()
+
+
+# ===================================================================== v13
+
+
+def _v12_schema() -> str:
+    """P4-01 표가 없고 v12 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v12" in schema and "스키마 v13" not in schema:
+            return schema
+    pytest.skip("v12 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v12_database_keeps_qg01_and_invents_no_gate_pass_or_repair(tmp_path):
+    """v12 → v13: 기존 QG-01은 보존하고 새 판정·repair를 지어내지 않는다."""
+    path = tmp_path / "controller.sqlite3"
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v12_schema())
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (12, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1','prj-1','v12 Case','feature','in_progress',?,?)", (now, now)
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','pc','host-1','registered',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+        " byte_size, owner_runner_id, availability, summary, created_at)"
+        " VALUES ('art-1',1,'case-1','intent','hash-1',100,'runner-1','available','의도',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
+        " status, created_at) VALUES ('iv-1','case-1',1,'art-1',1,'agreed',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO gate_result (id, case_id, gate, intent_version_id, subject_content_hash,"
+        " verdict, rule_verdict, ai_verdict, evaluated_at)"
+        " VALUES ('gate-1','case-1','QG-01','iv-1','hash-1','fail','pass','fail',?)",
+        (now,),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+    assert conn.execute("SELECT verdict FROM gate_result WHERE id='gate-1'").fetchone()[0] == "fail"
+    for table in (
+        "quality_gate_policy", "quality_gate_run", "quality_gate_finding",
+        "remediation_cycle", "remediation_attempt",
+    ):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 13
+
+    db.migrate(conn)
+    assert conn.execute("SELECT COUNT(*) FROM gate_result").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM remediation_cycle").fetchone()[0] == 0
+    conn.close()

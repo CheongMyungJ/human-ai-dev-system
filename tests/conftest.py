@@ -321,6 +321,8 @@ class FakeCliExecutor:
 
         if prompt.startswith(prompt_templates.INTENT_AUTHORING_PROMPT[:40]):
             return self.draft_response
+        if prompt.startswith(prompt_templates.QUALITY_GATE_REVIEW_PROMPT[:40]):
+            return self.review_response
         if prompt.startswith(prompt_templates.GATE_REVIEW_PROMPT[:40]):
             return self.review_response
         if prompt.startswith(prompt_templates.DESIGN_AUTHORING_PROMPT[:40]):

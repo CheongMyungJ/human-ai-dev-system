@@ -103,6 +103,7 @@ export interface CaseDetail extends Case {
   decisions: Decision[]
   runs: Run[]
   gate: GateResult
+  quality_gates: QualityGateState
   admission_checks: AdmissionCheck[]
   // P2-04: 기준별 결과·미정리 실행·종료 후보를 같은 응답에 담는다.
   // "지금 무엇을 기다리는가"를 다른 화면에서 찾게 하지 않는다(FR-14).
@@ -525,6 +526,7 @@ export const intentApi = {
 export type RunPurpose =
   | 'intent_authoring'
   | 'intent_gate_review'
+  | 'quality_gate_review'
   | 'limited_analysis'
   // P3-01. 설계와 계획은 서로 다른 목적이며 각각 독립된 검토를 받는다.
   | 'design_authoring'
@@ -566,6 +568,44 @@ export interface GateResult {
   author_session_ref?: string | null
   reviewed_at?: string | null
   superseded_at?: string | null
+}
+
+export interface RemediationCycle {
+  id: string
+  repair_limit: number
+  used_attempts: number
+  reserved_attempts: number
+  state: 'active' | 'passed' | 'exhausted'
+}
+
+export interface QualityGateRun {
+  id?: string
+  legacy_qg01?: boolean
+  verdict: GateVerdict
+  status?: 'running' | 'completed' | 'blocked'
+  validity?: 'current' | 'needs_recheck' | 'historical'
+  inspection_required?: 'rule' | 'light' | 'independent'
+  inspection_used?: 'rule' | 'light' | 'independent'
+}
+
+export interface QualityGatePolicy {
+  gate: string
+  label: string
+  task_key: string | null
+  setting: 'required' | 'on' | 'off' | 'not_applicable'
+  applied: boolean
+  inspection_required: 'rule' | 'light' | 'independent'
+  source: string
+  reason: string
+  repair_limit: number
+  latest_run: QualityGateRun | null
+  remediation: RemediationCycle | null
+}
+
+export interface QualityGateState {
+  case_id: string
+  task_key: string | null
+  gates: QualityGatePolicy[]
 }
 
 export interface AdmissionView {
@@ -610,6 +650,7 @@ export const REFUSAL_LABEL: Record<string, string> = {
   intent_not_agreed: '최신 의도에 대한 사람의 동의가 없다',
   open_intent_questions: '의도 단계에서 결정할 질문이 남아 있다',
   intent_gate_not_passed: 'QG-01 의도 품질 게이트를 통과하지 않았다',
+  quality_gate_not_passed: '명시한 품질 게이트를 현재 입력에서 통과하지 않았다',
   intent_original_not_available: '의도 원문을 지금 읽을 수 없다',
   instruction_not_available: '지시 원문을 실행자가 읽을 수 없다',
   permission_not_allowed_in_stage: '이 단계에서 배정하지 않는 권한이다',

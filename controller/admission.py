@@ -75,6 +75,7 @@ from domain.models import (
 ALLOWED_PERMISSIONS: dict[RunPurpose, frozenset[Permission]] = {
     RunPurpose.INTENT_AUTHORING: frozenset({Permission.READ_ONLY}),
     RunPurpose.INTENT_GATE_REVIEW: frozenset({Permission.READ_ONLY}),
+    RunPurpose.QUALITY_GATE_REVIEW: frozenset({Permission.READ_ONLY}),
     RunPurpose.LIMITED_ANALYSIS: frozenset({Permission.READ_ONLY}),
     RunPurpose.DESIGN_AUTHORING: frozenset({Permission.READ_ONLY}),
     RunPurpose.PLAN_AUTHORING: frozenset({Permission.READ_ONLY}),
@@ -102,6 +103,7 @@ WRITE_PERMISSIONS: frozenset[Permission] = frozenset(
 EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
     RunPurpose.INTENT_AUTHORING: RunRole.AUTHOR,
     RunPurpose.INTENT_GATE_REVIEW: RunRole.REVIEWER,
+    RunPurpose.QUALITY_GATE_REVIEW: RunRole.REVIEWER,
     RunPurpose.LIMITED_ANALYSIS: RunRole.AUTHOR,
     RunPurpose.DESIGN_AUTHORING: RunRole.AUTHOR,
     RunPurpose.PLAN_AUTHORING: RunRole.AUTHOR,
@@ -131,6 +133,7 @@ NEEDS_CODING_CLI: frozenset[RunPurpose] = frozenset(
     {
         RunPurpose.INTENT_AUTHORING,
         RunPurpose.INTENT_GATE_REVIEW,
+        RunPurpose.QUALITY_GATE_REVIEW,
         RunPurpose.DESIGN_AUTHORING,
         RunPurpose.PLAN_AUTHORING,
         # P3-03. 구현·검증도 마찬가지다. 골격 실행기는 코드를 고치지도 명령을
@@ -214,6 +217,10 @@ class AdmissionRequest:
     #: 준비되지 않은 저장소를 대상으로 적은 요청이 작업공간이 없다는 이유로 대조를
     #: 건너뛰게 되기 때문이다 — 그 경우에도 "이 Task 의 저장소가 아니다"는 사실이다.
     run_repository_id: str | None = None
+    #: P4-01. 현재 목적이 의존하는 **명시 ON** 일반 게이트 중 통과하지 않은 것.
+    #: Profile 추천의 기존 QG-02/03 조건은 준비 판정이 이미 강제하므로 중복하지 않고,
+    #: 사용자가 별도 게이트를 명시한 경우에만 이 추가 조건이 생긴다.
+    quality_gate_blockers: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -978,6 +985,16 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     _check_autonomy(request, refuse)
     _check_objective(request, refuse)
     _check_material_delta(request, refuse)
+
+    if request.quality_gate_blockers:
+        refuse(
+            AdmissionRefusal.QUALITY_GATE_NOT_PASSED,
+            "명시한 품질 게이트가 현재 입력에서 통과하지 않았다: "
+            + ", ".join(
+                f"{item['gate']}({item['verdict']})"
+                for item in request.quality_gate_blockers
+            ),
+        )
 
     # **예산은 마지막에 본다.** 앞의 조건들은 "이 실행을 열 수 있는가"이고 이것은
     # "열어도 되는데 살 수 있는가"이다. 순서를 바꾸면 조건을 갖추지 못한 요청이 예산

@@ -1282,3 +1282,132 @@ CREATE INDEX IF NOT EXISTS idx_conformance_case ON conformance_check(case_id);
 -- (아래 두 컬럼은 `controller/db.py` 의 `_add_column_if_missing` 이 기존 DB 에
 --  더한다. 새로 만드는 DB 는 위 `CREATE TABLE task` 가 만들지 않으므로 같은
 --  경로로 더해진다 — 한 곳에서만 정의하기 위해서다.)
+
+-- ===================================================================
+-- 스키마 v13 (P4-01 게이트·repair)
+--
+-- v3의 `gate_result`는 QG-01/intent_version 전용 기록이라 그대로 둔다. 아래 표는
+-- QG-02~07의 논리적 채택 경계와 Case/Task 정책, 같은 경계의 repair 누적을 담는다.
+-- 본문·코드·diff·로그는 없고 참조·해시·짧은 요약만 저장한다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS quality_gate_policy (
+    id                TEXT PRIMARY KEY,
+    case_id           TEXT NOT NULL REFERENCES "case"(id),
+    task_key          TEXT NOT NULL DEFAULT '',
+    gate              TEXT NOT NULL,
+    revision          INTEGER NOT NULL,
+    setting           TEXT NOT NULL,  -- on | off | inherit
+    inspection        TEXT,           -- rule | light | independent | NULL(추천 따름)
+    repair_limit      INTEGER,        -- NULL = 기본 2
+    source            TEXT NOT NULL,  -- case_explicit | task_explicit
+    set_by            TEXT NOT NULL,
+    reason_summary    TEXT NOT NULL,
+    state             TEXT NOT NULL,  -- current | superseded
+    created_at        TEXT NOT NULL,
+    superseded_at     TEXT,
+    UNIQUE (case_id, task_key, gate, revision),
+    CHECK (length(task_key) <= 120),
+    CHECK (length(reason_summary) <= 200),
+    CHECK (repair_limit IS NULL OR repair_limit >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_gate_policy_current
+    ON quality_gate_policy(case_id, task_key, gate, state);
+
+CREATE TABLE IF NOT EXISTS quality_gate_run (
+    id                 TEXT PRIMARY KEY,
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    task_key           TEXT NOT NULL DEFAULT '',
+    gate               TEXT NOT NULL,
+    subject_key        TEXT NOT NULL,
+    input_hash         TEXT NOT NULL,
+    policy_fingerprint TEXT NOT NULL,
+    inspection_required TEXT NOT NULL,
+    inspection_used    TEXT NOT NULL,
+    status             TEXT NOT NULL, -- running | completed | blocked
+    verdict            TEXT NOT NULL,
+    validity           TEXT NOT NULL, -- current | needs_recheck | historical
+    context_refs_json  TEXT NOT NULL,
+    criteria_refs_json TEXT NOT NULL,
+    evidence_refs_json TEXT NOT NULL,
+    author_run_id      TEXT REFERENCES run(run_id),
+    reviewer_run_id    TEXT REFERENCES run(run_id),
+    author_session_ref TEXT,
+    reviewer_session_ref TEXT,
+    created_at         TEXT NOT NULL,
+    completed_at       TEXT,
+    CHECK (length(task_key) <= 120),
+    CHECK (length(subject_key) <= 160),
+    CHECK (length(input_hash) <= 128),
+    CHECK (author_session_ref IS NULL OR length(author_session_ref) <= 200),
+    CHECK (reviewer_session_ref IS NULL OR length(reviewer_session_ref) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_quality_gate_run_subject
+    ON quality_gate_run(case_id, gate, subject_key, created_at);
+
+CREATE TABLE IF NOT EXISTS quality_gate_finding (
+    id                   TEXT PRIMARY KEY,
+    gate_run_id          TEXT NOT NULL REFERENCES quality_gate_run(id),
+    finding_key          TEXT NOT NULL,
+    criterion            TEXT NOT NULL,
+    severity             TEXT NOT NULL, -- required | advisory
+    blocking             INTEGER NOT NULL,
+    certainty            TEXT NOT NULL, -- confirmed | suspected
+    target               TEXT NOT NULL,
+    summary              TEXT NOT NULL,
+    evidence_artifact_id TEXT,
+    state                TEXT NOT NULL, -- open | resolved | dismissed
+    created_at           TEXT NOT NULL,
+    UNIQUE (gate_run_id, finding_key),
+    CHECK (length(finding_key) <= 120),
+    CHECK (length(criterion) <= 120),
+    CHECK (length(target) <= 120),
+    CHECK (length(summary) <= 200),
+    CHECK (evidence_artifact_id IS NULL OR length(evidence_artifact_id) <= 160)
+);
+
+CREATE TABLE IF NOT EXISTS remediation_cycle (
+    id                  TEXT PRIMARY KEY,
+    case_id             TEXT NOT NULL REFERENCES "case"(id),
+    gate                TEXT NOT NULL,
+    subject_key         TEXT NOT NULL,
+    task_key            TEXT NOT NULL DEFAULT '',
+    initial_gate_run_id TEXT NOT NULL REFERENCES quality_gate_run(id),
+    repair_limit        INTEGER NOT NULL,
+    used_attempts       INTEGER NOT NULL DEFAULT 0,
+    reserved_attempts   INTEGER NOT NULL DEFAULT 0,
+    state               TEXT NOT NULL, -- active | passed | exhausted
+    created_at          TEXT NOT NULL,
+    updated_at          TEXT NOT NULL,
+    UNIQUE (case_id, gate, subject_key),
+    CHECK (length(subject_key) <= 160),
+    CHECK (length(task_key) <= 120),
+    CHECK (repair_limit >= 0),
+    CHECK (used_attempts >= 0),
+    CHECK (reserved_attempts >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS remediation_attempt (
+    id                  TEXT PRIMARY KEY,
+    cycle_id            TEXT NOT NULL REFERENCES remediation_cycle(id),
+    sequence_no         INTEGER NOT NULL,
+    repair_no           INTEGER,
+    kind                TEXT NOT NULL, -- product_repair | environment_recovery
+    task_key            TEXT NOT NULL DEFAULT '',
+    session_ref         TEXT,
+    author_run_id       TEXT REFERENCES run(run_id),
+    verification_run_id TEXT REFERENCES run(run_id),
+    state               TEXT NOT NULL, -- reserved | completed | abandoned
+    outcome             TEXT,
+    started_at          TEXT NOT NULL,
+    completed_at        TEXT,
+    UNIQUE (cycle_id, sequence_no),
+    UNIQUE (cycle_id, repair_no),
+    CHECK (length(task_key) <= 120),
+    CHECK (session_ref IS NULL OR length(session_ref) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_remediation_attempt_cycle
+    ON remediation_attempt(cycle_id, sequence_no);

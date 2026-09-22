@@ -743,8 +743,8 @@ def test_the_budget_model_is_not_a_repair_counter(harness):
     assert "P4-01" in budget["repair_limit_note"]
     assert "repair" not in budget["usage"]
     assert not any("repair" in m for m in budget["measurement_contract"])
-    # 아직 모델이 없는 것을 있다고 표시하지 않는다.
-    assert "아직 모델이 없다" in budget["repair_limit_note"]
+    # P4-01 모델이 생겨도 예산 집계와 합치지 않는다.
+    assert "remediation_cycle" in budget["repair_limit_note"]
 
 
 def test_budget_enforcement_did_not_spread_to_the_other_axes(harness):
