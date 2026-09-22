@@ -267,6 +267,23 @@ def _stage_sections(stage: PreparationStage, level: WorkLevel) -> str:
     return "\n".join(lines)
 
 
+#: **내용이 없는 항목을 어떻게 비우는가.** 설계·계획·결합 기록이 같은 규칙을 받는다.
+#:
+#: 라이브에서 계획 실행 하나가 이 자리에서 실패했다. AI 가 `open_questions` 에
+#: "없다. 계획 안에 미정인 것은 없다."를 적고 origin 을 `none` 으로 뒀고,
+#: `prep_doc.compose` 가 그 조합을 거부한다(`section ... has text but origin 'none'`).
+#: **거부가 맞다** — origin `none` 은 내용이 없다는 뜻이고, 내용이 있으면 origin 이
+#: 출처를 말해야 한다. 틀린 것은 지시문이었다. 비우는 방법을 말하지 않으면 AI 는
+#: 빈칸을 문장으로 채운다.
+#:
+#: 추측으로 고쳐 진행하지 않는다 — origin 을 `ai_proposal` 로 바꾸면 없는 출처를
+#: 만드는 일이고, 본문을 지우면 사람이 쓴 것일지도 모르는 내용을 버리는 일이다.
+EMPTY_SECTION_RULE = """**내용이 없는 항목은 text 를 빈 문자열로 두고 origin 을
+`none` 으로 둔다.** "없다"·"해당 없음"·"미정 없음" 같은 문장을 text 에 적지 마라 —
+origin `none` 은 내용이 없다는 뜻이고 내용이 있으면 origin 이 출처를 말해야 하므로,
+그렇게 적으면 그 문서는 거부되고 이 실행은 실패한다.
+"""
+
 DESIGN_AUTHORING_PROMPT = """당신은 사람이 동의한 의도를 읽고 **설계안**을 작성한다.
 지금 이 실행에서는 코드를 바꾸지 말고 파일도 만들지 마라. 저장소를 읽고 답을 JSON으로
 출력한다. **이 제약은 이 실행의 규칙이며 설계의 내용이 아니다** — 설계안에 "코드를
@@ -282,6 +299,7 @@ DESIGN_AUTHORING_PROMPT = """당신은 사람이 동의한 의도를 읽고 **�
    판단하면 그것을 questions 에 적는다 — **당신이 대신 정하지 않는다.**
 2. 선택으로 표시된 항목도 쓸 내용이 있으면 쓴다. 쓸 내용이 없으면 text 를 빈
    문자열로 두고 비운다. 시스템이 그것을 "미정"으로 기록한다.
+   {EMPTY_SECTION_RULE}
 3. **필수 항목을 비우지 마라.** 비우면 이 설계로는 구현 실행이 배정되지 않는다.
 4. 각 항목에 origin 을 붙인다: observation(코드·환경에서 관찰) / ai_proposal(제안) /
    ai_assumption(가정) / project_rule / user_requirement.
@@ -322,6 +340,7 @@ PLAN_AUTHORING_PROMPT = """당신은 동의된 의도와 **검토를 마친 설�
 3. **검증 작업을 빠뜨리지 마라.** 무엇을 어떻게 확인하는지가 없으면 계획이 아니다.
 4. **필수 항목을 비우지 마라.** 비우면 이 계획으로는 구현 실행이 배정되지 않는다.
 5. 각 항목에 origin 을 붙인다(설계와 같은 목록).
+   {EMPTY_SECTION_RULE}
 6. 사람이 정해야 하는 것은 questions 에 넣고 decide_at 을 plan 으로 둔다.
 7. 실행 환경·선행 조건에 없는 도구·자격증명을 가정하지 않는다.
 8. **tasks 에 작업을 하나씩 정의한다.** 이것이 실제 실행 단위가 된다.
@@ -483,6 +502,7 @@ COMBINED_AUTHORING_PROMPT = """당신은 동의된 의도를 읽고 **하나의 
    **결합 기록이라는 이유로 중요한 선택을 조용히 확정하지 마라.**
 4. **tasks 에 작업을 하나씩 정의한다.** 형식과 규칙은 개발계획과 같다.
 5. 각 항목에 origin 을 붙인다.
+   {EMPTY_SECTION_RULE}
 {REPOSITORY_RULE}
 출력은 이 형태의 JSON **하나만** 낸다. **sections 는 객체이고 키는 위 항목 이름
 그대로다** — 목록으로 내거나 이름을 바꾸면 시스템이 읽지 못해 이 실행은 실패한다.
@@ -589,6 +609,7 @@ def build(
         head = template.format(
             level=work_level.value,
             sections=_stage_sections(stage, work_level),
+            EMPTY_SECTION_RULE=EMPTY_SECTION_RULE,
             REPOSITORY_RULE=(
                 _repository_rule(repositories)
                 if stage in (PreparationStage.PLAN, PreparationStage.COMBINED)

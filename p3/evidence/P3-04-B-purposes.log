@@ -1,0 +1,53 @@
+라이브 루트: C:\Users\USER\AppData\Local\Temp\hads-p3-04-live\controlled-purposes
+제어부 health: {'status': 'ok', 'schema_version': 12, 'relay_buffered': 0}
+제어부 pid=34768 Runner pid=22572
+
+========================================================================
+1. Project · 저장소 둘 · Case
+========================================================================
+등록 저장소: {'repo-core': 'primary', 'repo-report': 'repo-report'} → {'repo-core': 'repo-f4099d1c113d2de4', 'repo-report': 'repo-f2a3c1905c1d527e'}
+Case case-fb1c246e0fa16941 profile=feature
+Autonomy: controlled (effective=controlled, source=recorded)
+강제 표시: autonomy=enforced, controlled_checkpoint=enforced, budget=enforced, repository_selection=enforced, publish=not_implemented
+선택: primary(write=True publish=False source=explicit), repo-report(write=True publish=False source=explicit)
+
+========================================================================
+1. 시작 확인 전 — 다섯 목적이 전부 막힌다
+========================================================================
+[design_authoring-before] 409 ['intent_not_agreed', 'intent_gate_not_passed', 'controlled_start_not_confirmed']
+  design_authoring: 409 ['intent_not_agreed', 'intent_gate_not_passed', 'controlled_start_not_confirmed']
+[plan_authoring-before] 409 ['intent_not_agreed', 'intent_gate_not_passed', 'design_missing', 'controlled_start_not_confirmed']
+  plan_authoring: 409 ['intent_not_agreed', 'intent_gate_not_passed', 'design_missing', 'controlled_start_not_confirmed']
+[feature_implementation-before] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'work_graph_missing', 'controlled_start_not_confirmed']
+  feature_implementation: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'work_graph_missing', 'controlled_start_not_confirmed']
+[verification_run-before] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'controlled_start_not_confirmed']
+  verification_run: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'controlled_start_not_confirmed']
+[local_experiment-before] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'controlled_start_not_confirmed']
+  local_experiment: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'controlled_start_not_confirmed']
+[limited_analysis-before] 409 ['intent_not_agreed', 'intent_gate_not_passed']
+  limited_analysis: 409 ['intent_not_agreed', 'intent_gate_not_passed']
+  조사(`limited_analysis`)에는 이 사유가 없다 — 열려 있어야 하는 쪽이다
+
+========================================================================
+4.5 사람이 시작을 확인한다
+========================================================================
+확인 지점: ['start_scope:confirmed', 'result_candidate:required']
+
+========================================================================
+2. 확인 뒤 — 그 사유만 사라진다
+========================================================================
+[design_authoring-after] 409 ['intent_not_agreed', 'intent_gate_not_passed']
+  design_authoring: 409 ['intent_not_agreed', 'intent_gate_not_passed']
+[plan_authoring-after] 409 ['intent_not_agreed', 'intent_gate_not_passed', 'design_missing']
+  plan_authoring: 409 ['intent_not_agreed', 'intent_gate_not_passed', 'design_missing']
+[feature_implementation-after] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'work_graph_missing']
+  feature_implementation: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing', 'work_graph_missing']
+[verification_run-after] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing']
+  verification_run: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed', 'sizing_not_decided', 'design_missing', 'plan_missing']
+[local_experiment-after] 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed']
+  local_experiment: 409 ['workspace_not_ready', 'intent_not_agreed', 'intent_gate_not_passed']
+[limited_analysis-after] 409 ['intent_not_agreed', 'intent_gate_not_passed']
+  limited_analysis: 409 ['intent_not_agreed', 'intent_gate_not_passed']
+  다른 사유(의도 미동의·게이트 미통과)는 그대로 남는다 — 정상이다
+runner 종료 (returncode=1)
+controller 종료 (returncode=1)

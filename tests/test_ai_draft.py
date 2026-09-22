@@ -180,3 +180,64 @@ def test_the_run_level_constraint_is_marked_as_not_part_of_the_intent():
     ):
         assert "지금 이 실행" in template
         assert "이 실행의 규칙" in template or "의도가 아니다" in template
+
+
+def test_the_prompts_say_how_to_leave_a_section_empty():
+    """라이브에서 찾은 결함: **비우는 방법을 말하지 않으면 빈칸을 문장으로 채운다.**
+
+    계획 실행 하나가 `open_questions` 에 "없다. 계획 안에 미정인 것은 없다."를 적고
+    origin 을 `none` 으로 뒀다. `prep_doc.compose` 는 그 조합을 거부하고
+    (`section ... has text but origin 'none'`) 그래서 실행 전체가 실패했다 —
+    **거부가 맞다.** origin `none` 은 내용이 없다는 뜻이고, 내용이 있으면 origin 이
+    출처를 말해야 한다. 틀린 것은 지시문이었다.
+
+    추측으로 고치지 않는다. origin 을 `ai_proposal` 로 바꾸면 없는 출처를 만드는
+    일이고 본문을 지우면 내용을 버리는 일이다. 그래서 고친 것은 입력이며, 입력은
+    결정적으로 확인할 수 있다(위 시험과 같은 방식).
+    """
+    from runner import prompts
+
+    for purpose, stage_hint in (
+        ("design_authoring", None),
+        ("plan_authoring", None),
+        ("design_authoring", "combined"),
+    ):
+        head = prompts.build(
+            purpose,
+            "지시 원문".encode(),
+            level="deep",
+            stage_hint=stage_hint,
+            repositories=[{"name": "primary", "id": "repo-1"}, {"name": "ui", "id": "repo-2"}],
+        )
+        assert "내용이 없는 항목은 text 를 빈 문자열로" in head, (purpose, stage_hint)
+        assert '"없다"' in head, (purpose, stage_hint)
+
+
+def test_a_section_with_text_but_no_origin_is_still_refused():
+    """짝이 되는 시험: **지시문을 고쳤다고 규칙이 느슨해지지 않았다.**
+
+    위 시험이 고정하는 것은 "말해 준다"이고 이 시험이 고정하는 것은 "그래도 막는다"
+    다. 둘 중 하나만 있으면, 지시문이 조용히 사라지거나 검사가 조용히 느슨해진다.
+    """
+    import pytest
+
+    from domain import prep_doc
+    from domain.models import AuthoringMode, PreparationStage, WorkLevel
+
+    with pytest.raises(ValueError, match="origin 'none'"):
+        prep_doc.compose(
+            stage=PreparationStage.PLAN,
+            level=WorkLevel.DEEP,
+            sections={
+                "tasks": {"text": "T1 을 먼저 한다", "origin": "ai_proposal"},
+                "open_questions": {"text": "없다. 미정인 것은 없다.", "origin": "none"},
+            },
+            questions=[],
+            tasks=[],
+            case_id="case-1",
+            intent_version_id="intent-1",
+            authored_by="codex/exec",
+            authoring_mode=AuthoringMode.AI_DRAFTED,
+            author_run_id="run-1",
+            context_notes=[],
+        )

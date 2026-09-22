@@ -1,0 +1,251 @@
+{
+  "case_id": "case-13dafc3910ac27cf",
+  "completion_mode": "human_acceptance",
+  "completion_mode_source": "autonomy_derived",
+  "criteria": [
+    {
+      "id": "crit-fd6157d119e7bb24",
+      "case_id": "case-13dafc3910ac27cf",
+      "intent_version_id": "intent-7bc07083576d6035",
+      "criterion_key": "C-01",
+      "summary": "chars가 len(text)와 일치",
+      "method_summary": "공백·개행·유니코드 입력 단위 테스트",
+      "relates_to": "desired_behavior",
+      "state": "user_confirmed",
+      "created_at": "2026-09-22T01:49:15.960924+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "검증 실행이 시험을 돌리지 못했다(환경 제약)",
+      "recorded_by": "policy:p3-04-live",
+      "recorded_at": "2026-09-22T01:58:14.634077+00:00",
+      "satisfaction": null,
+      "recheck_source": null
+    },
+    {
+      "id": "crit-65efbf3734c1b7d8",
+      "case_id": "case-13dafc3910ac27cf",
+      "intent_version_id": "intent-7bc07083576d6035",
+      "criterion_key": "C-02",
+      "summary": "기존 요약 필드 유지",
+      "method_summary": "기존 및 신규 단위 테스트 실행",
+      "relates_to": "desired_behavior",
+      "state": "user_confirmed",
+      "created_at": "2026-09-22T01:49:15.960924+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "검증 실행이 시험을 돌리지 못했다(환경 제약)",
+      "recorded_by": "policy:p3-04-live",
+      "recorded_at": "2026-09-22T01:58:14.636117+00:00",
+      "satisfaction": null,
+      "recheck_source": null
+    },
+    {
+      "id": "crit-62c343ec80fe1953",
+      "case_id": "case-13dafc3910ac27cf",
+      "intent_version_id": "intent-7bc07083576d6035",
+      "criterion_key": "C-03",
+      "summary": "render 출력 형식 일치",
+      "method_summary": "정확한 문자열 비교 테스트",
+      "relates_to": "desired_behavior",
+      "state": "user_confirmed",
+      "created_at": "2026-09-22T01:49:15.960924+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "검증 실행이 시험을 돌리지 못했다(환경 제약)",
+      "recorded_by": "policy:p3-04-live",
+      "recorded_at": "2026-09-22T01:58:14.638360+00:00",
+      "satisfaction": null,
+      "recheck_source": null
+    },
+    {
+      "id": "crit-413e2de18b555463",
+      "case_id": "case-13dafc3910ac27cf",
+      "intent_version_id": "intent-7bc07083576d6035",
+      "criterion_key": "C-04",
+      "summary": "두 저장소 테스트 통과",
+      "method_summary": "각 저장소 테스트 실행기 수행",
+      "relates_to": "expected_outcome",
+      "state": "user_confirmed",
+      "created_at": "2026-09-22T01:49:15.960924+00:00",
+      "verdict": "unverified",
+      "evidence_kind": "none",
+      "evidence_run_id": null,
+      "evidence_artifact_id": null,
+      "evidence_artifact_rev": null,
+      "result_summary": "검증 실행이 시험을 돌리지 못했다(환경 제약)",
+      "recorded_by": "policy:p3-04-live",
+      "recorded_at": "2026-09-22T01:58:14.639513+00:00",
+      "satisfaction": null,
+      "recheck_source": null
+    }
+  ],
+  "unsettled_runs": [],
+  "candidate": {
+    "id": "cand-04038100510ba966",
+    "case_id": "case-13dafc3910ac27cf",
+    "revision": 3,
+    "intent_version_id": "intent-7bc07083576d6035",
+    "intent_agreement_state": "agreed_current",
+    "gate_verdict": "pass",
+    "criteria_total": 4,
+    "criteria_met": 0,
+    "snapshot_hash": "sha256:569d56005f67a827abba538e55b998a76204d8872ed342905110e05706b4073b",
+    "state": "open",
+    "created_at": "2026-09-22T01:58:15.576402+00:00",
+    "superseded_at": null,
+    "composition_id": null,
+    "unresolved": [
+      {
+        "kind": "criterion",
+        "id": "crit-fd6157d119e7bb24",
+        "key": "C-01",
+        "verdict": "unverified"
+      },
+      {
+        "kind": "criterion",
+        "id": "crit-65efbf3734c1b7d8",
+        "key": "C-02",
+        "verdict": "unverified"
+      },
+      {
+        "kind": "criterion",
+        "id": "crit-62c343ec80fe1953",
+        "key": "C-03",
+        "verdict": "unverified"
+      },
+      {
+        "kind": "criterion",
+        "id": "crit-413e2de18b555463",
+        "key": "C-04",
+        "verdict": "unverified"
+      }
+    ],
+    "unsettled_runs": [],
+    "criteria": [
+      {
+        "criterion_id": "crit-fd6157d119e7bb24",
+        "verdict": "unverified",
+        "criterion_key": "C-01",
+        "summary": "chars가 len(text)와 일치",
+        "method_summary": "공백·개행·유니코드 입력 단위 테스트",
+        "relates_to": "desired_behavior",
+        "state": "user_confirmed"
+      },
+      {
+        "criterion_id": "crit-65efbf3734c1b7d8",
+        "verdict": "unverified",
+        "criterion_key": "C-02",
+        "summary": "기존 요약 필드 유지",
+        "method_summary": "기존 및 신규 단위 테스트 실행",
+        "relates_to": "desired_behavior",
+        "state": "user_confirmed"
+      },
+      {
+        "criterion_id": "crit-62c343ec80fe1953",
+        "verdict": "unverified",
+        "criterion_key": "C-03",
+        "summary": "render 출력 형식 일치",
+        "method_summary": "정확한 문자열 비교 테스트",
+        "relates_to": "desired_behavior",
+        "state": "user_confirmed"
+      },
+      {
+        "criterion_id": "crit-413e2de18b555463",
+        "verdict": "unverified",
+        "criterion_key": "C-04",
+        "summary": "두 저장소 테스트 통과",
+        "method_summary": "각 저장소 테스트 실행기 수행",
+        "relates_to": "expected_outcome",
+        "state": "user_confirmed"
+      }
+    ],
+    "exceptions": [
+      {
+        "id": "exc-28cd0f18bc1c52fb",
+        "case_id": "case-13dafc3910ac27cf",
+        "candidate_id": "cand-04038100510ba966",
+        "decision_id": "dec-91cf59d917066fe9",
+        "target_type": "criterion",
+        "target_id": "crit-fd6157d119e7bb24",
+        "original_verdict": "unverified",
+        "scope_summary": "환경 제약으로 검증 실행이 시험을 돌리지 못한 것을 수용한다",
+        "actor": "owner",
+        "decided_at": "2026-09-22T01:58:15.580634+00:00"
+      },
+      {
+        "id": "exc-873e0f6d5145b5dd",
+        "case_id": "case-13dafc3910ac27cf",
+        "candidate_id": "cand-04038100510ba966",
+        "decision_id": "dec-56de2f518a3a0a6b",
+        "target_type": "criterion",
+        "target_id": "crit-65efbf3734c1b7d8",
+        "original_verdict": "unverified",
+        "scope_summary": "환경 제약으로 검증 실행이 시험을 돌리지 못한 것을 수용한다",
+        "actor": "owner",
+        "decided_at": "2026-09-22T01:58:15.583002+00:00"
+      },
+      {
+        "id": "exc-9275c704246df1f1",
+        "case_id": "case-13dafc3910ac27cf",
+        "candidate_id": "cand-04038100510ba966",
+        "decision_id": "dec-5c1795b5d9543f9d",
+        "target_type": "criterion",
+        "target_id": "crit-62c343ec80fe1953",
+        "original_verdict": "unverified",
+        "scope_summary": "환경 제약으로 검증 실행이 시험을 돌리지 못한 것을 수용한다",
+        "actor": "owner",
+        "decided_at": "2026-09-22T01:58:15.584659+00:00"
+      },
+      {
+        "id": "exc-d0821036610538ae",
+        "case_id": "case-13dafc3910ac27cf",
+        "candidate_id": "cand-04038100510ba966",
+        "decision_id": "dec-24d16be22dc134de",
+        "target_type": "criterion",
+        "target_id": "crit-413e2de18b555463",
+        "original_verdict": "unverified",
+        "scope_summary": "환경 제약으로 검증 실행이 시험을 돌리지 못한 것을 수용한다",
+        "actor": "owner",
+        "decided_at": "2026-09-22T01:58:15.586668+00:00"
+      }
+    ],
+    "acceptance": {
+      "id": "accept-37113b5e6223dcec",
+      "case_id": "case-13dafc3910ac27cf",
+      "candidate_id": "cand-04038100510ba966",
+      "decision_id": "dec-4927926fd9da2c61",
+      "mode": "human",
+      "actor": "owner",
+      "statement_artifact_id": null,
+      "accepted_at": "2026-09-22T01:58:15.588395+00:00"
+    }
+  },
+  "closure": {
+    "id": "closure-192e8bd8f0efc2d3",
+    "case_id": "case-13dafc3910ac27cf",
+    "candidate_id": "cand-04038100510ba966",
+    "final_acceptance_id": "accept-37113b5e6223dcec",
+    "closure_kind": "closed_with_exceptions",
+    "exception_count": 4,
+    "confirmed_at": "2026-09-22T01:58:15.588395+00:00"
+  },
+  "relations": [],
+  "controlled": {
+    "required": true,
+    "effective_autonomy": "controlled",
+    "is_treatment": false,
+    "start_confirmed": true,
+    "result_confirmed": true,
+    "result_subject_id": "cand-1e97af7efb321019",
+    "result_subject_hash": "sha256:569d56005f67a827abba538e55b998a76204d8872ed342905110e05706b4073b"
+  }
+}

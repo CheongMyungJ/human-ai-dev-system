@@ -517,6 +517,31 @@ class PathA:
             )
         return len(pending)
 
+    def resolve_feedback(self, feedback_id: str) -> None:
+        """**AI 가 스스로 "반영했다"고 선언하지 않는다**(intent-artifacts 3절).
+
+        새 버전을 쓴 것은 AI 이고 그것이 지적을 실제로 반영했는지는 **피드백을 준
+        사람이** 새 버전을 보고 판단한다. 그 판단이 없으면 미해결 피드백이 남고,
+        남은 피드백은 결과 인수를 `unresolved_feedback` 으로 막는다 — 조용히 닫히지
+        않는다.
+
+        **라이브가 그것을 찾았다.** 이 단계가 없던 회차는 두 저장소 흐름을 다 돌고
+        결과 후보까지 확인한 뒤 종료 직전에 막혔다. 막은 것이 맞고, 빠진 것은 사람의
+        판단이었다.
+        """
+        latest = self.api.get(
+            f"/api/cases/{self.case_id}/intent-state"
+        )["latest_intent_version"]
+        self.api.ok(
+            "POST",
+            f"/api/cases/{self.case_id}/feedback/{feedback_id}/disposition",
+            json={"reflected": True, "reflected_in_version_id": latest["id"]},
+        )
+        self.log(
+            f"  사람이 피드백 {feedback_id} 를 rev={latest['revision']} 에 반영됨으로"
+            " 판단했다"
+        )
+
     #: 게이트가 막았을 때 **다시 쓰는 횟수의 상한.**
     #:
     #: 통과할 때까지 돌리는 것은 결과를 고르는 일이다. 상한을 두고, 넘으면 **막힌
@@ -545,7 +570,7 @@ class PathA:
                 f"- [{f['criterion']}/{f['certainty']}] {f.get('target')}: {f['summary']}"
                 for f in gate.get("findings") or []
             )
-            self.api.ok(
+            submitted = self.api.ok(
                 "POST",
                 f"/api/cases/{self.case_id}/feedback",
                 json={
@@ -569,6 +594,7 @@ class PathA:
             )
             self.confirm_material_deltas()
             self.agree_to_latest()
+            self.resolve_feedback(submitted["feedback"]["id"])
             gate = self.gate(round_tag=f"-fix{attempt}")
         if gate["verdict"] != "pass":
             raise LiveError(

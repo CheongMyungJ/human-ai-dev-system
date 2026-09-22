@@ -182,6 +182,16 @@ class Api:
     def close(self) -> None:
         self.client.close()
 
+    def reconnect(self) -> None:
+        """연결을 새로 만든다. **제어부를 강제 종료한 뒤에 쓴다.**
+
+        끊긴 프로세스로 열려 있던 연결은 재사용되면 그 자리에서 실패한다. httpx 는
+        그것을 다시 시도하지 않으므로, 하네스의 연결 문제가 **제품의 복원 실패로
+        보이지 않게** 여기서 끊고 다시 만든다.
+        """
+        self.client.close()
+        self.client = httpx.Client(base_url=self.base_url, timeout=600.0)
+
     def request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         return self.client.request(method, path, **kwargs)
 

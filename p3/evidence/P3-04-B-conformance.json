@@ -1,0 +1,29 @@
+{
+  "intent_version_id": "intent-7bc07083576d6035",
+  "method": "independent",
+  "verdict": "pass",
+  "unverified_scope": null,
+  "checks": [
+    {
+      "id": "conf-772ca9ab4fe9f35f",
+      "case_id": "case-13dafc3910ac27cf",
+      "intent_version_id": "intent-7bc07083576d6035",
+      "method": "independent",
+      "required_method": "independent",
+      "verdict": "pass",
+      "run_id": "run-gate-104802931",
+      "subject_content_hash": "sha256:be0dd5c4999095baebdb5a4009c08b4fb6d6a2d554ac93f71c289f615a098639",
+      "unverified_scope": null,
+      "reasons_json": "[]",
+      "recorded_at": "2026-09-22T01:49:31.946018+00:00"
+    }
+  ],
+  "required_method": "independent",
+  "independent_review_required": true,
+  "reasons": [
+    {
+      "reason": "level_above_simple",
+      "detail": "효과 수준이 간소를 넘어선다"
+    }
+  ]
+}

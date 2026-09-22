@@ -1,0 +1,81 @@
+{
+  "before": {
+    "design_authoring": [
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "controlled_start_not_confirmed"
+    ],
+    "plan_authoring": [
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "design_missing",
+      "controlled_start_not_confirmed"
+    ],
+    "feature_implementation": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "sizing_not_decided",
+      "design_missing",
+      "plan_missing",
+      "work_graph_missing",
+      "controlled_start_not_confirmed"
+    ],
+    "verification_run": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "sizing_not_decided",
+      "design_missing",
+      "plan_missing",
+      "controlled_start_not_confirmed"
+    ],
+    "local_experiment": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "controlled_start_not_confirmed"
+    ],
+    "limited_analysis": [
+      "intent_not_agreed",
+      "intent_gate_not_passed"
+    ]
+  },
+  "after": {
+    "design_authoring": [
+      "intent_not_agreed",
+      "intent_gate_not_passed"
+    ],
+    "plan_authoring": [
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "design_missing"
+    ],
+    "feature_implementation": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "sizing_not_decided",
+      "design_missing",
+      "plan_missing",
+      "work_graph_missing"
+    ],
+    "verification_run": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed",
+      "sizing_not_decided",
+      "design_missing",
+      "plan_missing"
+    ],
+    "local_experiment": [
+      "workspace_not_ready",
+      "intent_not_agreed",
+      "intent_gate_not_passed"
+    ],
+    "limited_analysis": [
+      "intent_not_agreed",
+      "intent_gate_not_passed"
+    ]
+  }
+}
