@@ -14,6 +14,8 @@ import {
   CRITERION_VERDICT_LABEL,
   INTERPRETATION_REFUSAL_LABEL,
   PROFILE_LABEL,
+  PROGRESS_ACTION_LABEL,
+  PROGRESS_STEP_LABEL,
   type ConversationView,
   type PreparationArtifact,
   type RunnerWithConnection,
@@ -416,7 +418,9 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
   )
   const interpretations = conv?.interpretations ?? []
   const basis = detail.policy?.delegation_basis.current
-  const empty = !work && answered.length === 0 && detail.decisions.length === 0 && interpretations.length === 0
+  const events = conv?.progress?.events ?? []
+  const empty =
+    !work && answered.length === 0 && detail.decisions.length === 0 && interpretations.length === 0 && events.length === 0
   return (
     <div data-testid="decisions">
       {empty && <p className="sh-muted">아직 기록된 결정이 없다. 논의 중의 동의는 그 선택에만 적용된다.</p>}
@@ -474,6 +478,20 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
                     ? `업무 요청(${PROFILE_LABEL[i.profile ?? ''] ?? i.profile})`
                     : '논의'}
                 {i.applied ? ' · 업무화 적용' : i.refusal ? ` · 적용 안 함(${INTERPRETATION_REFUSAL_LABEL[i.refusal] ?? i.refusal})` : ''}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      {events.length > 0 && (
+        <section data-testid="progress-events">
+          <h3 className="sh-section-title">진행 이력</h3>
+          <ul className="sh-result-list">
+            {events.map((e) => (
+              <li key={e.id} className="sh-plain-row">
+                {e.at.slice(11, 19)} · {PROGRESS_STEP_LABEL[e.step] ?? e.step} · {PROGRESS_ACTION_LABEL[e.action] ?? e.action}
+                {e.detail ? ` · ${e.detail}` : ''}
+                {e.run_id ? ` · ${e.run_id}` : ''}
               </li>
             ))}
           </ul>

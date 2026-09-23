@@ -331,6 +331,8 @@ def test_policy_cannot_be_changed_after_closure(harness):
     assert refused.status_code == 409
     assert refused.json()["detail"]["refusals"] == ["case_already_closed"]
 
+    # P4-05(D-87): **예산 한도만은 종료 뒤에도 받는다** — 설명 실행이 같은 Case 예산을 쓰기 때문이다.
+    # 이력으로 남고 종료 기록·판정·종료 시점 snapshot 은 바뀌지 않는다. UI-03 까지는 거부였다.
     budget = harness.client.put(
         f"/api/cases/{case['id']}/budget",
         json={
@@ -340,8 +342,9 @@ def test_policy_cannot_be_changed_after_closure(harness):
             "set_by": "owner",
         },
     )
-    assert budget.status_code == 409
-    assert budget.json()["detail"]["refusals"] == ["case_already_closed"]
+    assert budget.status_code == 201, budget.text
+    assert [c["metric"] for c in budget.json()["changes_after_closure"]] == ["run_count"]
+    assert harness.client.get(f"/api/cases/{case['id']}").json()["status"] == "closed"
 
 
 # ------------------------------------------------------- AC-6 controlled 확인

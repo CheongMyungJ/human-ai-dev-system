@@ -544,6 +544,15 @@ textarea {
   border-left: 3px solid var(--sh-accent);
 }
 
+/* P4-05. 사람이 해야 할 일의 카드. 질문 카드와 같은 자리에 같은 무게로 놓인다. */
+.sh-card-wait {
+  border-left: 3px solid var(--sh-warn);
+}
+
+.sh-card-wait .sh-result-list {
+  margin: 6px 0;
+}
+
 .sh-card .sh-input {
   width: 100%;
   margin-top: 6px;

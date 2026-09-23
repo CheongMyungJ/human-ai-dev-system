@@ -32,6 +32,7 @@ from domain import conversation as convmod
 from domain import ids, prep_doc, profiles, quality
 from domain import progression
 from domain import run_control as runctl
+from domain import work_flow as workflow
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
     NEEDS_CONTROLLED_START,
@@ -1411,6 +1412,38 @@ class Repository:
             run["conversation_stage"] = stage.value
         else:
             run["conversation_stage"] = None
+        # P4-05. **이 실행의 작업**(Task 요약·완료 조건·연결 기준 — 전부 제어부가 이미 가진 짧은
+        # 요약)과 조사 Profile 분석 실행의 기준 목록, 의도 재작성의 QG-01 지적, 종료 Case 의 설명
+        # 응답 표시. 본문은 없다.
+        purpose = run.get("purpose")
+        run["task"] = (
+            self.task_for_assignment(run["case_id"], run["task_id"])
+            if purpose
+            in (
+                RunPurpose.FEATURE_IMPLEMENTATION.value,
+                RunPurpose.VERIFICATION_RUN.value,
+                RunPurpose.LIMITED_ANALYSIS.value,
+                RunPurpose.LOCAL_EXPERIMENT.value,
+            )
+            else None
+        )
+        run["criteria"] = (
+            self.criteria_for_assignment(run["case_id"])
+            if purpose == RunPurpose.LIMITED_ANALYSIS.value
+            and run["task"] is None
+            and progression.purpose_outside_objective(
+                RunPurpose.FEATURE_IMPLEMENTATION, case.get("profile"), False
+            )
+            else []
+        )
+        run["gate_findings"] = (
+            self.gate_findings_for_assignment(run["case_id"])
+            if purpose == RunPurpose.INTENT_AUTHORING.value and latest_intent is not None
+            else []
+        )
+        run["closed_case"] = (
+            purpose == RunPurpose.DISCUSSION_REPLY.value and self.case_is_closed(run["case_id"])
+        )
         return run
 
     def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
@@ -1560,10 +1593,15 @@ class Repository:
         residual_source: ResidualSource = ResidualSource.RESULT,
         reporter: str = "runner",
         interpretation: dict[str, Any] | None = None,
+        criteria_report: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
         같은 세대의 같은 결과를 다시 받아도 상태를 바꾸지 않는다(멱등).
+
+        **P4-05: 기준 보고.** `criteria_report` 는 검증·분석 실행이 보고한 기준별 판정(키·판정·
+        결론·짧은 요약)이다. 결과와 같은 트랜잭션에 남기고 **적용은 진행기가 한다** — 여기서 적으면
+        보고가 곧 판정이 된다. 검증·분석·실험 실행에만 받는다.
         오래된 세대의 보고는 거부한다.
 
         **P4-04: 시작하지 않은 실행.** `not_started_reason` 은 Runner 가 CLI 를 부르기
@@ -1599,6 +1637,18 @@ class Repository:
             # UI-03. 해석은 **요청에 대한 논의 응답**에만 붙는다. 다른 실행이 보낸 해석은
             # 계약 위반이다 — 받으면 어떤 요청의 업무화 근거인지 아무도 답할 수 없다.
             raise ConflictError("an interpretation belongs only to a discussion reply of a request")
+        criteria_json: str | None = None
+        if criteria_report is not None:
+            if run.get("purpose") not in (
+                RunPurpose.VERIFICATION_RUN.value,
+                RunPurpose.LIMITED_ANALYSIS.value,
+                RunPurpose.LOCAL_EXPERIMENT.value,
+            ):
+                raise ConflictError(
+                    "a criteria report belongs only to a verification, analysis or experiment run"
+                )
+            parsed = workflow.parse_criteria_report(criteria_report)
+            criteria_json = json.dumps(parsed, ensure_ascii=False)[:8000] if parsed else None
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
                 # **중복 청구가 생기지 않는 자리가 여기다.** 정산은 이 가드 뒤에
@@ -1622,7 +1672,8 @@ class Repository:
                 "UPDATE run SET status = ?, outcome = ?, exit_code = ?, output_artifact_id = ?,"
                 " output_artifact_rev = ?, session_ref = ?, usage_json = ?,"
                 " workspace_effect_json = ?, residual_activity = ?, observed_tool_version = ?,"
-                " finished_at = ?, not_started_reason = ?, context_freshness_json = ?"
+                " finished_at = ?, not_started_reason = ?, context_freshness_json = ?,"
+                " criteria_report_json = ?"
                 " WHERE run_id = ?",
                 (
                     RunStatus.FINISHED.value,
@@ -1638,6 +1689,7 @@ class Repository:
                     finished_at,
                     not_started_reason.value if not_started_reason else None,
                     json.dumps(freshness, ensure_ascii=False) if freshness else None,
+                    criteria_json,
                     run_id,
                 ),
             )
@@ -4368,6 +4420,13 @@ class Repository:
             # 세운다 — 같은 규칙이다.
             context_plan=context_plan.summary(),
             context_unavailable=self._unavailable_core(context_plan),
+            # P4-05. **종료 뒤 설명 전용 진입**(D-87). 요청에 묶인 읽기 전용 논의 응답만이다 —
+            # 다른 모든 목적은 종료 Case 에서 그대로 거부된다.
+            explanation_entry=(
+                purpose is RunPurpose.DISCUSSION_REPLY
+                and permission is Permission.READ_ONLY
+                and request_id is not None
+            ),
         )
         return evaluate_admission(request)
 
@@ -5572,8 +5631,8 @@ class Repository:
                 self.conn.execute(
                     "INSERT INTO closure_record"
                     " (id, case_id, candidate_id, final_acceptance_id, closure_kind,"
-                    "  exception_count, confirmed_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    "  exception_count, confirmed_at, snapshot_json)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         ids.new_id("closure"),
                         candidate["case_id"],
@@ -5582,6 +5641,9 @@ class Repository:
                         kind.value,
                         len(exceptions),
                         now,
+                        # P4-05. **종료 시점의 소비·한도**(D-87). 종료 뒤 설명 소비는 이 값과의
+                        # 차이로 드러난다. 옛 종료에는 없다.
+                        self._closure_snapshot_payload(candidate["case_id"], now),
                     ),
                 )
                 self.conn.execute(
@@ -9786,7 +9848,9 @@ class Repository:
         돌고 있는 CLI 를 초 단위로 끊을 능력이 없기 때문이다(P1-03). 둘을 같은 값으로
         적으면 없는 보장을 표시한 것이 된다(`domain.budget.guarantee_for`).
         """
-        self._guard_policy_change(case_id)
+        # P4-05. **종료 뒤에도 예산 한도는 바꿀 수 있다**(D-87 "예산이 부족하면 한도 조정이 필요").
+        # 이력(`budget_setting` 개정)으로 남고 종료 기록·판정·종료 시점 snapshot 은 바뀌지 않는다.
+        # 다른 정책 변경(Autonomy·저장소·확인 지점)은 그대로 거부된다.
         self.get_case(case_id)
         refusals: list[PolicyRefusal] = []
         if limit_value <= 0:
@@ -9846,8 +9910,8 @@ class Repository:
     def clear_budget_limit(
         self, case_id: str, metric: BudgetMetric, threshold_kind: BudgetThreshold
     ) -> dict[str, Any]:
-        """한도를 해제한다. **이력은 남는다.**"""
-        self._guard_policy_change(case_id)
+        """한도를 해제한다. **이력은 남는다.** 종료 뒤에도 받는다(P4-05·D-87)."""
+        self.get_case(case_id)
         now = utc_now()
         with transaction(self.conn):
             self.conn.execute(
@@ -10317,11 +10381,36 @@ class Repository:
                     }
                 )
 
+        # P4-05. **종료 시점 소비와 종료 뒤 소비를 나눈다**(D-87). snapshot 이 없는 옛 종료는
+        # 나누지 못하며 그 사실을 `None` 으로 둔다.
+        snapshot = self.closure_snapshot(case_id)
+        since_closure: dict[str, Any] | None = None
+        if snapshot is not None:
+            since_closure = {}
+            for metric, item in exposure.items():
+                before = (snapshot.get("usage") or {}).get(metric, {}).get("exposure")
+                after = item.get("exposure")
+                since_closure[metric] = (
+                    round(after - before, 6)
+                    if isinstance(before, (int, float)) and isinstance(after, (int, float))
+                    else None
+                )
+        closed_at = None
+        closure = self.get_closure(case_id)
+        if closure is not None:
+            closed_at = closure["confirmed_at"]
+        changes_after_closure = (
+            [i for i in items if closed_at and i["created_at"] > closed_at] if closed_at else []
+        )
+
         return {
             "unlimited": not current,
             "limits": current,
             "history": items,
             "usage": exposure,
+            "at_closure": snapshot,
+            "since_closure": since_closure,
+            "changes_after_closure": changes_after_closure,
             "usage_detail": "`exposure = settled + held + unresolved` 가 한도 판정값이다."
             " 모르는 값을 0 으로 채우지 않으며 `complete = false` 로 드러낸다",
             "by_role": self._budget_by(case_id, "role"),
@@ -10826,7 +10915,12 @@ class Repository:
         모름)와 잔류 근거, 중단·불명 요청의 사실 요약을 더한다.
         """
         runs = self._request_runs(request["id"])
-        opening = self.get_message(request["opened_by_message_id"])
+        # P4-05. 진행 요청은 여는 메시지가 없다 — 저장할 원문이 없으므로 `stored` 로 답한다.
+        opening = (
+            self.get_message(request["opened_by_message_id"])
+            if request.get("opened_by_message_id")
+            else {"receipt": MessageReceipt.STORED.value}
+        )
         connected: dict[str, bool] = {}
         for run in runs:
             runner_id = run.get("assigned_runner_id")
@@ -10847,6 +10941,7 @@ class Repository:
         ) or bool(request.get("stop_requested_at"))
         return {
             **request,
+            "origin": request.get("origin") or "user_message",
             "locking": convmod.is_locking(request["state"]),
             "stopping": stopping,
             "opening_receipt": opening["receipt"],
@@ -10866,11 +10961,16 @@ class Repository:
         ).fetchone()
         if row is None:
             return {"id": request_id, "in_case": False, "state": None}
-        opening = self.get_message(row["opened_by_message_id"])
+        if row["opened_by_message_id"]:
+            opening = self.get_message(row["opened_by_message_id"])
+        else:
+            # P4-05. 진행 요청(사람의 결정 뒤 시스템이 연 것). 저장할 원문이 없다.
+            opening = {"receipt": MessageReceipt.STORED.value, "artifact_id": None, "artifact_rev": None}
         return {
             "id": request_id,
             "in_case": row["case_id"] == case_id,
             "state": row["state"],
+            "origin": row["origin"] if "origin" in row.keys() else "user_message",
             # UI-02. 중단이 요청된 요청에는 후속 실행을 붙이지 않는다.
             "stop_requested_at": row["stop_requested_at"],
             "opening_receipt": opening["receipt"],
@@ -10922,17 +11022,24 @@ class Repository:
                     f"request became {live['state']} while settling",
                 )
             runs = self._request_runs(request_id)
-            opening = self.conn.execute(
-                "SELECT i.state AS intake_state FROM conversation_message m"
-                " JOIN intake i ON i.id = m.intake_id WHERE m.id = ?",
-                (request["opened_by_message_id"],),
-            ).fetchone()
+            if request.get("opened_by_message_id"):
+                opening = self.conn.execute(
+                    "SELECT i.state AS intake_state FROM conversation_message m"
+                    " JOIN intake i ON i.id = m.intake_id WHERE m.id = ?",
+                    (request["opened_by_message_id"],),
+                ).fetchone()
+                opening_receipt = convmod.receipt_for_intake(
+                    opening["intake_state"] if opening else None
+                )
+            else:
+                # P4-05. 진행 요청은 여는 메시지가 없다 — 저장할 원문이 없으므로 저장됨으로 본다.
+                opening_receipt = MessageReceipt.STORED
             stop = self.conn.execute(
                 "SELECT stop_requested_at FROM conversation_request WHERE id = ?", (request_id,)
             ).fetchone()
             decision = convmod.decide_settle(
                 outcome,
-                convmod.receipt_for_intake(opening["intake_state"] if opening else None),
+                opening_receipt,
                 runs,
                 stop_requested=bool(stop["stop_requested_at"]),
             )
@@ -11203,21 +11310,24 @@ class Repository:
             return self._replay(existing, kind, expected_hash)
         if kind is MessageKind.ASSISTANT_REPLY:
             raise ConflictError("assistant replies come from runs, not from this path")
-        if self.case_is_closed(case_id):
+        closed = self.case_is_closed(case_id)
+        if closed and kind is MessageKind.CARD_ANSWER:
             raise ConversationRefused(
                 [ConversationRefusal.CASE_ALREADY_CLOSED],
-                "this case is closed; a real change goes to a linked follow-up case",
+                "this case is closed; its questions are closed with it",
             )
         self.get_runner(target_runner_id)
         opens_request = kind in OPENS_REQUEST
         if opens_request:
             # UI-02. **원문을 저장할 PC 가 연결돼 있어야 받는다**(D-75). 요청 잠금과 함께 걸리면
             # 둘 다 사유로 돌려준다 — 대화 조회의 `send.general` 과 같은 판정이다.
+            # P4-05. 종료 Case 의 일반 메시지는 **설명 전용**으로 받는다(D-87). 처리기가 읽기
+            # 전용 설명 응답을 만들고, 수정 요청이면 연결된 새 대화로 옮긴다.
             disconnected = runctl.connection_refuses(
                 self.runner_connection_state(target_runner_id, "target")
             )
             state = convmod.general_send_state(
-                False, self.active_request(case_id), disconnected
+                closed, self.active_request(case_id), disconnected, explanation_allowed=True
             )
             if not state.allowed:
                 raise ConversationRefused(list(state.refusals), state.detail)
@@ -11660,14 +11770,19 @@ class Repository:
         case = self.get_case(case_id)
         stage, source = self.case_stage(case_id)
         closed = self.case_is_closed(case_id)
-        active = self.active_request(case_id)
-        target, basis = self.conversation_runner(case_id, runner_id)
-        connection = self.runner_connection_state(target, basis)
-        disconnected = runctl.connection_refuses(connection)
         rows = self.conn.execute(
             "SELECT * FROM conversation_request WHERE case_id = ? ORDER BY opened_at",
             (case_id,),
         ).fetchall()
+        # P4-05 라이브에서 본 것: 메시지 저장과 같은 순간의 조회가 `current_request` 없이 처리 중
+        # 요청을 목록에 싣고 왔다(두 SELECT 사이에 요청이 열림). 한 벌의 판정은 **한 번 읽은 행**에서
+        # 나온다 — 현재 요청도 같은 목록에서 고른다(잠그는 상태는 많아야 하나, 부분 유일 색인).
+        active = next(
+            (dict(r) for r in rows if RequestState(r["state"]) in LOCKING_REQUEST_STATES), None
+        )
+        target, basis = self.conversation_runner(case_id, runner_id)
+        connection = self.runner_connection_state(target, basis)
+        disconnected = runctl.connection_refuses(connection)
         open_questions = self._open_question_count(case_id)
         return {
             "case_id": case_id,
@@ -11685,7 +11800,10 @@ class Repository:
             "requests": [self.request_view(dict(r)) for r in rows],
             "current_request": self.request_view(active) if active is not None else None,
             "send": {
-                "general": convmod.general_send_state(closed, active, disconnected).to_dict(),
+                # P4-05. 종료 Case 는 **설명 전용**으로 열린다(D-87). 판정 함수가 그 사실을 `note` 에 싣는다.
+                "general": convmod.general_send_state(
+                    closed, active, disconnected, explanation_allowed=True
+                ).to_dict(),
                 "card_answer": {
                     # 카드 답변은 처리 중·중단 요청 중·불명에도 **대상이 유효하면** 받는다.
                     # PC 미연결이면 받지 않는다(D-75). 답변이 중단을 확인하지 않는다.
@@ -11705,9 +11823,15 @@ class Repository:
             "processing": {
                 "auto": self.auto_process_requests,
                 "actor": REQUEST_PROCESSOR_ACTOR,
-                "scope": "discussion_reply_only",
+                # P4-05. 처리기가 켜져 있으면 업무 단계의 다음 작업도 진행기가 잇는다.
+                "scope": "discussion_reply_and_work_progress",
             },
             "interpretations": self.list_interpretations(case_id),
+            # P4-05. 업무 단계 진행 상태·이력(행이 없으면 `None` — 진행기가 잇지 않는 Case)과
+            # 연결된 Case(이전·후속).
+            "progress": self.progress_view(case_id),
+            "relations": self.case_relations_view(case_id),
+            "closure": self.get_closure(case_id),
         }
 
     def _with_conversation_summary(self, case: dict[str, Any]) -> dict[str, Any]:
@@ -11725,6 +11849,10 @@ class Repository:
             active is not None and active.get("stop_requested_at")
         )
         case["needs_response"] = self._open_question_count(case["id"]) > 0
+        # P4-05. 진행 상태(진행 중·확인 필요·막힘·멈춤·완료). 행이 없으면 None.
+        progress = self.progress_state(case["id"])
+        case["progress_state"] = progress["state"] if progress else None
+        case["progress_wait"] = [w.get("code") for w in progress["wait"]] if progress else []
         # UI-03. 목록을 **마지막 활동** 순으로 보이려고 싣는다. 메시지가 없으면 Case 의 갱신 시각.
         last = self.conn.execute(
             "SELECT MAX(created_at) AS t FROM conversation_message WHERE case_id = ?",
@@ -12267,3 +12395,692 @@ class Repository:
             elif case["current_request_state"] == RequestState.PROCESSING.value:
                 counts["processing"] += 1
         return counts
+
+
+    # ================================================================== P4-05
+    #
+    # 업무 단계 자동 진행·완료·예외·후속. 진행기(`controller.work_progressor`)가 쓰는 조회·기록이다.
+    # **판정은 `domain.work_flow` 에 있고 여기서는 사실을 모아 넘기고 기록한다.** 진행기가 만든
+    # 실행도 `admit_and_create_run` 을 그대로 지난다 — 여기에 우회 경로는 없다.
+
+    #: 진행기가 요청을 끝내거나 기록을 남길 때의 주체.
+    WORK_PROGRESSOR_ACTOR = workflow.WORK_PROGRESSOR_ACTOR
+
+    # ------------------------------------------------------------- 진행 상태
+
+    def progress_state(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM case_progress WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        out = dict(row)
+        out["wait"] = json.loads(out.pop("wait_json") or "[]")
+        out["attempts"] = json.loads(out.pop("attempts_json") or "{}")
+        return out
+
+    def start_progress(self, case_id: str, request_id: str | None) -> dict[str, Any]:
+        """업무화 때 진행 행을 만든다. **이미 있으면 그대로다** — 진행기는 이 행이 있는 Case 만 잇는다."""
+        self.get_case(case_id)
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_progress (case_id, state, step, step_detail, wait_json, request_id,"
+                " attempts_json, started_at, updated_at)"
+                " VALUES (?, ?, ?, ?, '[]', ?, '{}', ?, ?)"
+                " ON CONFLICT(case_id) DO NOTHING",
+                (
+                    case_id,
+                    workflow.ProgressState.RUNNING,
+                    "work_started",
+                    "업무화됐다. 다음 걸음을 정한다",
+                    request_id,
+                    now,
+                    now,
+                ),
+            )
+        return self.progress_state(case_id) or {}
+
+    def update_progress(
+        self,
+        case_id: str,
+        *,
+        state: str,
+        step: str,
+        detail: str | None = None,
+        wait: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
+        keep_request: bool = False,
+        last_run_id: str | None = None,
+        paused_by: str | None = None,
+    ) -> dict[str, Any]:
+        """진행 행을 갱신한다. `keep_request` 면 요청 칸을 건드리지 않는다."""
+        now = utc_now()
+        paused_at = now if state == workflow.ProgressState.PAUSED else None
+        with transaction(self.conn):
+            if keep_request:
+                self.conn.execute(
+                    "UPDATE case_progress SET state = ?, step = ?, step_detail = ?, wait_json = ?,"
+                    " last_run_id = COALESCE(?, last_run_id), paused_at = ?, paused_by = ?,"
+                    " updated_at = ? WHERE case_id = ?",
+                    (
+                        state,
+                        step[:120],
+                        _summary(detail) if detail else None,
+                        json.dumps(wait or [], ensure_ascii=False)[:4000],
+                        last_run_id,
+                        paused_at,
+                        paused_by if paused_at else None,
+                        now,
+                        case_id,
+                    ),
+                )
+            else:
+                self.conn.execute(
+                    "UPDATE case_progress SET state = ?, step = ?, step_detail = ?, wait_json = ?,"
+                    " request_id = ?, last_run_id = COALESCE(?, last_run_id), paused_at = ?,"
+                    " paused_by = ?, updated_at = ? WHERE case_id = ?",
+                    (
+                        state,
+                        step[:120],
+                        _summary(detail) if detail else None,
+                        json.dumps(wait or [], ensure_ascii=False)[:4000],
+                        request_id,
+                        last_run_id,
+                        paused_at,
+                        paused_by if paused_at else None,
+                        now,
+                        case_id,
+                    ),
+                )
+        return self.progress_state(case_id) or {}
+
+    def bump_attempt(self, case_id: str, key: str) -> int:
+        """재작성·재시도 상한을 세는 키를 하나 올린다. 새 버전·세션 교체로 초기화하지 않는다."""
+        with transaction(self.conn):
+            row = self.conn.execute(
+                "SELECT attempts_json FROM case_progress WHERE case_id = ?", (case_id,)
+            ).fetchone()
+            attempts = json.loads((row["attempts_json"] if row else None) or "{}")
+            attempts[key] = int(attempts.get(key, 0)) + 1
+            self.conn.execute(
+                "UPDATE case_progress SET attempts_json = ?, updated_at = ? WHERE case_id = ?",
+                (json.dumps(attempts)[:2000], utc_now(), case_id),
+            )
+        return attempts[key]
+
+    def record_progress_event(
+        self,
+        case_id: str,
+        step: str,
+        action: str,
+        *,
+        run_id: str | None = None,
+        request_id: str | None = None,
+        detail: str | None = None,
+        codes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """진행 이력 한 줄. **본문 없음** — 걸음·행동·실행·요청·사유 코드·짧은 설명뿐이다."""
+        event_id = ids.new_id("prog")
+        with transaction(self.conn):
+            seq = self.conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM case_progress_event WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()["n"]
+            self.conn.execute(
+                "INSERT INTO case_progress_event (id, case_id, seq, at, step, action, run_id,"
+                " request_id, detail, codes_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    event_id,
+                    case_id,
+                    seq,
+                    utc_now(),
+                    step[:120],
+                    action[:64],
+                    run_id,
+                    request_id,
+                    _summary(detail) if detail else None,
+                    json.dumps(codes, ensure_ascii=False)[:1000] if codes else None,
+                ),
+            )
+        row = self.conn.execute(
+            "SELECT * FROM case_progress_event WHERE id = ?", (event_id,)
+        ).fetchone()
+        return dict(row)
+
+    def list_progress_events(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM case_progress_event WHERE case_id = ? ORDER BY seq", (case_id,)
+        ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["codes"] = json.loads(item.pop("codes_json") or "[]")
+            out.append(item)
+        return out
+
+    def progress_view(self, case_id: str) -> dict[str, Any] | None:
+        """대화 조회에 싣는 진행 상태. 행이 없으면 `None`(진행기가 잇지 않는 Case)."""
+        state = self.progress_state(case_id)
+        if state is None:
+            return None
+        state["events"] = self.list_progress_events(case_id)
+        state["actor"] = self.WORK_PROGRESSOR_ACTOR
+        state["auto"] = self.auto_process_requests
+        return state
+
+    def progress_rows_for_recovery(self) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT case_id, state, request_id FROM case_progress WHERE state IN (?, ?, ?)"
+            " ORDER BY started_at",
+            (
+                workflow.ProgressState.RUNNING,
+                workflow.ProgressState.WAITING_HUMAN,
+                workflow.ProgressState.BLOCKED,
+            ),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_progress_case_status(self, case_id: str, status: CaseStatus) -> None:
+        """진행기가 Case 상태를 옮긴다. **종료·최종 확인 대기는 덮지 않는다.**"""
+        with transaction(self.conn):
+            self.conn.execute(
+                'UPDATE "case" SET status = ?, updated_at = ? WHERE id = ?'
+                " AND status NOT IN (?, ?, ?)",
+                (
+                    status.value,
+                    utc_now(),
+                    case_id,
+                    CaseStatus.CLOSED.value,
+                    CaseStatus.CANCELLED.value,
+                    CaseStatus.WAITING_FINAL_ACCEPTANCE.value,
+                ),
+            )
+
+    # ------------------------------------------------------------- 진행 요청
+
+    def open_progress_request(
+        self, case_id: str, origin: str, origin_ref: str | None
+    ) -> dict[str, Any] | None:
+        """사람의 결정 뒤 시스템이 여는 **진행 요청**(P4-05 plan 3.2). 여는 메시지가 없다.
+
+        활성 요청이 있으면 열지 않고 `None` 이다 — 잠금은 하나다(DB 의 부분 유일 색인이 마지막
+        방어선이다).
+        """
+        self.get_case(case_id)
+        if origin not in ("human_decision", "system_resume"):
+            raise ConflictError("a progress request is opened by a human decision or a resume")
+        request_id = ids.new_id("req")
+        try:
+            with transaction(self.conn):
+                if self.active_request(case_id) is not None:
+                    return None
+                self.conn.execute(
+                    "INSERT INTO conversation_request"
+                    " (id, case_id, opened_by_message_id, origin, origin_ref, state, opened_at)"
+                    " VALUES (?, ?, NULL, ?, ?, ?, ?)",
+                    (
+                        request_id,
+                        case_id,
+                        origin,
+                        (origin_ref or "")[:120] or None,
+                        RequestState.PROCESSING.value,
+                        utc_now(),
+                    ),
+                )
+        except sqlite3.IntegrityError:
+            return None
+        return self.get_request(request_id)
+
+    # ------------------------------------------------------------- 진행 판정 입력
+
+    def _intent_structure_reported(self, intent_version_id: str) -> bool:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM intent_field WHERE intent_version_id = ?",
+            (intent_version_id,),
+        ).fetchone()
+        return bool(row["n"])
+
+    def _answers_after_version(self, latest: dict[str, Any]) -> bool:
+        """최신 버전이 만들어진 **뒤에** 답한 의도 단계 질문이 있는가(답 반영 재작성이 필요)."""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM intent_question WHERE intent_version_id = ? AND state = ?"
+            " AND decide_at = ? AND answered_at > ?",
+            (
+                latest["id"],
+                QuestionState.ANSWERED.value,
+                DecideAt.INTENT.value,
+                latest["created_at"],
+            ),
+        ).fetchone()
+        return bool(row["n"])
+
+    def unfinished_case_runs(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT run_id, purpose, task_id, status, outcome, request_id FROM run"
+            " WHERE case_id = ? AND status <> ? ORDER BY created_at",
+            (case_id, RunStatus.FINISHED.value),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def flow_state(self, case_id: str) -> workflow.FlowState:
+        """진행 판정의 입력을 **지금 DB 에서** 모은다. 메모리에 진행 상태를 두지 않는다(FR-29)."""
+        case = self.get_case(case_id)
+        stage, _source = self.case_stage(case_id)
+        progress = self.progress_state(case_id) or {}
+        intent = self.intent_state(case_id)
+        latest = intent.get("latest_intent_version")
+        preparation = self.preparation_state(case_id)
+        snapshot = self._candidate_snapshot(case_id) if stage is CaseStage.WORK else None
+        finished = [
+            workflow.finished_summary(dict(r))
+            for r in self.conn.execute(
+                "SELECT run_id, purpose, task_id, status, outcome FROM run"
+                " WHERE case_id = ? AND status = ? ORDER BY created_at",
+                (case_id, RunStatus.FINISHED.value),
+            ).fetchall()
+        ]
+        repos = self.code_repository_choices(case_id)
+        if not repos:
+            # 선택 기록이 없고 등록 저장소가 하나뿐이면 암묵 단일 저장소다(P3-R2 규칙 그대로).
+            registered = self.list_project_repositories(case["project_id"])
+            project = self.get_project(case["project_id"])
+            selections = self.conn.execute(
+                "SELECT COUNT(*) AS n FROM case_repository WHERE case_id = ? AND state = ?",
+                (case_id, PolicyState.CURRENT.value),
+            ).fetchone()["n"]
+            if not selections and len(registered) == 1 and (
+                project.get("journal_repository_id") != registered[0]["id"]
+            ):
+                repos = [{"id": registered[0]["id"], "name": registered[0]["name"]}]
+        workspaces = {
+            r["id"]: self.workspace_state(case_id, r["id"]) for r in repos
+        }
+        gate = self.gate_state(case_id)
+        # 완료된 독립 검토 실행이 있는데 그 판정이 아직 붙지 않았는가(검토 보고는 결과 보고 뒤에 온다).
+        review_pending = False
+        if latest is not None:
+            reviews = [
+                r for r in finished
+                if r["purpose"] == RunPurpose.INTENT_GATE_REVIEW.value
+                and r["outcome"] == RunOutcome.COMPLETED.value
+            ]
+            if reviews:
+                newest = reviews[-1]["run_id"]
+                target = self.intent_version_for_artifact(
+                    *self._instruction_of(newest)
+                )
+                review_pending = bool(
+                    target is not None
+                    and target["id"] == latest["id"]
+                    and gate.get("ai_run_id") != newest
+                )
+        return workflow.FlowState(
+            case_id=case_id,
+            closed=self.case_is_closed(case_id),
+            stage=stage.value,
+            profile=case.get("profile"),
+            paused=progress.get("state") == workflow.ProgressState.PAUSED,
+            unfinished_runs=self.unfinished_case_runs(case_id),
+            intent=intent,
+            intent_structure_reported=(
+                self._intent_structure_reported(latest["id"]) if latest else False
+            ),
+            answers_after_version=self._answers_after_version(latest) if latest else False,
+            gate=gate,
+            review_pending=review_pending,
+            conformance_required=self.conformance_requirement(case_id)["required_method"],
+            pending_deltas=len(self.pending_material_deltas(case_id)),
+            checkpoint=self.checkpoint_state(case_id),
+            preparation=preparation,
+            completion_mode=self.completion_mode(case_id).value,
+            criteria=self.current_criteria(case_id),
+            unresolved=list(snapshot["unresolved"]) if snapshot else [],
+            unsettled_runs=list(snapshot["unsettled_runs"]) if snapshot else [],
+            candidate=self.current_completion_candidate(case_id),
+            code_repositories=repos,
+            workspaces=workspaces,
+            attempts=dict(progress.get("attempts") or {}),
+            finished_runs=finished,
+        )
+
+    def _instruction_of(self, run_id: str) -> tuple[str, int]:
+        row = self.conn.execute(
+            "SELECT instruction_artifact_id, instruction_artifact_rev FROM run WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        return (row["instruction_artifact_id"], row["instruction_artifact_rev"])
+
+    def progress_run_inputs(self, case_id: str) -> dict[str, Any]:
+        """진행기가 실행을 만들 때 쓰는 것: 업무 요청 원문·소유 PC·도구. **본문 없음.**"""
+        work_start = self.get_work_start(case_id)
+        if work_start is None:
+            raise ConflictError("the case has not started work")
+        message = self.get_message(work_start["request_message_id"])
+        ref = self.get_artifact_ref(message["artifact_id"], message["artifact_rev"])
+        case = self.get_case(case_id)
+        project = self.get_project(case["project_id"])
+        runner_id = ref["owner_runner_id"]
+        tool = self.reply_tool(runner_id, project["default_tool_id"]) if runner_id else None
+        return {
+            "work_request": (message["artifact_id"], message["artifact_rev"]),
+            "runner_id": runner_id,
+            "default_tool_id": project["default_tool_id"],
+            "tool": tool,
+        }
+
+    def gate_findings_for_assignment(self, case_id: str) -> list[dict[str, Any]]:
+        """최신 의도 버전의 QG-01 지적(구조 목록). 통과했으면 빈 목록. **본문 없음.**"""
+        gate = self.gate_state(case_id)
+        if gate.get("verdict") == GateVerdict.PASS.value:
+            return []
+        return [
+            {
+                "criterion": f.get("criterion"),
+                "severity": f.get("severity"),
+                "certainty": f.get("certainty"),
+                "target": f.get("target"),
+                "summary": f.get("summary"),
+            }
+            for f in gate.get("findings") or []
+        ]
+
+    def task_for_assignment(self, case_id: str, task_key: str) -> dict[str, Any] | None:
+        """배정에 싣는 Task 요약(짧은 요약·완료 조건·저장소·연결 기준). 그래프에 없으면 `None`."""
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return None
+        tasks = {t["task_key"]: t for t in self._graph_tasks(graph["id"])}
+        task = tasks.get(task_key)
+        if task is None:
+            return None
+        by_id = {c["id"]: c for c in self.current_criteria(case_id)}
+        criteria = []
+        for link in task.get("criteria") or []:
+            crit = by_id.get(link["criterion_id"])
+            if crit is None:
+                continue
+            criteria.append(
+                {
+                    "key": crit["criterion_key"],
+                    "relation": link["relation"],
+                    "summary": crit.get("summary"),
+                    "method_summary": crit.get("method_summary"),
+                    "obligation": crit.get("obligation"),
+                }
+            )
+        return {
+            "task_key": task["task_key"],
+            "kind": task["kind"],
+            "summary": task.get("summary"),
+            "deliverable_summary": task.get("deliverable_summary"),
+            "completion_summary": task.get("completion_summary"),
+            "repository_name": task.get("repository_name"),
+            "criteria": criteria,
+        }
+
+    def criteria_for_assignment(self, case_id: str) -> list[dict[str, Any]]:
+        """조사 Profile 의 분석 실행에 싣는 현재 기준 목록(키·요약·의무·결론 요구)."""
+        return [
+            {
+                "key": c["criterion_key"],
+                "summary": c.get("summary"),
+                "method_summary": c.get("method_summary"),
+                "obligation": c.get("obligation"),
+                "conclusion_rule": c.get("conclusion_rule"),
+            }
+            for c in self.current_criteria(case_id)
+        ]
+
+    # ------------------------------------------------------------- 기준 보고
+
+    def _product_change_observed(self, case_id: str) -> bool:
+        rows = self.conn.execute(
+            "SELECT workspace_effect_json FROM run WHERE case_id = ? AND purpose = ?"
+            " AND outcome = ?",
+            (case_id, RunPurpose.FEATURE_IMPLEMENTATION.value, RunOutcome.COMPLETED.value),
+        ).fetchall()
+        for row in rows:
+            effect = json.loads(row["workspace_effect_json"]) if row["workspace_effect_json"] else None
+            if effect and effect.get("changed"):
+                return True
+        return False
+
+    def _verifies_links(self, case_id: str, task_key: str) -> set[str] | None:
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return None
+        rows = self.conn.execute(
+            "SELECT criterion_id FROM task_criterion WHERE graph_revision_id = ? AND task_key = ?"
+            " AND relation = ?",
+            (graph["id"], task_key, TaskRelation.VERIFIES.value),
+        ).fetchall()
+        return {r["criterion_id"] for r in rows}
+
+    def apply_criteria_report(self, run_id: str) -> list[dict[str, Any]]:
+        """실행이 보고한 기준별 판정을 **한 번** 구조 검사로 걸러 적는다(P4-05 plan 3.4).
+
+        이미 이 실행을 근거로 적힌 기준은 다시 적지 않는다(멱등). 거부된 보고는 적지 않고
+        사유를 돌려준다 — 진행 이력이 그것을 남긴다.
+        """
+        run = self.get_run(run_id)
+        raw = run.get("criteria_report_json")
+        report = workflow.parse_criteria_report(json.loads(raw)) if raw else []
+        if not report:
+            return []
+        case_id = run["case_id"]
+        if self.case_is_closed(case_id):
+            return [{"key": r["key"], "recorded": False, "reason": "case_closed"} for r in report]
+        criteria = self.current_criteria(case_id)
+        already = {
+            c["id"]
+            for c in criteria
+            if c.get("evidence_run_id") == run_id and c.get("verdict") is not None
+        }
+        purpose = run.get("purpose")
+        investigation = (
+            purpose == RunPurpose.LIMITED_ANALYSIS.value
+            and progression.purpose_outside_objective(
+                RunPurpose.FEATURE_IMPLEMENTATION, self.get_case(case_id).get("profile"), False
+            )
+        )
+        linked = None if investigation else self._verifies_links(case_id, run["task_id"])
+        if not investigation and linked is None:
+            # 그래프가 없는 제품 변경 Case 의 실행이 기준을 보고했다. 연결을 모르면 적지 않는다.
+            linked = set()
+        decisions = workflow.decide_criteria(
+            report=report,
+            run=run,
+            commands=self.list_run_commands(run_id),
+            criteria=criteria,
+            linked_ids=linked,
+            product_change_observed=self._product_change_observed(case_id),
+            contract_applies=self.completion_contract(case_id) is not None,
+        )
+        composition = None
+        if any(d.record for d in decisions) and self.list_workspaces(case_id):
+            try:
+                composition = self.build_code_composition(case_id)
+            except (ConflictError, NotFoundError):
+                composition = None
+        out: list[dict[str, Any]] = []
+        for decision in decisions:
+            item: dict[str, Any] = {
+                "key": decision.key,
+                "criterion_id": decision.criterion_id,
+                "recorded": False,
+                "reason": decision.reason,
+            }
+            if decision.record and decision.criterion_id in already:
+                item["reason"] = "already_recorded_from_this_run"
+                out.append(item)
+                continue
+            if decision.record:
+                try:
+                    self.record_criterion_result(
+                        decision.criterion_id,
+                        CriterionVerdict(decision.verdict),
+                        decision.summary,
+                        workflow.CRITERIA_RECORDER,
+                        EvidenceKind.RUN_OUTPUT,
+                        evidence_run_id=run_id,
+                        composition_id=composition["id"] if composition else None,
+                        satisfaction=(
+                            Satisfaction(decision.satisfaction) if decision.satisfaction else None
+                        ),
+                        conclusion=Conclusion(decision.conclusion) if decision.conclusion else None,
+                    )
+                    item["recorded"] = True
+                    item["verdict"] = decision.verdict
+                    item["reason"] = None
+                except (ConflictError, NotFoundError) as exc:
+                    item["reason"] = f"refused: {exc}"[:200]
+            out.append(item)
+        return out
+
+    # ------------------------------------------------------------- 후속 Case
+
+    def create_successor_conversation(
+        self,
+        from_case_id: str,
+        message_id: str,
+        *,
+        actor: str,
+        reason_summary: str,
+    ) -> dict[str, Any]:
+        """종료 Case 의 수정 요청 메시지를 **연결된 새 대화**로 옮긴다(D-33·D-78).
+
+        새 Case 는 준비 단계이며 이전 동의·권한·Profile 을 승계하지 않는다. 그 메시지를 새 Case 의
+        첫 메시지로 **옮겨 적고**(같은 원문 참조·같은 접수) 새 요청을 연다 — 처리기가 거기서
+        논의 응답을 만들고 기존 규칙대로 해석·업무화한다. 원래 Case 의 메시지·응답은 그대로다.
+        """
+        origin = self.get_case(from_case_id)
+        if not self.case_is_closed(from_case_id):
+            raise ConflictError("a follow-up conversation is created from a closed case")
+        message = self.get_message(message_id)
+        if message["case_id"] != from_case_id or message["author"] != MessageAuthor.USER.value:
+            raise ConflictError("the follow-up request must be a user message of the closed case")
+        if message["receipt"] != MessageReceipt.STORED.value:
+            raise ConflictError("the follow-up request has not been stored on the PC")
+        new_case = self.create_conversation(
+            origin["project_id"], f"{origin['title']} · 후속"[:200]
+        )
+        new_case_id = new_case["id"]
+        new_message_id = ids.new_id("msg")
+        request_id = ids.new_id("req")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO case_relation"
+                " (id, from_case_id, to_case_id, relation, reason_summary, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("rel"),
+                    from_case_id,
+                    new_case_id,
+                    CaseRelationKind.FOLLOW_UP_CHANGE.value,
+                    _summary(reason_summary),
+                    now,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO conversation_request"
+                " (id, case_id, opened_by_message_id, origin, origin_ref, state, opened_at)"
+                " VALUES (?, ?, ?, 'user_message', ?, ?, ?)",
+                (request_id, new_case_id, new_message_id, message_id[:120], RequestState.PROCESSING.value, now),
+            )
+            self.conn.execute(
+                "INSERT INTO conversation_message"
+                " (id, case_id, seq, author, message_kind, actor, client_message_id,"
+                "  artifact_id, artifact_rev, content_hash, intake_id, request_id,"
+                "  corrects_message_id, question_id, question_intent_version_id,"
+                "  run_id, summary, created_at)"
+                " VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, ?, ?)",
+                (
+                    new_message_id,
+                    new_case_id,
+                    MessageAuthor.USER.value,
+                    MessageKind.GENERAL.value,
+                    message["actor"],
+                    message["client_message_id"],
+                    message["artifact_id"],
+                    message["artifact_rev"],
+                    message["content_hash"],
+                    message["intake_id"],
+                    request_id,
+                    _summary(f"{message['summary']} (종료 업무에서 옮김)"),
+                    now,
+                ),
+            )
+            for ref in message.get("references") or []:
+                self.conn.execute(
+                    "INSERT INTO conversation_message_ref"
+                    " (message_id, ordinal, ref_kind, artifact_id, artifact_rev, artifact_hash,"
+                    "  repository_id, path, location, observed_hash)"
+                    " SELECT ?, ordinal, ref_kind, artifact_id, artifact_rev, artifact_hash,"
+                    "  repository_id, path, location, observed_hash FROM conversation_message_ref"
+                    " WHERE message_id = ? AND ordinal = ?",
+                    (new_message_id, message_id, ref["ordinal"]),
+                )
+        view = self.conversation_view(new_case_id)
+        view["moved_message_id"] = new_message_id
+        view["request_id"] = request_id
+        return view
+
+    def case_relations_view(self, case_id: str) -> list[dict[str, Any]]:
+        """이 Case 와 연결된 Case(이전·후속). 화면의 이동 카드가 쓴다."""
+        out = []
+        for rel in self.list_case_relations(case_id):
+            other_id = rel["to_case_id"] if rel["from_case_id"] == case_id else rel["from_case_id"]
+            try:
+                other = self.get_case(other_id)
+            except NotFoundError:
+                continue
+            out.append(
+                {
+                    "relation": rel["relation"],
+                    "direction": "successor" if rel["from_case_id"] == case_id else "predecessor",
+                    "case_id": other_id,
+                    "title": other["title"],
+                    "status": other["status"],
+                    "reason_summary": rel["reason_summary"],
+                    "created_at": rel["created_at"],
+                }
+            )
+        return out
+
+    # ------------------------------------------------------------- 종료 snapshot
+
+    def closure_snapshot(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT snapshot_json FROM closure_record WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if row is None or not row["snapshot_json"]:
+            return None
+        return json.loads(row["snapshot_json"])
+
+    def _closure_snapshot_payload(self, case_id: str, now: str) -> str:
+        """종료 시점의 소비·한도(D-87). 한도 판정값(`exposure`)과 현재 한도만 담는다."""
+        exposure = self._metric_exposure(case_id, now)
+        limits = [
+            {
+                "metric": row["metric"],
+                "threshold_kind": row["threshold_kind"],
+                "limit_value": row["limit_value"],
+                "revision": row["revision"],
+            }
+            for row in self.conn.execute(
+                "SELECT metric, threshold_kind, limit_value, revision FROM budget_setting"
+                " WHERE case_id = ? AND state = ? ORDER BY revision",
+                (case_id, PolicyState.CURRENT.value),
+            ).fetchall()
+        ]
+        payload = {
+            "at": now,
+            "usage": {
+                metric: {"exposure": item.get("exposure"), "complete": item.get("complete")}
+                for metric, item in exposure.items()
+            },
+            "limits": limits,
+        }
+        return json.dumps(payload, ensure_ascii=False)[:4000]

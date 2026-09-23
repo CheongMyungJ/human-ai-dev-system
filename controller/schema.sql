@@ -1507,8 +1507,14 @@ CREATE TABLE IF NOT EXISTS conversation_request (
     id                   TEXT PRIMARY KEY,
     case_id              TEXT NOT NULL REFERENCES "case"(id),
     -- 요청을 연 메시지. 메시지도 이 요청을 가리키므로 순환하고, 그래서 지연 검사다.
-    opened_by_message_id TEXT NOT NULL
+    -- **v20(P4-05)부터 NULL 일 수 있다** — 사람의 결정(동의·확인) 뒤 시스템이 여는 **진행
+    -- 요청**은 여는 메시지가 없다. 그 요청의 출처는 `origin`·`origin_ref` 에 있다.
+    opened_by_message_id TEXT
         REFERENCES conversation_message(id) DEFERRABLE INITIALLY DEFERRED,
+    -- v20. 누가 열었는가: 사용자 메시지 / 사람의 결정 뒤 시스템 / 사람의 재개 뒤 시스템.
+    origin               TEXT NOT NULL DEFAULT 'user_message'
+        CHECK (origin IN ('user_message', 'human_decision', 'system_resume')),
+    origin_ref           TEXT CHECK (origin_ref IS NULL OR length(origin_ref) <= 120),
     state                TEXT NOT NULL
         CHECK (state IN ('processing', 'completed', 'failed', 'unknown', 'interrupted')),
     opened_at            TEXT NOT NULL,
@@ -1724,3 +1730,63 @@ CREATE TABLE IF NOT EXISTS conversation_interpretation (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_interpretation_case
     ON conversation_interpretation(case_id, recorded_at);
+
+-- ===================================================================
+-- 스키마 v20 (P4-05) — 업무 단계 자동 진행·완료·예외·후속
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.** 진행기가
+-- 남기는 것은 걸음·사유 코드·실행·요청 식별자와 짧은 설명뿐이다.
+--
+-- `conversation_request` 는 여는 메시지가 없는 **진행 요청**을 받도록 db.py 가 다시 만든다
+-- (`opened_by_message_id` NULL 허용, `origin`·`origin_ref`). 옛 행은 전부 `user_message` 다.
+-- `run` 에는 검증·분석 실행의 **기준 보고**(`criteria_report_json`), `closure_record` 에는
+-- 종료 시점의 소비·한도 snapshot(`snapshot_json`)이 붙는다.
+--
+-- 옛 Case 에는 진행 행을 만들지 않는다. 진행기는 업무화 때 행을 만든 Case 만 잇는다 —
+-- 관리 화면·API 로 만든 Case 는 그대로 사람·하네스가 진행한다.
+-- ===================================================================
+
+-- Case 의 진행 상태. **Case 당 한 행**이며 현재 걸음·대기 사유·진행 요청·시도 수를 갖는다.
+CREATE TABLE IF NOT EXISTS case_progress (
+    case_id        TEXT PRIMARY KEY REFERENCES "case"(id),
+    state          TEXT NOT NULL
+                   CHECK (state IN ('running', 'waiting_human', 'blocked', 'paused', 'done')),
+    step           TEXT NOT NULL,
+    step_detail    TEXT,
+    -- 사람이 해야 할 일·막은 것의 코드와 대상(id·해시). 본문 없음.
+    wait_json      TEXT NOT NULL DEFAULT '[]',
+    request_id     TEXT REFERENCES conversation_request(id),
+    last_run_id    TEXT REFERENCES run(run_id),
+    -- 재작성·재시도 상한을 세는 키 → 수.
+    attempts_json  TEXT NOT NULL DEFAULT '{}',
+    paused_at      TEXT,
+    paused_by      TEXT,
+    started_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    CHECK (length(step) <= 120),
+    CHECK (step_detail IS NULL OR length(step_detail) <= 200),
+    CHECK (length(wait_json) <= 4000),
+    CHECK (length(attempts_json) <= 2000),
+    CHECK ((state = 'paused') = (paused_at IS NOT NULL))
+);
+
+-- 진행 이력. 걸음마다 한 줄 — 무엇을 왜 만들었고 어디서 멈췄는가.
+CREATE TABLE IF NOT EXISTS case_progress_event (
+    id          TEXT PRIMARY KEY,
+    case_id     TEXT NOT NULL REFERENCES "case"(id),
+    seq         INTEGER NOT NULL,
+    at          TEXT NOT NULL,
+    step        TEXT NOT NULL,
+    action      TEXT NOT NULL,
+    run_id      TEXT REFERENCES run(run_id),
+    request_id  TEXT REFERENCES conversation_request(id),
+    detail      TEXT,
+    codes_json  TEXT,
+    UNIQUE (case_id, seq),
+    CHECK (length(step) <= 120),
+    CHECK (length(action) <= 64),
+    CHECK (detail IS NULL OR length(detail) <= 200),
+    CHECK (codes_json IS NULL OR length(codes_json) <= 1000)
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_progress_event_case ON case_progress_event(case_id, seq);

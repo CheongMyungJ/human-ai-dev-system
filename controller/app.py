@@ -21,6 +21,7 @@ from controller.config import ControllerConfig, load_config
 from controller.relay import RelayBuffer
 from controller.repository import Repository
 from controller.request_processor import RequestProcessor
+from controller.work_progressor import WorkProgressor
 
 LOGGER_NAME = "hads.controller"
 
@@ -78,17 +79,27 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
             runner_stale_seconds=config.runner_stale_seconds,
             auto_process_requests=config.auto_process_requests,
         )
-        processed = RequestProcessor(repo, enabled=config.auto_process_requests).recover()
+        progressor = WorkProgressor(repo, enabled=config.progress_enabled)
+        processed = RequestProcessor(
+            repo, enabled=config.auto_process_requests, progressor=progressor
+        ).recover()
+        # P4-05. **업무 단계 진행에서 빠진 걸음을 잇는다.** 요청이 끝나 있으면 스스로 재개하지 않고
+        # 멈춤으로 표시한다 — 사람이 계속 진행을 누른다(D-76).
+        progressed = progressor.recover()
 
         app.state.logger.info(
             "startup db=%s lost_pending_intakes=%d expired_read_requests=%d"
-            " auto_process_requests=%s requests_started=%d requests_finished=%d",
+            " auto_process_requests=%s auto_progress_work=%s requests_started=%d"
+            " requests_finished=%d progress_advanced=%d progress_paused=%d",
             config.db_path,
             recovered,
             expired,
             config.auto_process_requests,
+            config.progress_enabled,
             processed["started"],
             processed["finished"],
+            progressed["advanced"],
+            progressed["paused"],
         )
         try:
             yield

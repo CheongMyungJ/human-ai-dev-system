@@ -264,6 +264,24 @@ LIMITED_ANALYSIS_PROMPT = """당신은 동의된 의도에 따라 **읽기 전�
 --- 지시 원문 ---
 """
 
+#: P4-05. 조사 Profile(원인 분석·조사)의 분석 실행이 **기준별 결론**을 보고하는 규칙. 배정에
+#: 기준 목록이 실렸을 때만 붙는다. 결론은 확정(determined)과 판단 불가(inconclusive)를 나눈다 —
+#: 판단 불가를 확정으로 적지 않는다(P4-03 결론 요구).
+ANALYSIS_REPORT_RULE = """
+분석을 글로 답한 뒤 **맨 끝에** 아래 형태의 JSON 블록 하나를 둔다(```json 울타리). 시스템이
+읽는 것은 이 블록뿐이고 글은 사람이 읽는다.
+
+기준마다 verdict(met / not_met / unverified)와 conclusion(determined / inconclusive)과 근거
+한 줄(summary)을 적는다. **원인·답을 확정했을 때만 determined** 이고, 조사를 마쳤지만 확정하지
+못했으면 inconclusive 다. 조사하지 못한 기준은 unverified 다. 목록에 없는 기준을 지어내지 마라.
+
+```json
+{"criteria": [
+  {"key": "C-01", "verdict": "met", "conclusion": "determined", "summary": "근거 한 줄"}
+]}
+```
+"""
+
 #: UI-01. 대화의 **논의 응답**(D-69·D-70). 목표·Profile 이 정해지기 전에도 쓰인다.
 #:
 #: **이 실행은 아무 것도 바꾸지 않는다.** 그런데 AI 가 "고쳤습니다"라고 말하면 사람은
@@ -581,6 +599,12 @@ VERIFICATION_RUN_PROMPT = """당신은 이 업무의 **검증 작업**을 수행
 4. 제품 코드를 고치지 마라. 수정은 별도 구현 작업이다.
 5. 명령을 하나도 실행하지 못했으면 commands 를 빈 목록으로 두고 result_summary 에
    이유를 적는다. 시스템은 명령 기록이 없는 검증을 완료로 인정하지 않는다.
+6. 아래 "이 실행의 작업" 에 **확인할 기준**이 있으면 기준마다 criteria 에 판정을 적는다.
+   verdict 는 met / not_met / unverified 다. **실제로 실행한 명령이 그 기준을 확인했을
+   때만 met** 이고, 확인하지 못했으면(명령이 돌지 않았거나 그 기준을 보지 않았으면)
+   unverified 다. 실패한 확인은 not_met 이다. summary 는 그 판정의 근거 한 줄이다.
+   목록에 없는 기준을 지어내지 마라. 시스템이 이 판정을 구조 검사(완료 실행·성공한 명령·
+   기준 연결)로 거른 뒤 기록한다 — 판정을 부풀려도 기록되지 않는다.
 
 출력은 이 형태의 JSON **하나만** 낸다.
 
@@ -589,6 +613,9 @@ VERIFICATION_RUN_PROMPT = """당신은 이 업무의 **검증 작업**을 수행
     {"command": "실행한 명령", "summary": "짧은 한 줄", "exit_code": 0}
   ],
   "result_summary": "무엇을 확인했고 어떻게 끝났는가 (짧은 한 줄)",
+  "criteria": [
+    {"key": "C-01", "verdict": "met", "summary": "어떤 명령·결과가 이 기준을 확인했는가"}
+  ],
   "detail": "결과의 서술"
 }
 
@@ -708,6 +735,92 @@ STAGE_PROMPT = {
 
 
 
+def build_task_block(task: dict[str, Any] | None, criteria: list[dict[str, Any]] | None) -> str:
+    """P4-05. **이 실행의 작업** — 제어부가 준 Task 요약·완료 조건·확인할 기준.
+
+    지시 원문은 사용자의 업무 요청 전체이므로, 이 실행이 그 중 **어느 작업만** 하는지를 여기서
+    말한다. 하네스가 지시 본문에 적던 것을 구조로 받는다 — 제어부는 본문을 만들지 않는다.
+    """
+    lines: list[str] = []
+    if task:
+        lines.append("\n--- 이 실행의 작업 ---")
+        lines.append(
+            "위 지시 원문은 사용자의 업무 요청 전체다. **이 실행은 아래 작업 하나만 한다.**"
+            " 다른 작업은 다른 실행이 한다 — 여기서 미리 해 두지 마라."
+        )
+        lines.append(f"작업 {task.get('task_key')} ({task.get('kind')}): {task.get('summary') or ''}")
+        if task.get("deliverable_summary"):
+            lines.append(f"산출물: {task['deliverable_summary']}")
+        if task.get("completion_summary"):
+            lines.append(f"완료 조건: {task['completion_summary']}")
+        if task.get("repository_name"):
+            lines.append(
+                f"지금 작업 디렉터리는 `{task['repository_name']}` 저장소다."
+                " 다른 저장소의 파일은 여기 없다."
+            )
+        linked = task.get("criteria") or []
+        if linked:
+            lines.append("이 작업에 연결된 성공 기준:")
+            for crit in linked:
+                lines.append(
+                    f"  - {crit.get('key')} [{crit.get('relation')}] {crit.get('summary') or ''}"
+                    + (f" — 확인 방법: {crit['method_summary']}" if crit.get("method_summary") else "")
+                )
+    if criteria:
+        lines.append("\n--- 확인할 성공 기준 ---")
+        for crit in criteria:
+            lines.append(
+                f"  - {crit.get('key')}: {crit.get('summary') or ''}"
+                + (f" — 확인 방법: {crit['method_summary']}" if crit.get("method_summary") else "")
+                + (f" — 의무: {crit['obligation']}" if crit.get("obligation") else "")
+                + (
+                    f" — 결론 요구: {crit['conclusion_rule']}"
+                    if crit.get("conclusion_rule")
+                    else ""
+                )
+            )
+    return ("\n".join(lines) + "\n") if lines else ""
+
+
+def build_findings_block(findings: list[dict[str, Any]] | None) -> str:
+    """P4-05. 의도 재작성 실행에 주는 **QG-01 의 지적**(구조 목록, 본문 없음)."""
+    if not findings:
+        return ""
+    lines = [
+        "\n--- 요청 정합성 확인(QG-01)의 지적 ---",
+        "이 실행은 아래 지적을 고치는 **재작성**이다. 고정 컨텍스트의 직전 초안을 유지하고 지적된"
+        " 곳만 고친다. 요청 원문의 범위를 넘지 마라.",
+    ]
+    for f in findings:
+        lines.append(
+            f"  - [{f.get('criterion')}/{f.get('severity')}/{f.get('certainty')}]"
+            f" {f.get('target') or ''}: {f.get('summary') or ''}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+#: P4-05. **종료된 업무**의 논의 응답 규칙(D-87·D-33). 설명만 하고, 수정·추가 개발 요청은 해석
+#: 블록으로 보고한다 — 시스템이 연결된 새 대화로 옮긴다.
+CLOSED_CASE_RULE = """이 업무는 **이미 종료됐다.** 고정 컨텍스트의 기존 결과·근거·대화를 읽어
+사용자의 질문에 **설명만** 한다. 이 실행은 아무 것도 바꾸지 않으며 완료 판정·기준·근거도
+바뀌지 않는다. 답 글을 다 쓴 뒤 맨 끝에 시스템이 읽는 블록을 **정확히 하나** 붙인다.
+
+```hads-interpretation
+{"kind": "discussion"}
+```
+
+사용자의 **마지막 메시지**가 기존 결과의 설명이 아니라 **실제 수정·추가 개발·새 조사를
+명시적으로 요청**할 때만 kind 를 "work_request" 로 하고 profile 을 아래 여섯 중 하나로 적는다.
+그러면 시스템이 그 요청을 **연결된 새 대화**로 옮긴다 — 이 종료된 업무를 다시 열지 않는다.
+글에는 새 대화로 옮겨진다는 사실을 짧게 적는다.
+
+  feature / defect_fix / root_cause_analysis / research / refactoring / maintenance
+
+애매하면 "discussion" 으로 두고 글에서 무엇을 원하는지 묻는다.
+
+"""
+
+
 def _repository_rule(repositories: list[dict[str, Any]] | None) -> str:
     """계획이 Task 마다 저장소를 적게 하는 규칙(P3-04).
 
@@ -753,8 +866,12 @@ def build(
     stage_hint: str | None = None,
     repositories: list[dict[str, Any]] | None = None,
     conversation_stage: str | None = None,
+    task: dict[str, Any] | None = None,
+    criteria: list[dict[str, Any]] | None = None,
+    gate_findings: list[dict[str, Any]] | None = None,
+    closed_case: bool = False,
 ) -> str:
-    """목적별 지시문 + 고정 컨텍스트 + 지시 원문.
+    """목적별 지시문 + 고정 컨텍스트 + 지시 원문 (+ 이 실행의 작업·지적, P4-05).
 
     `conversation_stage` 는 **제어부가 정한** 대화 단계다(UI-03). 준비 단계의 논의 응답에만
     해석 규칙을 붙인다 — 업무 단계 응답의 해석은 쓰이지 않는다.
@@ -802,8 +919,22 @@ def build(
         head = head.replace(
             DISCUSSION_REPLY_TAIL, DISCUSSION_INTERPRETATION_RULE + DISCUSSION_REPLY_TAIL
         )
-    return head + build_context_block(context or []) + instruction.decode(
-        "utf-8", errors="replace"
+    elif purpose == "discussion_reply" and closed_case:
+        # P4-05. 종료된 업무의 설명 응답. 준비 단계 규칙과 같은 자리에 종료 규칙이 들어간다.
+        if DISCUSSION_REPLY_TAIL not in head:
+            raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
+        head = head.replace(DISCUSSION_REPLY_TAIL, CLOSED_CASE_RULE + DISCUSSION_REPLY_TAIL)
+    if purpose == "limited_analysis" and criteria:
+        head = head.replace("--- 지시 원문 ---\n", ANALYSIS_REPORT_RULE + "\n--- 지시 원문 ---\n")
+    if purpose == "intent_authoring" and gate_findings:
+        head = head.replace(
+            "--- 요청 원문 ---\n", build_findings_block(gate_findings) + "\n--- 요청 원문 ---\n"
+        )
+    return (
+        head
+        + build_context_block(context or [])
+        + instruction.decode("utf-8", errors="replace")
+        + build_task_block(task, criteria)
     )
 
 
@@ -1187,7 +1318,43 @@ def parse_verification(text: str) -> dict[str, Any]:
     return {
         "commands": commands,
         "result_summary": " ".join(str(data.get("result_summary") or "").split())[:MAX_SUMMARY],
+        # P4-05. 기준별 판정. 없으면 빈 목록 — 시스템이 채우지 않는다.
+        "criteria": parse_criteria_items(data),
     }
+
+
+def parse_criteria_items(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """응답의 `criteria` 를 읽는다(P4-05). **모르는 값은 버린다** — 지어내지 않는다."""
+    out: list[dict[str, Any]] = []
+    for raw in data.get("criteria") or []:
+        if not isinstance(raw, dict):
+            continue
+        key = " ".join(str(raw.get("key") or "").split())
+        verdict = str(raw.get("verdict") or "").strip()
+        if not key or verdict not in ("met", "not_met", "unverified"):
+            continue
+        item: dict[str, Any] = {"key": key[:64], "verdict": verdict}
+        conclusion = raw.get("conclusion")
+        if conclusion in ("determined", "inconclusive"):
+            item["conclusion"] = conclusion
+        summary = " ".join(str(raw.get("summary") or "").split())
+        if summary:
+            item["summary"] = summary[:MAX_SUMMARY]
+        out.append(item)
+    return out
+
+
+def parse_analysis_report(text: str) -> list[dict[str, Any]]:
+    """분석 응답 끝의 기준 보고 블록을 읽는다(P4-05). 없거나 틀리면 **빈 목록**이다.
+
+    분석의 산출물은 글이다 — 블록이 없다고 실행을 실패로 만들지 않는다. 기준은 `unverified`
+    로 남고 사람이 본다.
+    """
+    try:
+        data = extract_json(text)
+    except ValueError:
+        return []
+    return parse_criteria_items(data)
 
 
 def parse_experiment(text: str) -> dict[str, Any]:

@@ -305,9 +305,14 @@ def test_a_conversation_gets_answered_locks_while_processing_and_starts_work(sta
     _send(page, "HADS_FAKE_WORK=research 서버 로그를 분석해서 개선안을 정리해줘")
     expect(page.locator('[data-testid="work-start-card"]')).to_contain_text("조사·연구", timeout=40_000)
     expect(page.locator('[data-testid="stage-label"]')).to_contain_text("업무 · 조사·연구")
+    # P4-05. 업무화 뒤 진행기가 첫 걸음(의도 초안)을 같은 요청에 만든다 — 배너가 진행 상태를 보인다.
     banner = page.locator('[data-testid="work-stage-banner"]')
-    expect(banner).to_contain_text("아직 자동으로 진행하지")
-    assert "view=admin" in banner.locator("a").get_attribute("href")
+    expect(banner).to_have_attribute("data-progress", "running", timeout=20_000)
+    assert "view=admin" in banner.locator("a").last.get_attribute("href")
+    # 가짜 codex 의 초안에는 의도 질문 하나가 있다 → 질문 카드에서 멈추고 전송이 열린다.
+    expect(page.locator('[data-testid="question-cards"]')).to_have_count(1, timeout=60_000)
+    expect(banner).to_have_attribute("data-progress", "waiting_human", timeout=20_000)
+    expect(page.locator('[data-testid="send-refusal"]')).to_have_count(0)  # 전송이 열렸다(입력은 비어 있다)
 
     # 중단은 요청이다 — 실제 종료를 서버가 확인하면 전송이 열린다.
     _send(page, "HADS_FAKE_SLEEP=40 오래 걸리는 질문")
@@ -518,4 +523,108 @@ def test_a_disconnected_pc_keeps_what_was_loaded_and_sends_nothing(stack):
     expect(fresh.locator('[data-testid="send-button"]')).to_be_enabled(timeout=20_000)
     assert fresh.input_value('[data-testid="composer-input"]') == "끊긴 동안 쓴 말"
     assert len(_messages(stack, case_id)) == 2  # 재연결 뒤 자동 전송 없음
+    page.context.close()
+
+
+# ================================================== P4-05 AC-19 업무 단계 자동 진행·확인 카드·종료 후
+
+
+def _progress_state(stack: Stack, case_id: str) -> str | None:
+    progress = stack.http.get(f"/api/cases/{case_id}/conversation").json()["progress"]
+    return progress["state"] if progress else None
+
+
+def test_the_work_stage_runs_by_itself_and_stops_only_at_the_cards(stack):
+    """P4-05 AC-19 — 업무화 뒤 제품이 잇는다. 사람은 질문 카드·동의 카드에서만 부르고, 완료 뒤
+    설명은 같은 대화에서, 수정 요청은 연결된 새 대화로 옮겨진다.
+    """
+    project = stack.project("자동 진행")
+    # 실제 git 저장소 — 작업공간(worktree)·실행 전후 대조가 진짜 파일을 본다.
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature 오류 줄만 남기는 필터를 구현해줘")
+    banner = page.locator('[data-testid="work-stage-banner"]')
+    # 업무화 → 의도 초안(같은 요청, 전송 잠금) → 질문 카드에서 멈춤(전송 열림).
+    expect(page.locator('[data-testid="work-start-card"]')).to_be_visible(timeout=40_000)
+    expect(page.locator('[data-testid="question-card-q1"]')).to_be_visible(timeout=60_000)
+    expect(banner).to_have_attribute("data-progress", "waiting_human")
+    expect(page.locator('[data-testid="send-refusal"]')).to_have_count(0)  # 전송이 열렸다
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert conv["current_request"] is None
+    assert [r["state"] for r in conv["requests"]] == ["completed"]
+    assert conv["requests"][0]["note_summary"] == "waiting: intent_questions"
+
+    # 카드 답변 → 진행 요청(여는 메시지 없음)이 열리고 답을 반영한 재작성 → 동의 카드.
+    card = page.locator('[data-testid="question-card-q1"]')
+    card.locator("textarea").fill("구분하지 않습니다")
+    card.locator("button", has_text="답변 보내기").click()
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    origins = [r["origin"] for r in conv["requests"]]
+    assert origins[:2] == ["user_message", "human_decision"]
+    assert conv["requests"][1]["opened_by_message_id"] is None
+    assert conv["progress"]["wait"][0]["code"] == "intent_agreement"
+    # 원문을 열기 전에는 동의할 수 없다(서버도 열람 기록을 검사한다).
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_disabled()
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="viewer-body"]')).to_contain_text("오류 줄만", timeout=30_000)
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=10_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    # 동의 뒤 사람 없이 끝까지: 결합 기록 → 작업공간 → 구현 → 검증 → 기준 판정 → 자동 완료.
+    expect(banner).to_have_attribute("data-progress", "done", timeout=120_000)
+    expect(page.locator('[data-testid="stage-label"]')).to_contain_text("종료(closed)")
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    assert case["result"]["closure"]["closure_kind"] == "completed"
+    assert all(c["verdict"] == "met" for c in case["result"]["criteria"])
+    assert all(c["recorded_by"] == "policy:work_progressor" for c in case["result"]["criteria"])
+    purposes = [r["purpose"] for r in reversed(case["runs"])]
+    assert purposes == [
+        "discussion_reply", "intent_authoring", "intent_authoring", "plan_authoring",
+        "feature_implementation", "verification_run",
+    ]
+    assert all(r["request_id"] for r in case["runs"])
+    human = [d for d in case["decisions"] if not d["actor"].startswith("policy:")]
+    assert [d["kind"] for d in human] == ["intent_agreement"]
+    # 진행 이력이 결정 사항 패널에 있다.
+    page.click('[data-testid="open-decisions"]')
+    expect(page.locator('[data-testid="progress-events"]')).to_contain_text("기준 판정 기록")
+    page.click('[data-testid="open-decisions"]')
+
+    # 종료 뒤: 입력창은 설명 전용으로 열린다. 설명 질문은 같은 대화에서 답을 받는다.
+    expect(page.locator('[data-testid="send-note"]')).to_contain_text("설명만")
+    _send(page, "C-01 은 어떻게 확인한 거야?")
+    expect(page.locator('article[data-author="assistant"]').last).to_contain_text("가짜 응답입니다", timeout=60_000)
+    assert stack.http.get(f"/api/cases/{case_id}").json()["status"] == "closed"
+    # 설명 실행의 소비는 같은 Case 에 누적되고 종료 뒤 소비로 나뉜다(정산은 결과 보고와 함께 온다).
+    _wait(
+        lambda: stack.http.get(f"/api/cases/{case_id}/budget").json()["since_closure"]["run_count"] == 1,
+        30,
+        "종료 뒤 소비 1건",
+    )
+    assert stack.http.get(f"/api/cases/{case_id}/conversation").json()["relations"] == []  # 설명은 새 대화를 만들지 않는다
+
+    # 수정 요청 → AI 해석 → 연결된 새 대화로 옮겨진다. 이 대화는 그대로 종료다.
+    _send(page, "HADS_FAKE_WORK=feature 선택한 열만 내보내는 기능도 추가해줘")
+    expect(page.locator('[data-testid="follow-up-card"]')).to_be_visible(timeout=60_000)
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    [relation] = conv["relations"]
+    assert relation["direction"] == "successor"
+    page.click('[data-testid="follow-up-link"]')
+    page.wait_for_selector('[data-testid="predecessor-line"]')
+    assert _case_in_url(page) == relation["case_id"]
+    new_conv = stack.http.get(f"/api/cases/{relation['case_id']}/conversation").json()
+    assert new_conv["messages"][0]["receipt"] == "stored"
+    # 새 대화는 처음부터 잇는다 — 응답·해석·업무화가 다시 일어난다.
+    expect(page.locator('[data-testid="work-start-card"]')).to_be_visible(timeout=60_000)
+    assert stack.http.get(f"/api/cases/{relation['case_id']}/policy").json()["delegation_basis"]["current"] is not None
     page.context.close()

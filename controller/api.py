@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field
 
 from controller.relay import content_hash
 from controller.request_processor import RequestProcessor
+from controller.work_progressor import WorkProgressor
 from controller.repository import (
     AcceptanceRefused,
     ConflictError,
@@ -95,24 +96,44 @@ def _repo(request: Request) -> Repository:
     )
 
 
+def _progressor(request: Request, repo: Repository) -> WorkProgressor:
+    """P4-05. 업무 단계 진행기. 처리기와 같은 설정으로 켜진다."""
+    return WorkProgressor(repo, enabled=request.app.state.config.progress_enabled)
+
+
 def _processor(request: Request, repo: Repository) -> RequestProcessor:
     """UI-03. 요청 처리기. 설정으로 꺼져 있으면 아무 것도 하지 않는다."""
-    return RequestProcessor(repo, enabled=request.app.state.config.auto_process_requests)
+    return RequestProcessor(
+        repo,
+        enabled=request.app.state.config.auto_process_requests,
+        progressor=_progressor(request, repo),
+    )
 
 
-def _after_report(request: Request, step: str, fn: Any, *args: Any) -> None:
+def _after_report(request: Request, step: str, fn: Any, *args: Any, **kwargs: Any) -> None:
     """UI-03. Runner 보고 **뒤에** 처리기를 부른다. 처리기의 실패가 보고를 실패시키지 않는다.
 
     보고는 이미 기록됐다 — 여기서 예외를 올리면 Runner 가 같은 보고를 되풀이하고, 처리기의
     결함 하나가 원문 저장·결과 보고를 막는다. 실패는 로그에 남기고(본문 없음) 요청은 처리
     중으로 남는다. 다음 보고나 제어부 기동 복구가 다시 본다.
+
+    P4-05. 사람의 결정·보고 뒤에 진행기를 부를 때도 같은 경계를 쓴다 — 기록은 이미 됐고 진행기의
+    실패가 그 기록을 되돌리지 않는다.
     """
     try:
-        fn(*args)
+        fn(*args, **kwargs)
     except Exception as exc:  # noqa: BLE001 — 보고 경로를 지키는 경계다
         request.app.state.logger.error(
             "request_processor_error step=%s error=%s", step, type(exc).__name__
         )
+
+
+def _after_human_input(request: Request, repo: Repository, case_id: str, ref: str) -> None:
+    """P4-05. 사람의 결정·답변이 기록된 뒤 진행기가 다음 걸음을 본다."""
+    _after_report(
+        request, f"human_input:{ref}", _progressor(request, repo).on_human_input, case_id,
+        origin_ref=ref,
+    )
 
 
 def _handle(exc: Exception) -> HTTPException:
@@ -302,6 +323,9 @@ class ResultIn(BaseModel):
     #: UI-03. 준비 단계 논의 응답의 **해석**(`{status, kind?, profile?}`). 본문이 아니다 — AI 가
     #: 사용자의 마지막 메시지를 논의로 읽었는지, 어느 Profile 의 업무 요청으로 읽었는지뿐이다.
     interpretation: dict[str, Any] | None = None
+    #: P4-05. 검증·분석 실행의 **기준별 판정**(`[{key, verdict, conclusion?, summary?}]`). 본문이
+    #: 아니다 — 시스템이 구조 검사로 거른 뒤 기록한다.
+    criteria_report: list[dict[str, Any]] | None = None
 
 
 class ExecutingIn(BaseModel):
@@ -841,6 +865,8 @@ def runner_intake_stored(request: Request, intake_id: str, payload: StoredIn) ->
     request.app.state.relay.drop(intake_id)  # 중계 본문은 즉시 버린다
     # UI-03. 요청을 연 메시지가 저장됐으면 처리기가 논의 응답을 만든다(저장 전에는 만들지 않는다).
     _after_report(request, "intake_stored", _processor(request, repo).on_intake_stored, intake)
+    # P4-05. 저장된 것이 사람의 답(카드 답변·질문 답변)이면 진행기가 다음 걸음을 본다.
+    _after_human_input(request, repo, intake["case_id"], f"intake:{intake_id}")
     return intake
 
 
@@ -901,11 +927,21 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             residual_source=payload.residual_source,
             reporter=payload.runner_id,
             interpretation=payload.interpretation,
+            criteria_report=payload.criteria_report,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
-    # UI-03. 요청의 마지막 실행이 끝났으면 처리기가 (해석을 적용하고) 요청을 끝낸다.
+    # P4-05. 검증·분석 실행의 기준 보고를 먼저 적용한다 — 그 다음 걸음이 그 판정을 봐야 한다.
+    _after_report(request, "run_finished_progress", _progressor(request, repo).on_run_finished, run)
+    # UI-03. 요청의 마지막 실행이 끝났으면 처리기가 (해석을 적용하고) 요청을 끝낸다. 업무 단계면
+    # 진행기가 다음 실행을 만들고, 만들었으면 요청은 처리 중으로 남는다(P4-05).
     _after_report(request, "run_finished", _processor(request, repo).on_run_finished, run_id)
+    # P4-05. 진행 요청이 중단·불명으로 끝났으면 진행을 멈춤으로 표시한다(스스로 재개하지 않는다).
+    if run.get("request_id"):
+        _after_report(
+            request, "run_finished_interrupted", _progressor(request, repo).check_request,
+            run["request_id"],
+        )
     return repo.get_run(run_id)
 
 
@@ -1295,6 +1331,8 @@ def agree_to_intent(
         content_hash=payload.content_hash,
         evidence_ref=payload.evidence_ref,
     )
+    # P4-05. 동의는 사람의 결정이다. 그 뒤 진행기가 다음 걸음을 본다(진행 요청을 연다).
+    _after_human_input(request, repo, case_id, f"agreement:{decision['id']}")
     return {"decision": decision, "intent_state": repo.intent_state(case_id)}
 
 
@@ -1407,6 +1445,7 @@ def resolve_feedback(
             resolved = repo.resolve_feedback([], None, {feedback_id: payload.reason or ""})
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"feedback:{feedback_id}")
     return resolved[0]
 
 
@@ -1966,13 +2005,18 @@ def runner_gate_review(request: Request, payload: GateReviewIn) -> dict[str, Any
     """AI 의미 검토 결과를 게이트에 붙인다."""
     repo = _repo(request)
     try:
-        return repo.apply_gate_review(
+        result = repo.apply_gate_review(
             intent_version_id=payload.intent_version_id,
             run_id=payload.run_id,
             raw_findings=payload.findings,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # P4-05. 검토 보고는 결과 보고 **뒤에** 온다 — 그 판정으로 진행기가 다음 걸음을 본다.
+    _after_report(
+        request, "gate_reviewed", _progressor(request, repo).on_gate_reviewed, result["case_id"]
+    )
+    return result
 
 
 # ===================================================================== P2-04
@@ -2138,7 +2182,7 @@ def accept_exception(
         candidate = repo.get_completion_candidate(candidate_id)
         if candidate["case_id"] != case_id:
             raise ConflictError("candidate belongs to another case")
-        return repo.record_exception_decision(
+        decision = repo.record_exception_decision(
             candidate_id=candidate_id,
             target_id=payload.criterion_id,
             scope_summary=payload.scope_summary,
@@ -2146,6 +2190,8 @@ def accept_exception(
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"exception:{decision['id']}")
+    return decision
 
 
 @router.post("/api/cases/{case_id}/completion-candidates/{candidate_id}/acceptance",
@@ -2188,6 +2234,7 @@ def accept_result(
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"acceptance:{acceptance['id']}")
     return {
         "acceptance": acceptance,
         "closure": repo.get_closure(case_id),
@@ -2394,7 +2441,7 @@ def record_stage_review(
         current = repo.current_preparation(case_id, stage)
         if current is None:
             raise ConflictError(f"there is no current {stage.value} artifact to review")
-        return repo.record_stage_review(
+        review = repo.record_stage_review(
             case_id=case_id,
             stage=stage,
             prep_id=current["id"],
@@ -2404,6 +2451,8 @@ def record_stage_review(
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"stage_review:{stage.value}")
+    return review
 
 
 @router.post("/api/cases/{case_id}/stage-auto-proceed/{stage}", status_code=201)
@@ -2742,8 +2791,9 @@ def runner_workspace_requests(request: Request, runner_id: str) -> list[dict[str
 def runner_workspace_ready(
     request: Request, case_id: str, payload: WorkspaceReadyIn
 ) -> dict[str, Any]:
+    repo = _repo(request)
     try:
-        return _repo(request).report_workspace_ready(
+        space = repo.report_workspace_ready(
             case_id=case_id,
             runner_id=payload.runner_id,
             repo_path=payload.repo_path,
@@ -2757,6 +2807,11 @@ def runner_workspace_ready(
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # P4-05. 작업공간이 준비됐으면 진행기가 기다리던 구현·검증을 만든다.
+    _after_report(
+        request, "workspace_ready", _progressor(request, repo).on_workspace_reported, case_id
+    )
+    return space
 
 
 @router.post("/api/runner/workspaces/{case_id}/failed")
@@ -2764,12 +2819,17 @@ def runner_workspace_failed(
     request: Request, case_id: str, payload: WorkspaceFailedIn
 ) -> dict[str, Any]:
     """만들지 못했다. **실패를 준비됨으로 바꾸지 않는다.**"""
+    repo = _repo(request)
     try:
-        return _repo(request).report_workspace_failed(
+        space = repo.report_workspace_failed(
             case_id, payload.runner_id, payload.reason, payload.repository_id
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_report(
+        request, "workspace_failed", _progressor(request, repo).on_workspace_reported, case_id
+    )
+    return space
 
 
 @router.post("/api/runner/runs/{run_id}/commands")
@@ -2981,8 +3041,9 @@ def confirm_checkpoint(
     **이 기록이 권한을 만들지 않는다.** push·게시 허용은 `decisions`, 최종 인수는
     `acceptance` 의 별도 기록이며 이 응답에는 어느 쪽도 들어 있지 않다.
     """
+    repo = _repo(request)
     try:
-        return _repo(request).confirm_checkpoint(
+        points = repo.confirm_checkpoint(
             case_id,
             checkpoint,
             payload.confirmed_by,
@@ -2994,6 +3055,8 @@ def confirm_checkpoint(
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"checkpoint:{checkpoint.value}")
+    return points
 
 
 @router.post(
@@ -3117,12 +3180,15 @@ def confirm_material_delta(
     request: Request, case_id: str, delta_id: str, payload: DeltaConfirmIn
 ) -> dict[str, Any]:
     """사람이 그 변경 한 건을 확인한다. 남은 변경은 그대로 남는다."""
+    repo = _repo(request)
     try:
-        return _repo(request).confirm_material_delta(
+        state = repo.confirm_material_delta(
             delta_id, payload.actor, payload.explicit, payload.note_summary
         )
     except (NotFoundError, ConflictError, PolicyRefused) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"delta:{delta_id}")
+    return state
 
 
 @router.get("/api/cases/{case_id}/budget")
@@ -3141,8 +3207,9 @@ def set_budget(request: Request, case_id: str, payload: BudgetLimitIn) -> dict[s
     **강제할 수 없는 정확한 hard 한도는 거부한다.** 저장해 두면 설정한 사람은 상한이
     있다고 믿는데 시스템은 그것을 지킬 방법이 없다.
     """
+    repo = _repo(request)
     try:
-        return _repo(request).set_budget_limit(
+        state = repo.set_budget_limit(
             case_id,
             payload.metric,
             payload.threshold_kind,
@@ -3152,16 +3219,21 @@ def set_budget(request: Request, case_id: str, payload: BudgetLimitIn) -> dict[s
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"budget:{payload.metric.value}")
+    return state
 
 
 @router.delete("/api/cases/{case_id}/budget/{metric}/{threshold_kind}")
 def clear_budget(
     request: Request, case_id: str, metric: BudgetMetric, threshold_kind: BudgetThreshold
 ) -> dict[str, Any]:
+    repo = _repo(request)
     try:
-        return _repo(request).clear_budget_limit(case_id, metric, threshold_kind)
+        state = repo.clear_budget_limit(case_id, metric, threshold_kind)
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"budget_clear:{metric.value}")
+    return state
 
 
 @router.get("/api/projects/{project_id}/repositories")
@@ -3532,12 +3604,13 @@ def stop_request(
     배정된 실행은 Runner 에 전달한다. 관련 실행이 **실제로 끝난 것을 확인하면** 제어부가
     요청을 `interrupted` 로 끝내 전송을 연다. 확인하지 못하면 `unknown` 으로 잠긴다.
     """
+    repo = _repo(request)
     try:
-        return _repo(request).stop_request(
-            case_id, request_id, actor=payload.actor, reason=payload.reason
-        )
+        view = repo.stop_request(case_id, request_id, actor=payload.actor, reason=payload.reason)
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_report(request, "request_stopped", _progressor(request, repo).check_request, request_id)
+    return view
 
 
 @router.post("/api/cases/{case_id}/requests/{request_id}/reconcile")
@@ -3554,9 +3627,14 @@ def reconcile_request(request: Request, case_id: str, request_id: str) -> dict[s
 
 @router.post("/api/cases/{case_id}/work-start", status_code=201)
 def start_work(request: Request, case_id: str, payload: WorkStartIn) -> dict[str, Any]:
-    """준비 단계 대화를 **같은 Case 에서** 업무로 전환한다(D-69)."""
+    """준비 단계 대화를 **같은 Case 에서** 업무로 전환한다(D-69).
+
+    P4-05. 업무화 뒤 진행기가 첫 걸음(의도 초안)을 만든다 — 그 요청의 응답 실행이 아직 돌고
+    있으면 끝날 때 잇는다.
+    """
+    repo = _repo(request)
     try:
-        return _repo(request).start_work(
+        repo.start_work(
             case_id,
             profile=payload.profile,
             request_message_id=payload.request_message_id,
@@ -3567,6 +3645,47 @@ def start_work(request: Request, case_id: str, payload: WorkStartIn) -> dict[str
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    work = repo.get_work_start(case_id) or {}
+    _after_report(
+        request, "work_started", _progressor(request, repo).on_work_started, case_id,
+        work.get("request_id"),
+    )
+    return repo.conversation_view(case_id)
+
+
+@router.get("/api/cases/{case_id}/progress")
+def get_progress(request: Request, case_id: str) -> dict[str, Any]:
+    """P4-05. 업무 단계 진행 상태와 이력. 진행기가 잇지 않는 Case 는 `progress = null` 이다."""
+    repo = _repo(request)
+    try:
+        repo.get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return {
+        "case_id": case_id,
+        "progress": repo.progress_view(case_id),
+        "auto": request.app.state.config.progress_enabled,
+    }
+
+
+class ResumeIn(BaseModel):
+    actor: str = "owner"
+
+
+@router.post("/api/cases/{case_id}/progress/resume")
+def resume_progress(request: Request, case_id: str, payload: ResumeIn) -> dict[str, Any]:
+    """P4-05. 멈춤·막힘·실패 뒤 사람이 **계속 진행**을 누른다(D-76·D-79).
+
+    확인·동의·인수가 아니다 — 다음 걸음을 다시 보라는 요청이며, 그 걸음도 진입 검사를 그대로
+    지난다.
+    """
+    repo = _repo(request)
+    try:
+        repo.get_case(case_id)
+        result = _progressor(request, repo).resume(case_id, actor=payload.actor)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"result": result, "progress": repo.progress_view(case_id)}
 
 
 @router.post("/api/cases/{case_id}/archive")

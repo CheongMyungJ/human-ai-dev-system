@@ -29,7 +29,12 @@ const SLOW_MS = 5000
 
 function busy(conv: ConversationView | null): boolean {
   if (!conv) return false
-  return conv.current_request !== null || conv.messages.some((m) => m.receipt === 'pending')
+  return (
+    conv.current_request !== null ||
+    conv.messages.some((m) => m.receipt === 'pending') ||
+    // P4-05. 진행기가 실행을 만들고 있는 동안도 짧게 묻는다.
+    conv.progress?.state === 'running'
+  )
 }
 
 export function useCaseData(caseId: string | null): CaseData {
@@ -41,6 +46,8 @@ export function useCaseData(caseId: string | null): CaseData {
   const [nonce, setNonce] = useState(0)
   const convRef = useRef<ConversationView | null>(null)
   const lastDetailAt = useRef(0)
+  // P4-05. 진행 상태가 바뀌면(걸음·대기) 상세도 바로 다시 묻는다 — 카드가 옛 버전을 가리키지 않게.
+  const lastProgressStamp = useRef<string | null>(null)
 
   const refresh = useCallback(() => setNonce((n) => n + 1), [])
 
@@ -63,7 +70,10 @@ export function useCaseData(caseId: string | null): CaseData {
         if (stopped) return
         convRef.current = nextConv
         setConv(nextConv)
-        if (forceDetail || Date.now() - lastDetailAt.current >= SLOW_MS) {
+        const stamp = nextConv.progress ? `${nextConv.progress.state}|${nextConv.progress.updated_at}` : null
+        const progressChanged = stamp !== lastProgressStamp.current
+        lastProgressStamp.current = stamp
+        if (forceDetail || progressChanged || Date.now() - lastDetailAt.current >= SLOW_MS) {
           const [nextDetail, preps] = await Promise.all([
             api.getCase(caseId) as Promise<ShellCaseDetail>,
             preparationApi.artifacts(caseId).catch(() => [] as PreparationArtifact[]),

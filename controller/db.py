@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 
 def utc_now() -> str:
@@ -406,6 +406,50 @@ def migrate(conn: sqlite3.Connection) -> None:
     #      **기존 표를 바꾸지 않는다.** 요청 처리기가 끝낸 요청은 `settled_by` 의 주체 값으로
     #      구별하고, 옛 요청·실행에는 해석 행을 만들지 않는다.
 
+    # v20: 업무 단계 자동 진행·완료·예외·후속(P4-05). 진행 표 둘(`case_progress`·
+    #      `case_progress_event`)은 schema.sql 이 만들고 여기서는 기존 세 표를 바꾼다.
+    #
+    #      `conversation_request.origin`·`origin_ref`  누가 열었는가. 옛 행은 전부 `user_message`.
+    #      `conversation_request.opened_by_message_id`  **NULL 허용으로 바꾼다** — 사람의 결정 뒤
+    #                                 시스템이 여는 진행 요청은 여는 메시지가 없다. SQLite 는
+    #                                 NOT NULL 을 푸는 ALTER 가 없어 표를 다시 만든다
+    #                                 (`_drop_not_null`, v18 의 재구성과 같은 절차). 행·색인은
+    #                                 그대로 옮기고 값을 지어내지 않는다.
+    #      `run.criteria_report_json`  검증·분석 실행이 보고한 기준별 판정(키·판정·결론·짧은
+    #                                 요약). 옛 실행은 NULL — 보고하지 않았다.
+    #      `closure_record.snapshot_json` 종료 시점의 소비·한도. 옛 종료는 NULL — 그때의
+    #                                 값을 지금 지어내지 않는다(D-87 의 "종료 시점 소비"는
+    #                                 v20 부터의 종료에만 있다).
+    #
+    #      **데이터 이행 함수가 없다.** 옛 Case 에 진행 행을 만들지 않는다 — 진행기는 업무화
+    #      때 행을 만든 Case 만 잇고, 관리 화면·API 로 만든 Case 는 사람·하네스가 진행한다.
+    _add_column_if_missing(
+        conn,
+        "conversation_request",
+        "origin",
+        "TEXT NOT NULL DEFAULT 'user_message'"
+        " CHECK (origin IN ('user_message', 'human_decision', 'system_resume'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "conversation_request",
+        "origin_ref",
+        "TEXT CHECK (origin_ref IS NULL OR length(origin_ref) <= 120)",
+    )
+    _drop_not_null(conn, "conversation_request", "opened_by_message_id")
+    _add_column_if_missing(
+        conn,
+        "run",
+        "criteria_report_json",
+        "TEXT CHECK (criteria_report_json IS NULL OR length(criteria_report_json) <= 8000)",
+    )
+    _add_column_if_missing(
+        conn,
+        "closure_record",
+        "snapshot_json",
+        "TEXT CHECK (snapshot_json IS NULL OR length(snapshot_json) <= 4000)",
+    )
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -448,10 +492,43 @@ def _widen_check(
     if re.findall(r"'([^']*)'", match.group(1)) == wanted:
         return False
     new_ddl = ddl[: match.start()] + f"{column} IN ({_sql_list(wanted)})" + ddl[match.end():]
+    _rebuild_table(conn, table, new_ddl, "v18 이행")
+    return True
+
+
+def _drop_not_null(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    """표의 한 컬럼에서 `NOT NULL` 을 푼다(P4-05, v20). 이미 풀려 있으면 아무 것도 하지 않는다.
+
+    `_widen_check` 와 같은 재구성이다 — 저장된 DDL 에서 그 컬럼 선언의 `NOT NULL` 만 지운 DDL 로
+    표를 다시 만들고 행·색인을 그대로 옮긴다.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    if row is None:
+        return False
+    ddl = row["sql"]
+    match = re.search(r"\b" + re.escape(column) + r"\s+(\w+)\s+NOT\s+NULL\b", ddl)
+    if match is None:
+        return False
+    new_ddl = ddl[: match.start()] + f"{column} {match.group(1)}" + ddl[match.end():]
+    _rebuild_table(conn, table, new_ddl, "v20 이행")
+    return True
+
+
+def _rebuild_table(
+    conn: sqlite3.Connection, table: str, new_ddl: str, label: str
+) -> None:
+    """표를 `new_ddl` 로 다시 만들고 행·색인을 옮긴다(SQLite 의 일반 절차).
+
+    외래 키 검사를 끄고, 새 표를 만들어 행을 그대로 옮기고, 옛 표를 지운 뒤 새 표의 이름을
+    바꾸고, 색인을 다시 만들고, `foreign_key_check` 가 비어 있음을 확인한다. 다른 표의 외래
+    키는 이름으로 이 표를 가리키므로 이름을 바꾼 뒤 그대로 새 표를 가리킨다.
+    """
     temp = f"{table}__rebuild"
     header = re.compile(r'^CREATE TABLE\s+(IF NOT EXISTS\s+)?"?' + re.escape(table) + r'"?', re.I)
     if not header.search(new_ddl):
-        raise RuntimeError(f"v18 이행: {table} 의 DDL 머리를 해석하지 못했다")
+        raise RuntimeError(f"{label}: {table} 의 DDL 머리를 해석하지 못했다")
     create_temp = header.sub(f'CREATE TABLE "{temp}"', new_ddl, count=1)
     indexes = [
         r["sql"]
@@ -474,12 +551,11 @@ def _widen_check(
             broken = conn.execute("PRAGMA foreign_key_check").fetchall()
             if broken:
                 raise RuntimeError(
-                    f"v18 이행: {table} 을 다시 만든 뒤 외래 키가 맞지 않는다: "
+                    f"{label}: {table} 을 다시 만든 뒤 외래 키가 맞지 않는다: "
                     + ", ".join(str(tuple(b)) for b in broken[:5])
                 )
     finally:
         conn.execute("PRAGMA foreign_keys = ON")
-    return True
 
 
 #: 쓰기 트랜잭션을 **연결 단위로 직렬화한다**(P3-04).

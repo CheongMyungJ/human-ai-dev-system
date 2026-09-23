@@ -439,9 +439,16 @@ def test_a_clear_work_request_starts_work_in_the_same_case(processing_harness):
     assert (interp["report_status"], interp["kind"], interp["profile"], interp["applied"]) == (
         "reported", "work_request", "research", True
     )
-    assert request["state"] == "completed"
-    # 업무화는 실행을 시작하지 않는다 — 응답 하나뿐이다.
-    assert [r["run_id"] for r in _runs(h, case_id)] == [reply_id]
+    # P4-05. 업무화 자체는 권한·동의를 만들지 않지만, 그 뒤의 첫 걸음(의도 초안 작성)은 **진행기가
+    # 같은 요청에** 만든다 — 실행 사이에 잠금을 풀지 않는다(D-70). UI-03 때는 응답 하나로 끝났다.
+    assert request["state"] == "processing"
+    runs = _runs(h, case_id)  # 최신 순이다
+    assert runs[-1]["run_id"] == reply_id
+    assert [(r["purpose"], r["request_id"]) for r in runs[:-1]] == [
+        ("intent_authoring", request["id"])
+    ]
+    assert view["progress"]["state"] == "running"
+    assert view["progress"]["step"] == "intent_authoring"
     # 규칙을 받았고, 대화에 붙은 글에는 블록이 없다.
     assert "hads-interpretation" in h.agent.cli_executor.calls[-1]["prompt"]
     reply = view["messages"][1]
@@ -543,7 +550,10 @@ def test_a_case_that_already_started_work_refuses_the_ai_start(processing_harnes
     assert (view["profile"], view["work_start"]["decided_by"]) == ("feature", "person")
     [interp] = view["interpretations"]
     assert (interp["applied"], interp["refusal"]) == (False, "case_not_in_discussion_stage")
-    assert view["requests"][0]["state"] == "completed"
+    # P4-05. 사람이 업무화한 Case 도 진행기가 잇는다 — 응답이 끝난 자리에서 의도 초안 실행이 같은
+    # 요청에 붙어 요청은 처리 중으로 남는다(UI-03 때는 여기서 `completed` 였다).
+    assert view["requests"][0]["state"] == "processing"
+    assert view["progress"]["step"] == "intent_authoring"
 
 
 def test_an_interpretation_cannot_ride_on_another_run(processing_harness):

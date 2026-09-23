@@ -251,6 +251,9 @@ class AdmissionRequest:
     context_plan: dict[str, Any] = field(default_factory=dict)
     #: P4-04. 인라인으로 넣을 **핵심** 참조 중 지금 `available` 이 아닌 것.
     context_unavailable: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-05. **종료 뒤 설명 전용 진입**(D-87). 요청에 묶인 읽기 전용 논의 응답만 참이며, 그때만
+    #: 종료 Case 의 거부를 묻지 않는다. 다른 모든 목적은 종료 Case 에서 그대로 거부된다.
+    explanation_entry: bool = False
 
 
 @dataclass
@@ -935,7 +938,14 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     # 종료된 Case 는 조건을 갖춰도 열리지 않는다. 완료 후 수정은 기존 Case 재개가
     # 아니라 연결된 새 Case 다(D-33). **검사 기록으로 남기려고** 여기서 본다 —
     # 앞단에서 예외로 던지면 "왜 실행이 열리지 않았는가"가 진입 검사 표에 없다.
-    if request.case_closed:
+    if request.case_closed and not (
+        request.explanation_entry
+        and request.purpose is RunPurpose.DISCUSSION_REPLY
+        and request.permission is Permission.READ_ONLY
+        and request.request_id is not None
+    ):
+        # P4-05. 종료 Case 에서 열리는 것은 **설명 전용 논의 응답**뿐이다(D-87). 읽기 전용이고
+        # 요청에 묶여 같은 Case 의 예산에 누적된다. 그 밖의 목적·권한은 그대로 거부다.
         refuse(
             AdmissionRefusal.CASE_ALREADY_CLOSED,
             "이미 종료된 업무다. 수정은 연결된 새 Case 로 한다",

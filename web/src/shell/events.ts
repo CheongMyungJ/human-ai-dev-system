@@ -9,6 +9,8 @@ export interface ShellEvents {
   'hads:attach-ref': { caseId: string; ref: DraftRef }
   'hads:correct': { caseId: string; messageId: string; seq: number; text: string }
   'hads:open-ref': { caseId: string; ref: VersionRef }
+  // P4-05. 확인 카드가 결과물·결정 패널을 연다.
+  'hads:open-panel': { caseId: string; tab: 'results' | 'decisions' }
 }
 
 export function emit<K extends keyof ShellEvents>(name: K, detail: ShellEvents[K]) {

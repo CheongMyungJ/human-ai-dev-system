@@ -26,6 +26,10 @@ ENV_RUNNER_STALE_SECONDS = "HADS_RUNNER_STALE_SECONDS"
 #: UI-03. 사용자 요청을 제어부가 논의 응답으로 자동 처리하는가. 기본 켜짐. 끄면 UI-01 의
 #: 명시 처리 계약(처리하는 쪽이 실행을 만들고 종료를 적는다) 그대로다.
 ENV_AUTO_PROCESS_REQUESTS = "HADS_AUTO_PROCESS_REQUESTS"
+#: P4-05. 업무화 뒤 업무 단계의 다음 작업을 제어부가 스스로 잇는가. 기본 켜짐. 끄면 요청 처리기는
+#: 논의 응답·업무화까지만 하고, 업무 단계는 관리 화면·하네스가 진행한다(UI-03 계약). 처리기가
+#: 꺼져 있으면 이 값과 무관하게 진행기도 꺼진다.
+ENV_AUTO_PROGRESS_WORK = "HADS_AUTO_PROGRESS_WORK"
 
 DEFAULT_HOST = "127.0.0.1"  # 로컬 기본 접점은 루프백이다(implementation-baseline 2절)
 DEFAULT_PORT = 8765
@@ -44,6 +48,13 @@ class ControllerConfig:
     #: UI-03. 요청 처리기. 켜져 있으면 저장된 사용자 요청마다 읽기 전용 논의 응답 하나를 만들고
     #: 그 결과로 요청을 끝낸다. 운영 설정이며 시험 분기가 아니다.
     auto_process_requests: bool = True
+    #: P4-05. 업무 단계 진행기. 처리기와 같은 종류의 운영 설정이며 시험 분기가 아니다.
+    auto_progress_work: bool = True
+
+    @property
+    def progress_enabled(self) -> bool:
+        """진행기가 켜져 있는가 — 처리기가 켜져 있고 이 설정도 켜져 있을 때다."""
+        return self.auto_process_requests and self.auto_progress_work
 
     @property
     def db_path(self) -> Path:
@@ -80,6 +91,9 @@ def load_config() -> ControllerConfig:
     if auto_raw not in ("1", "0", "true", "false", "on", "off"):
         # 모르는 값을 켜짐·꺼짐 어느 쪽으로도 읽지 않는다. 기동 시점에 드러낸다.
         raise ValueError(f"{ENV_AUTO_PROCESS_REQUESTS} must be 1 or 0")
+    progress_raw = (os.environ.get(ENV_AUTO_PROGRESS_WORK) or "1").strip().lower()
+    if progress_raw not in ("1", "0", "true", "false", "on", "off"):
+        raise ValueError(f"{ENV_AUTO_PROGRESS_WORK} must be 1 or 0")
     return ControllerConfig(
         data_root=data_root,
         host=os.environ.get(ENV_HOST, DEFAULT_HOST),
@@ -88,4 +102,5 @@ def load_config() -> ControllerConfig:
         context_inline_limit_bytes=inline_limit,
         runner_stale_seconds=stale_seconds,
         auto_process_requests=auto_raw in ("1", "true", "on"),
+        auto_progress_work=progress_raw in ("1", "true", "on"),
     )

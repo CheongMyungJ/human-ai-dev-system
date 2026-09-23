@@ -1,4 +1,4 @@
-"""요청 처리기 (UI-03).
+"""요청 처리기 (UI-03, P4-05 에서 업무 단계 진행기와 이어짐).
 
 UI-01 은 "요청을 처리하는 쪽"을 비워 두었다 — 메시지가 저장돼도 사람이 관리 화면에서 논의
 응답 실행을 만들고 요청 종료를 적어야 했고, 라이브에서는 하네스가 그 자리를 채웠다. 이
@@ -8,10 +8,16 @@ UI-01 은 "요청을 처리하는 쪽"을 비워 두었다 — 메시지가 저�
 요청을 끝낸다. 준비 단계 대화의 응답은 AI 가 사용자의 마지막 메시지를 어떻게 읽었는지를
 함께 보고하고, 그것이 명확한 업무 요청이면 같은 Case 에서 업무화한다(D-69).
 
+**P4-05.** 업무화 뒤의 다음 작업은 **업무 단계 진행기**(`controller.work_progressor`)가 잇는다.
+처리기는 응답이 끝난 자리에서 진행기에 넘기고, 진행기가 다음 실행을 만들면 요청을 끝내지 않는다
+(실행 사이에 잠금을 풀지 않는다 — D-70). 진행기가 만들지 않으면(사람 대기·완료·막힘) 처리기가
+종료를 적는다. 시스템이 연 진행 요청(여는 메시지 없음)에는 응답을 만들지 않는다.
+
+종료 Case 의 메시지는 **설명 전용** 응답을 받는다(D-87). 그 응답의 해석이 업무 요청이면 연결된
+새 대화를 만들어 그 메시지를 옮기고 거기서 처음부터 잇는다(D-33·D-78).
+
 **하지 않는 일:**
 
-    업무 단계의 다음 작업     의도 초안·검토·준비·구현·검증·완료를 시작하지 않는다. 그 흐름을
-                              제품이 스스로 이어 가는 것은 UI-03 범위 밖이다(UI-PLAN-03 3.11)
     판정                      진입 검사·요청 종료 판정·업무화 조건은 기존 경로가 한다. 여기서는
                               순서만 정한다 — 두 곳에서 판정하면 한쪽만 고치는 실수가 생긴다
     중단된 요청               UI-02 대로 실제 종료를 확인한 제어부가 끝낸다. 건드리지 않는다
@@ -22,13 +28,14 @@ UI-01 은 "요청을 처리하는 쪽"을 비워 두었다 — 메시지가 저�
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from controller.repository import ConflictError, ConversationRefused, NotFoundError, Repository
 from domain import conversation as convmod
 from domain.models import (
     OPENS_REQUEST,
     REQUEST_PROCESSOR_ACTOR,
+    CaseStage,
     MessageKind,
     MessageReceipt,
     Permission,
@@ -40,6 +47,9 @@ from domain.models import (
     RunStatus,
     WorkStartDecider,
 )
+
+if TYPE_CHECKING:  # pragma: no cover
+    from controller.work_progressor import WorkProgressor
 
 #: 처리기가 만드는 논의 응답 실행의 식별자. **요청마다 하나로 고정한다** — 같은 저장 보고의
 #: 재전송이나 기동 복구가 두 번째 응답을 만들지 않는다(`admit_and_create_run` 의 멱등).
@@ -57,11 +67,14 @@ def reply_run_id(request_id: str) -> str:
 
 
 class RequestProcessor:
-    """저장된 사용자 요청 → 논의 응답 → (해석 적용) → 요청 종료."""
+    """저장된 사용자 요청 → 논의 응답 → (해석 적용) → (진행기) → 요청 종료."""
 
-    def __init__(self, repo: Repository, *, enabled: bool) -> None:
+    def __init__(
+        self, repo: Repository, *, enabled: bool, progressor: "WorkProgressor | None" = None
+    ) -> None:
         self.repo = repo
         self.enabled = enabled
+        self.progressor = progressor
 
     # ------------------------------------------------------------- 시작
 
@@ -85,6 +98,8 @@ class RequestProcessor:
         request = self.repo.get_request(request_id)
         if request["state"] != RequestState.PROCESSING.value or request.get("stop_requested_at"):
             return None
+        if not request.get("opened_by_message_id"):
+            return None  # P4-05. 시스템이 연 진행 요청이다. 응답이 아니라 진행기의 실행이 붙는다
         opening = self.repo.get_message(request["opened_by_message_id"])
         if opening["receipt"] != MessageReceipt.STORED.value:
             return None  # 받지 않은 말은 처리하지 않는다. 유실은 기존 경로가 닫는다
@@ -158,6 +173,9 @@ class RequestProcessor:
 
         종료 판정(`unknown`·`interrupted` 포함)은 `settle_request` 가 한다. 여기서는 무엇을
         요청할지만 정한다 — 응답이 완료되고 대화에 붙었으면 `completed`, 아니면 `failed`.
+
+        **P4-05.** 업무 단계면 진행기에 넘긴다. 진행기가 다음 실행을 만들면 요청은 처리 중으로
+        남는다(잠금 유지). 진행 요청(여는 메시지 없음)은 진행기가 끝낸다.
         """
         request = self.repo.get_request(request_id)
         if request["state"] != RequestState.PROCESSING.value or request.get("stop_requested_at"):
@@ -165,9 +183,29 @@ class RequestProcessor:
         runs = self.repo.request_runs(request_id)
         if not runs or any(r["status"] != RunStatus.FINISHED.value for r in runs):
             return None  # 실행 사이에 잠금을 풀지 않는다 — 마지막 실행이 끝날 때 다시 본다
+        if not request.get("opened_by_message_id"):
+            # 진행 요청. 다음 걸음을 만들거나(요청 유지) 진행기가 사람 대기·완료·막힘으로 끝낸다.
+            if self.progressor is not None:
+                self.progressor.continue_request(request_id)
+            return None
         replies = [r for r in runs if r.get("purpose") == RunPurpose.DISCUSSION_REPLY.value]
+        work_started = False
         for reply in replies:
-            self.apply_interpretation(reply["run_id"])
+            row = self.apply_interpretation(reply["run_id"])
+            work_started = work_started or bool(row and row.get("applied"))
+        if self.progressor is not None:
+            case_id = request["case_id"]
+            stage, _source = self.repo.case_stage(case_id)
+            if stage is CaseStage.WORK and not self.repo.case_is_closed(case_id):
+                progress = self.repo.progress_state(case_id)
+                created = False
+                if progress is None and work_started:
+                    result = self.progressor.on_work_started(case_id, request_id)
+                    created = bool(result and result.get("run_created"))
+                elif progress is not None:
+                    created = self.progressor.continue_request(request_id)
+                if created:
+                    return None  # 다음 실행이 이 요청에 붙었다. 잠금은 그대로다
         # 대화에 붙은 완료 응답이 하나라도 있으면 사람은 답을 받았다.
         outcomes = [
             convmod.processor_settle_outcome(
@@ -195,6 +233,9 @@ class RequestProcessor:
 
         위임 근거는 여는 메시지 원문이다(`start_work` 가 그렇게 적는다). 업무화 조건(준비
         단계·처리 중 요청·저장된 메시지·해석 실행)은 `start_work` 가 본다.
+
+        **P4-05.** 종료 Case 의 응답이 업무 요청이면 연결된 새 대화를 만들어 그 메시지를 옮긴다
+        (D-33·D-78). 새 대화의 요청에는 처리기가 바로 응답을 만든다.
         """
         row = self.repo.get_interpretation(run_id)
         if row is None or row["evaluated_at"] is not None:
@@ -209,6 +250,8 @@ class RequestProcessor:
                 run_id, applied=False, refusal=refusal.value
             )
         opening = self.repo.get_message(row["opening_message_id"])
+        if self.repo.case_is_closed(row["case_id"]):
+            return self._move_to_follow_up(row, run, opening)
         try:
             self.repo.start_work(
                 row["case_id"],
@@ -225,18 +268,43 @@ class RequestProcessor:
             return self.repo.mark_interpretation_evaluated(run_id, applied=False, refusal=code)
         return self.repo.mark_interpretation_evaluated(run_id, applied=True, refusal=None)
 
+    def _move_to_follow_up(
+        self, row: dict[str, Any], run: dict[str, Any], opening: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """종료 Case 의 수정 요청 → 연결된 새 대화(D-33·D-78). 해석 행에는 적용으로 남긴다."""
+        try:
+            view = self.repo.create_successor_conversation(
+                row["case_id"],
+                row["opening_message_id"],
+                actor=f"ai:{run['tool_id']}",
+                reason_summary=f"종료 뒤 수정 요청 · 메시지 #{opening['seq']} · AI 해석",
+            )
+        except (ConflictError, NotFoundError) as exc:
+            return self.repo.mark_interpretation_evaluated(
+                run_id=run["run_id"], applied=False, refusal=f"follow_up_refused: {exc}"[:64]
+            )
+        marked = self.repo.mark_interpretation_evaluated(run["run_id"], applied=True, refusal=None)
+        # 새 대화의 요청은 이미 저장된 메시지로 열렸다 — 저장 보고가 다시 오지 않으므로 여기서 시작한다.
+        try:
+            self.start(view["request_id"])
+        except (ConflictError, NotFoundError):
+            pass
+        return marked
+
     # ------------------------------------------------------------- 복구
 
     def recover(self) -> dict[str, int]:
         """제어부 기동 때. 처리 중인 요청에서 **빠진 단계**를 잇는다.
 
         실행이 없으면 응답 실행을 만들고, 연결 실행이 전부 끝났으면 끝낸다. 도는 중인 실행은
-        그대로 둔다 — 그 결과가 오면 `on_run_finished` 가 본다.
+        그대로 둔다 — 그 결과가 오면 `on_run_finished` 가 본다. 진행 요청은 진행기의 복구가 본다.
         """
         counts = {"started": 0, "finished": 0}
         if not self.enabled:
             return counts
         for request in self.repo.processing_requests():
+            if not request.get("opened_by_message_id"):
+                continue
             runs = self.repo.request_runs(request["id"])
             if not runs:
                 if self.start(request["id"]) is not None:

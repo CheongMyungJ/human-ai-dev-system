@@ -35,6 +35,14 @@ function rowBadges(row: ConversationRow): { text: string; tone: string }[] {
     badges.push({ text: '처리 중', tone: 'info' })
   }
   if (row.needs_response) badges.push({ text: '답변 필요', tone: 'attention' })
+  // P4-05. 진행 상태(서버 도출). 확인 필요·막힘·멈춤만 보인다 — 진행 중은 "처리 중"이 이미 말한다.
+  if (row.progress_state === 'waiting_human' && !row.needs_response) {
+    badges.push({ text: '확인 필요', tone: 'attention' })
+  } else if (row.progress_state === 'blocked') {
+    badges.push({ text: '막힘', tone: 'warn' })
+  } else if (row.progress_state === 'paused') {
+    badges.push({ text: '멈춤', tone: 'warn' })
+  }
   if (row.effective_stage === 'work') {
     badges.push({ text: row.profile ? PROFILE_LABEL[row.profile] ?? row.profile : row.kind, tone: 'plain' })
   }

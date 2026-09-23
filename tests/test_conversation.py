@@ -418,6 +418,8 @@ def test_general_input_is_locked_on_the_server_while_a_request_is_processing(har
         "refusals": [ConversationRefusal.REQUEST_IN_PROGRESS.value],
         "detail": view["send"]["general"]["detail"],
         "active_request_id": sent["request"]["id"],
+        # P4-05. 종료 뒤 설명 전용으로 열렸을 때만 값이 있다. 여기서는 열린 업무다.
+        "note": None,
     }
     # 다른 Case 는 막히지 않는다.
     assert harness.post_message(other["case_id"], "여기는 됩니다", "c-other-1").status_code == 202

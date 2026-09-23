@@ -46,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -94,6 +94,42 @@ P4-04의 고정 입력·새 세션·usage 복원은 이 설계와 연결되지�
 - **D-83 초안 복구:** 브라우저 저장·복구, 접수가 확인된 전송분만 비우기, 자동 전송 없음. 서버에는 대기열이 없고 `by-client-id` 대조가 있다. PC 미연결일 때 원문 열람의 "연결 필요" 표시도 화면 몫이다(9절).
 - 코드 대조 시작점: `web/src/App.tsx`·`ConversationPanel.tsx`·`api.ts`, `controller/repository.py` 의 `conversation_view`·`request_view`·`list_cases`, `controller/api.py` 의 대화 경로.
 
+### 1.6 P4-05의 경계와 시작점 (완료 — 당시 인계로 보존, S-024 에 옮김)
+
+**사용자 결정(2026-09-23, S-023 끝): 업무 단계 자동 진행은 P4-05 에 포함한다.** UI-03 으로 대화·논의·
+업무화까지는 새 화면에서 끝까지 쓸 수 있다. 그러나 **업무화 뒤의 흐름**(의도 초안 작성 → QG-01 검토·
+repair → 질문·의도 동의 → 수준·설계·계획 → 작업 그래프·작업공간 → 구현·검증 → 완료 판정)을 제품이
+스스로 잇는 부분은 없다 — 관리 화면의 버튼과 라이브 하네스(`p3/live/path_a.py`, 약 1,000줄)가 해 왔다.
+1.1절의 분할 어디에도 배정돼 있지 않아 UI-03 인계에서 물었고(P4-05 앞의 별도 작업 / P4-05 와 함께 /
+UI-04 하위 plan), 사용자가 **P4-05 와 함께**를 골랐다. 그래서 P4-05 의 범위는 **업무 단계 자동 진행 +
+완료·예외·후속**이다.
+
+**목표:** 업무화된 대화가 새 화면에서 완료까지 이어진다. 업무 단계의 다음 작업을 제품이 스스로
+시작하고, 사람이 필요한 곳(질문·의도 동의·controlled 시작/결과 확인·권한 확대·예외 수용)에서만 멈춘다.
+완료는 기본 자동 완료·controlled 후보 확인·사람 예외 수용으로 끝나고, 종료 뒤 설명은 같은 Case(D-87),
+실제 수정은 연결된 새 Case(D-33·D-78)다.
+
+- **plan 에서 정할 것:** 여러 실행을 한 요청에 묶는 잠금·종료 시점(내부 Run 사이에 풀지 않되 사람을
+  기다리는 동안에는 전송을 연다 — D-70), 사람 대기 상태의 표시와 그 동안의 입력, repair·설정 예약·변경
+  사건(P4-01·P4-02)과의 상호작용, Profile 별 다음 작업 선택(P4-03 완료 계약·Fast Lane·수준), 새 화면으로
+  옮길 확인 카드(의도 동의·controlled 시작/결과·예외 수용 — D-72), 업무 단계 메시지에 대한 요청 처리기의
+  역할(지금은 읽기 전용 응답만). 제품 동작을 바꾸는 새 선택이 생기면 사람에게 묻는다.
+- **범위가 크다.** P4-05 plan 은 안에서 단계(AC 묶음)로 나누어 완료 범위를 추적하는 것을 권한다 —
+  나누는 방법과 순서는 plan 에서 정한다. P4-06~07·UI-04 로 자동 확대하지 않는다.
+- **완료·예외·후속 쪽 시작점:** 9절의 "종료 Case의 모든 Run 거부"·"사람의 예외 수용이 종료를 연다"·
+  "시간 계측과 UI 기본 지표의 차이" 행.
+- **UI-03이 넘긴 것:** 요청 처리기는 **읽기 전용 논의 응답만** 만든다. 업무 단계 대화의 응답은 해석하지
+  않는다. 새 화면은 업무 단계에서 "아직 자동으로 진행하지 않는다 — 관리 화면에서 진행"을 보인다 —
+  P4-05 가 이 안내를 실제 진행으로 바꾼다. 종료된 Case 의 대화는 서버가 `case_already_closed` 로 일반
+  전송을 막고 새 화면은 그 사유를 그대로 보인다 — D-87 의 설명 질문은 그 자리에서 열린다. 처리기의 응답
+  실행(`reply-{요청}`, `discussion_reply`)이 설명 전용 진입을 탈지, 별도 목적을 둘지는 P4-05 plan 에서
+  정한다. 결과물 패널은 완료 후보·기준 판정을 "있는 것만" 보인다.
+- 코드 대조 시작점: `p3/live/path_a.py`(하네스가 해 온 진행 순서), `controller/request_processor.py`,
+  `controller/repository.py` 의 의도·게이트·준비·작업 그래프·작업공간·완료 후보·예외 수용·후속 Case·
+  `maybe_auto_complete`·`case_is_closed`, `domain/progression.py`·`domain/completion_meaning.py`,
+  `controller/admission.py`, `web/src/shell/*`, 관리 화면 `IntentPanel`·`PreparationPanel`·
+  `WorkGraphPanel`·`WorkspacePanel`·`ResultPanel`.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -131,6 +167,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-022 / 2026-09-23 / UI-02 입력·실행 제어 (**완료**)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan 검증 인계 절차를 지켜줘." 다음 단계는 D-90·1.4절의 **UI-02** 였다. 작업 도중 사용자가 진행 상황("다 했어?")을 물어 남은 일을 보고하고 이어서 했다.
+- **수행:** 시작 상태(`main`/`5840b83`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → pytest **539** + unittest **18**, 4분 44초)을 직접 확인한 뒤 [UI-PLAN-02](plans/UI-PLAN-02.md)를 **구현 전에 기록·공유**하고 구현·검증했다. 첫 단계로 실제 codex 가 이탈을 허용하지 않는 job 안에서 정상 동작하는지 짧게 확인했다(활성 최대 17개가 모두 job 안). 상세 근거는 [UI-02 결과](ui/evidence/UI-02-results.md)다. 새 제품 판단은 없었고 사람에게 질문하지 않았다 — 중단·확인·해제의 규칙은 D-70·D-75·D-76 의 확정 내용이고, 15초·15초(확인 대기)는 상세 설계 제안값으로 적었다. **기술 선택으로 적은 것:** 정상 종료 뒤 남은 프로세스를 그 실행의 잔류로 끝낸다(P1-03 (가), 9절에 이 기본을 드러냈다).
+- **모델:** Runner 두 흐름(제어 루프·실행 작업자), `runner/process_tree.py`(job·일시 정지 생성·재개·종료·활성 0 확인·잔류 확인), 원장 v2(시작 기록·Runner 프로세스 정체·쓰기 실행의 실행 전 관측), 새 표 `run_residual_observation`, 요청 상태 `interrupted`, 중단 컬럼. 스키마 **v18** — CHECK 목록을 넓히려고 `run`·`conversation_request` 를 **저장된 DDL 에서 목록만 바꿔 다시 만든다**(값으로 비교해 이미 같으면 하지 않음). 이행은 옛 실행·요청에 중단·관측을 만들지 않고 옛 `unknown` 요청은 잠긴 채다.
+- **규칙:** 잔류 `none` 은 확인 근거가 있을 때만(제어부가 근거 없는 `none` 을 409). 중단 → 후속 실행 차단(진입·트랜잭션)·미배정 실행 소비 0·배정 실행 전달 → 확인되면 `interrupted`, 아니면 `unknown`. 결과 불명이지만 끝난 실행은 `interrupted(execution_ended_result_unknown)`. 정상 종료 실행의 잔류 불명은 잠그지 않는다(UI-01 유지). 재시작 대조는 CLI 재호출·세대 증가 없음. 미연결 PC 로 가는 사용자 입력은 409 `runner_disconnected`, 걸리는 사유는 전부 돌려준다.
+- **기존 시험의 의미 검토:** 넷을 고쳤고 검사를 지우지 않았다 — v16→v17 이행의 `== 17` → `>= 17`, v15 이행 시험의 Runner 에 heartbeat(heartbeat 없는 PC 는 미연결이 맞다), 전송 상태 dict 의 새 필드 `refusals`, P4-04 재시작 도우미에 트리 제어 없는 시작 기록(원장 v2 에서 착수만은 "재개 전"이다). 결과 3절.
+- **자기 검토에서 고친 것:** 중단된 요청의 종료 기록 거부 사유 순서, 메시지 API 가 PC 미연결만 따로 거부해 잠금 사유가 빠지던 것, 끝났는지 모르는 중단 실행이 미정리 실행에서 빠지던 것, 정상 종료 직후 끝나는 중인 자식을 잔류로 세던 것, React 훅을 조기 반환 뒤에 둔 것(빌드는 통과했지만 규칙 위반).
+- **검증:** UI-02 집중 **34**(`test_run_control.py` 20, `test_process_control.py` 13 — 실제 OS 프로세스 트리, `test_runner_process_control.py` 1 — 실제 uvicorn·실제 Runner 프로세스·PATH 앞 가짜 codex), v17→v18 이행 2를 더해 전체 **pytest 575건 중 574 통과·1 실패 + P1 계약 unittest 18 통과**(5분 15초), `npm run build` 성공. 실패 1건은 UI-02 와 무관하게 이전부터 흔들리던 P4-02 시험(`test_quality_changes.py::test_the_reservation_lands_when_the_verification_ends_even_on_a_failure`, 시계 해상도 15.6ms — 9절)이며 UI-02 를 적용하지 않은 HEAD 워크트리에서도 3회 중 2회 실패했다. 같은 코드의 직전 전체 실행에서는 통과했다. 그 밖에 알려진 deprecation warning 외 실패 없음. 구현 도중의 첫 전체 실행이 2시간 14분 걸렸으나 곧바로 다시 잰 실행은 5분 13초·가장 느린 시험 7초 미만이었다 — 호스트가 쉬었던 것으로 보며 원인을 확정하지 못했다(결과 4절).
+- **실제 CLI:** **수행.** `ui/live/ui02_control.py` 로 실제 `codex-cli 0.154.0` 을 **세 번** 돌렸다(1회차 하네스의 OS 목록 도우미가 한글 명령줄을 읽다 출력을 잃음, 2회차 하네스가 옆 대화 요청을 닫지 않아 제품이 두 사유를 맞게 돌려준 것을 틀린 기대로 멈춤). 3회차 제품 규칙 **23건 통과**: 긴 실행 중 카드 답변 0.3초·옆 대화 0.9초 저장, 중단 뒤 0.5초 만에 `interrupted`·종료한 프로세스 10개·OS 목록에 트리 없음, Runner 프로세스만 강제 종료해도 0.45초 만에 트리 소멸, 미연결 409, 재기동 대조 `unknown`+`none`(`job_closed_kill_on_close`)·세대 1·CLI 부수효과 1회·세션 id 복구. 그래서 codex 의 `cancel_confirmed` 를 `verified` 로 올렸다(claude 는 `unknown`). 표본은 한 업무·중단 하나·강제 종료 하나다.
+- **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 검증 1회 중단 연결·시간 예산 자동 중단·사람의 확인 선언·claude 실증·비 Windows 트리 제어·새 기본 화면(UI-03)·분산 조정(P6-03)은 하지 않았다. 9절에 배정했다.
+- **다음 행동:** **UI-03(기본 대화 화면)** 을 새 plan 으로 시작한다(1.5절). 완료된 P4-PLAN-01~04·UI-PLAN-01~02 를 다시 열지 않고 P4-05~07·UI-04 로 자동 확대하지 않는다.
+- **사람에게 물어야 할 것:** 없다.
+- **사용자 지시로 한 일:** 작업을 마친 뒤 사용자 지시("커밋 푸시해줘")로 UI-02 변경을 **`592eb39`** 으로 커밋하고 이 인계 기록을 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 원격을 fetch 해 앞서 간 커밋이 없음을 확인). 커밋 뒤 이행 시험을 다시 돌려 `_v17_schema()` 가 `5580896` 의 v17 스키마를 찾는 것을 확인했다(14건 통과, 건너뜀 없음). 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`5840b83` clean. 이 세션이 그 위에 UI-02 커밋 `592eb39` 과 인계 기록 커밋을 올렸다 — 새 파일 `domain/run_control.py`, `runner/process_tree.py`, `plans/UI-PLAN-02.md`, `tests/test_run_control.py`, `tests/test_process_control.py`, `tests/test_runner_process_control.py`, `tests/fake_cli/fake_codex.py`, `ui/live/ui02_control.py`, `ui/evidence/UI-02-*`(결과·라이브 로그·결과 JSON·원시 출력 둘) 와 수정 파일 `controller/{admission,api,config,db,repository,schema.sql}`, `domain/{budget,conversation,models}.py`, `runner/{agent,cli_adapter,client,executor,ledger}.py`, `tests/{conftest,test_context,test_conversation,test_migration}.py`, `web/src/{ConversationPanel.tsx,api.ts}`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`·`README.md`·`ui-conversation-design.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 커밋은 `git log --oneline 5840b83..HEAD`, 원격 반영은 로컬/원격 ref, 작업 트리는 `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner·codex 트리는 스크립트가 내렸고 종료 뒤 OS 목록에 남은 프로세스가 없었다. 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-ui-02-live\{195334941,195435011}`(2·3회차)와 1회차 폴더에 남아 있고 저장소 `var\` 는 건드리지 않았다. 사전 확인 저장소 `%LOCALAPPDATA%\Temp\hads-ui-02-spike` 도 남아 있다.
+- **다음 세션이 이어서 할 때:** "CLI 가 도는 동안"은 `FakeCliExecutor.hold`(이벤트)로 만들고, 작업자 한 회를 다른 스레드에서 돌리며 시험 스레드가 `control_tick()` 을 부른다(`tests/test_run_control.py` 의 `_Worker`). PC 미연결은 `Harness.age_heartbeat` 로 만든다(하네스 제어부의 기준은 3600초). 실제 트리가 필요하면 PATH 앞에 시험용 `codex.cmd`(→ `tests/fake_cli/fake_codex.py`, 지시문 표지 `HADS_FAKE_SLEEP=<초>`·`HADS_FAKE_LEAVE_CHILD`·`HADS_FAKE_WRITE=<이름>`)를 둔다. `tests/test_migration.py` 의 `_v17_schema()` 는 `스키마 v18` 표식이 **없는** 가장 최근 커밋 스키마를 찾는다 — UI-02 를 커밋하기 전에도 뒤에도 `5580896` 의 v17 스키마를 고른다.
 
 ### 이전 개발 인계 — S-021 / 2026-09-23 / P4-04 문맥·재개 (**완료**)
 

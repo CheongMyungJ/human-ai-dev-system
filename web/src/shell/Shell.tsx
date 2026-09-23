@@ -194,6 +194,16 @@ export function Shell() {
     [caseId],
   )
 
+  // P4-05. 확인 카드가 결과물·결정 패널을 연다.
+  useEffect(
+    () =>
+      listen('hads:open-panel', (detail) => {
+        if (detail.caseId !== caseId) return
+        setPanel(detail.tab)
+      }),
+    [caseId],
+  )
+
   const data = useCaseData(caseId)
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
 

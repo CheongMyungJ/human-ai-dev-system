@@ -560,6 +560,9 @@ class RunnerAgent:
         # UI-03. 준비 단계 논의 응답의 해석. 원장에도 남아 재전송이 같은 해석을 보낸다.
         if produced.get("interpretation") is not None:
             result_payload["interpretation"] = produced["interpretation"]
+        # P4-05. 검증·분석 실행의 기준 보고. 원장에도 남아 재전송이 같은 보고를 보낸다.
+        if produced.get("criteria_report"):
+            result_payload["criteria_report"] = produced["criteria_report"]
         # UI-02. 잔류 값의 근거와 종료한 수. 근거를 모르는 실행기는 보내지 않는다.
         if getattr(output, "residual_basis", None):
             result_payload["residual_basis"] = output.residual_basis
@@ -626,6 +629,11 @@ class RunnerAgent:
             repositories=assignment.get("case_repositories"),
             # **제어부가 정한 대화 단계**(UI-03). 준비 단계 논의 응답에만 해석 규칙이 붙는다.
             conversation_stage=assignment.get("conversation_stage"),
+            # P4-05. 이 실행의 작업·확인할 기준·QG-01 지적·종료 Case 표시. 전부 제어부가 준 구조다.
+            task=assignment.get("task"),
+            criteria=assignment.get("criteria"),
+            gate_findings=assignment.get("gate_findings"),
+            closed_case=bool(assignment.get("closed_case")),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
@@ -846,6 +854,11 @@ class RunnerAgent:
                 produced.update(self._produce_verification(output))
             elif purpose == RunPurpose.LOCAL_EXPERIMENT.value:
                 produced.update(self._produce_experiment(output))
+            elif purpose == RunPurpose.LIMITED_ANALYSIS.value and assignment.get("criteria"):
+                # P4-05. 조사 Profile 의 분석 실행은 기준별 결론을 보고한다. 블록이 없어도 글은
+                # 산출물이다 — 실행은 완료이고 기준은 미검증으로 남는다.
+                produced["criteria_report"] = prompts.parse_analysis_report(output.final_message)
+                produced["produced"] = "analysis"
             elif purpose == RunPurpose.INTENT_GATE_REVIEW.value:
                 target = assignment.get("target_intent_version_id")
                 if not target:
@@ -869,6 +882,7 @@ class RunnerAgent:
             produced.pop("gate_findings", None)
             produced.pop("quality_gate_findings", None)
             produced.pop("interpretation", None)
+            produced.pop("criteria_report", None)
         return produced
 
     @staticmethod
@@ -879,7 +893,9 @@ class RunnerAgent:
         `invalid` 로 보고한다). 블록을 떼니 글이 비면 사람에게 보일 말이 없으므로 실행은
         실패다. 업무 단계 응답은 건드리지 않는다(해석 규칙을 받지 않았다).
         """
-        if assignment.get("conversation_stage") != CaseStage.DISCUSSION.value:
+        if assignment.get("conversation_stage") != CaseStage.DISCUSSION.value and not assignment.get(
+            "closed_case"
+        ):
             return {"produced": "discussion_reply"}
         original = output.final_message
         text, interpretation = convmod.split_interpretation(original)
@@ -953,6 +969,9 @@ class RunnerAgent:
             output.outcome = RunOutcome.FAILED
             produced["produced"] = "none"
             produced["failure"] = "no_command_executed"
+        elif parsed.get("criteria"):
+            # P4-05. 기준별 판정은 결과 보고에 실린다. 적는 것은 제어부의 구조 검사 뒤다.
+            produced["criteria_report"] = parsed["criteria"]
         return produced
 
     def _produce_experiment(self, output: Any) -> dict[str, Any]:

@@ -3,7 +3,8 @@
 //   **진행은 서버 상태로만 말한다.** 요청 상태와 실행별 실제 상태(`execution_state`)를 문장으로
 //   옮길 뿐이고 진행률·예상 시간을 지어내지 않는다.
 //   **중단은 요청이다.** 관련 실행이 실제로 끝난 것을 서버가 확인해야 전송이 열린다.
-//   **업무 단계의 자동 진행은 아직 없다.** 그 사실을 보이고 관리 화면으로 연결한다(UI-PLAN-03 3.11).
+//   **업무 단계는 진행기가 잇는다**(P4-05). 진행 상태·확인 카드는 서버의 `progress` 값 그대로이며
+//   진행기가 잇지 않는 Case 는 그 사실을 보이고 관리 화면으로 연결한다.
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 
@@ -42,6 +43,7 @@ import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodie
 import { Composer, randomId, refusalText } from './Composer'
 import { emit } from './events'
 import type { PanelTab } from './ReviewPanel'
+import { PredecessorLine, ProgressBanner, RelationCards, WaitCards } from './ProgressCards'
 import { checkReceipt, sendAndConfirm } from './send'
 import type { ShellCaseDetail } from './useCaseData'
 
@@ -172,8 +174,14 @@ export function ConversationView(props: {
   const current = conv.current_request
   const interpretationByRun = new Map((conv.interpretations ?? []).map((i) => [i.run_id, i]))
   const openedBy = new Map(conv.requests.map((r) => [r.opened_by_message_id, r]))
-  const openQuestions: IntentQuestion[] = detail?.intent_state?.open_intent_questions ?? []
   const latestIntent = detail?.intent_state?.latest_intent_version ?? null
+  // P4-05. 이월 질문(설계·계획 단계에서 정한다)도 카드다. 답은 그 질문에만 적용된다.
+  // 서버가 **최신 의도 버전의** 이월 질문만 준다(`deferred_open_questions`).
+  const deferred: IntentQuestion[] = (detail?.preparation?.deferred_open_questions ?? []) as IntentQuestion[]
+  const openQuestions: IntentQuestion[] = [
+    ...(detail?.intent_state?.open_intent_questions ?? []),
+    ...deferred,
+  ]
   const resultCount = docs.length
 
   const archiveToggle = async () => {
@@ -223,7 +231,9 @@ export function ConversationView(props: {
         </div>
       </header>
       {actionError && <div className="sh-banner sh-error">{actionError}</div>}
-      <StageBanner conv={conv} detail={detail} caseId={caseId} projectId={props.project.id} />
+      <StageBanner conv={conv} />
+      <ProgressBanner conv={conv} detail={detail} caseId={caseId} projectId={props.project.id} onChanged={props.onChanged} />
+      <PredecessorLine relations={conv.relations ?? []} projectId={props.project.id} />
       {conv.send.runner_connection.state !== 'connected' &&
         conv.send.runner_connection.state !== 'not_determined' && (
           <div className="sh-banner sh-warn" data-testid="pc-disconnected">
@@ -279,6 +289,7 @@ export function ConversationView(props: {
             </div>
           )
         })}
+        <RelationCards relations={conv.relations ?? []} projectId={props.project.id} />
       </div>
 
       <div className="sh-bottom">
@@ -290,6 +301,14 @@ export function ConversationView(props: {
             onChanged={props.onChanged}
           />
         )}
+        <WaitCards
+          conv={conv}
+          detail={detail}
+          caseId={caseId}
+          projectId={props.project.id}
+          runnerId={conv.send.runner_connection.runner_id}
+          onChanged={props.onChanged}
+        />
         {openQuestions.length > 0 && latestIntent && (
           <div className="sh-cards" data-testid="question-cards">
             {openQuestions.map((question) => (
@@ -322,42 +341,26 @@ export function ConversationView(props: {
 
 // ------------------------------------------------------------------ 단계 안내
 
-function StageBanner(props: {
-  conv: ConversationData
-  detail: ShellCaseDetail | null
-  caseId: string
-  projectId: string
-}) {
-  const { conv, detail } = props
-  if (conv.stage === 'discussion') {
-    if (conv.processing && !conv.processing.auto) {
-      return (
-        <div className="sh-banner sh-info">
-          이 제어부는 요청을 자동으로 처리하지 않는다(요청 처리기 꺼짐). 응답은 관리 화면에서 만든다.
-        </div>
-      )
-    }
-    return null
+function StageBanner(props: { conv: ConversationData }) {
+  const { conv } = props
+  if (conv.stage === 'discussion' && conv.processing && !conv.processing.auto) {
+    return (
+      <div className="sh-banner sh-info">
+        이 제어부는 요청을 자동으로 처리하지 않는다(요청 처리기 꺼짐). 응답은 관리 화면에서 만든다.
+      </div>
+    )
   }
-  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
-  return (
-    <div className="sh-banner sh-info" data-testid="work-stage-banner">
-      <strong>업무 단계</strong>
-      {detail && (
-        <>
-          {' '}· {AGREEMENT_LABEL[detail.intent_state?.agreement_state] ?? detail.intent_state?.agreement_state}
-          {' '}· QG-01 {GATE_VERDICT_LABEL[detail.gate.verdict] ?? detail.gate.verdict}
-          {' '}· 상태 {CASE_STATUS_LABEL[detail.status] ?? detail.status}
-        </>
-      )}
-      <br />
-      이 화면은 업무 단계의 다음 작업(의도 초안·검토·준비·구현·검증·완료)을 <strong>아직 자동으로 진행하지
-      않는다</strong>. 대화는 계속할 수 있고 AI 는 읽기 전용으로 답한다.{' '}
-      <a className="sh-link" href={admin}>
-        관리 화면에서 진행
-      </a>
-    </div>
-  )
+  return null
+}
+
+// 진행 카드가 쓰는 서버 상태 표시(업무 단계). 값은 서버가 준 그대로다.
+export function stageSummary(detail: ShellCaseDetail | null): string {
+  if (!detail) return ''
+  return [
+    AGREEMENT_LABEL[detail.intent_state?.agreement_state] ?? detail.intent_state?.agreement_state,
+    `QG-01 ${GATE_VERDICT_LABEL[detail.gate.verdict] ?? detail.gate.verdict}`,
+    `상태 ${CASE_STATUS_LABEL[detail.status] ?? detail.status}`,
+  ].join(' · ')
 }
 
 function WorkStartCard(props: { conv: ConversationData; basisSeq: number }) {
@@ -548,17 +551,29 @@ function RequestProgress(props: {
     headline =
       request.opening_receipt !== 'stored'
         ? '메시지 접수 대기 — PC 가 원문을 저장하면 처리를 시작한다'
-        : props.auto
-          ? '응답 준비 중'
-          : '처리하는 쪽이 아직 응답을 만들지 않았다(자동 처리 꺼짐)'
+        : request.origin && request.origin !== 'user_message'
+          ? '다음 작업을 준비하는 중(작업공간 등)'
+          : props.auto
+            ? '응답 준비 중'
+            : '처리하는 쪽이 아직 응답을 만들지 않았다(자동 처리 꺼짐)'
   } else {
     headline = request.runs.map(runSentence).join(' · ')
   }
+  // P4-05. 시스템이 연 진행 요청은 "누구의 결정 뒤에 이어 가는가"를 보인다.
+  const originText =
+    request.origin === 'human_decision'
+      ? '사람의 결정 뒤 자동 진행'
+      : request.origin === 'system_resume'
+        ? '계속 진행 뒤 자동 진행'
+        : null
   return (
     <div className={`sh-progress sh-progress-${request.state}`} data-testid="request-progress" data-state={request.state}>
       <div className="sh-progress-line">
         <span className="sh-progress-state">{REQUEST_STATE_LABEL[request.state]}</span>
-        <span data-testid="progress-headline">{headline}</span>
+        <span data-testid="progress-headline">
+          {originText ? `${originText} · ` : ''}
+          {headline}
+        </span>
         <span className="sh-spacer" />
         {request.state === 'processing' && !request.stopping && (
           <button

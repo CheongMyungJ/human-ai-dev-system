@@ -224,6 +224,12 @@ export function Composer(props: {
         runners={props.runners}
         runnerId={runnerId}
       />
+      {general.allowed && general.note === 'explanation_only' && (
+        <p className="sh-send-refusal" data-testid="send-note">
+          종료된 업무 — 기존 결과·근거의 설명만 답한다. 실제 수정·추가 개발 요청은 연결된 새 대화로 옮겨진다(이 업무는 다시
+          열리지 않는다).
+        </p>
+      )}
       {!general.allowed && (
         <p className="sh-send-refusal" data-testid="send-refusal">
           지금은 보낼 수 없다:{' '}

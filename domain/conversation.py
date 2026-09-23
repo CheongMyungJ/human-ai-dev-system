@@ -89,6 +89,8 @@ class SendState:
     detail: str
     active_request_id: str | None
     refusals: tuple[ConversationRefusal, ...] = ()
+    #: P4-05. 열려 있어도 **무엇으로** 열렸는지(종료 뒤 설명 전용). 없으면 일반 전송이다.
+    note: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -97,13 +99,19 @@ class SendState:
             "refusals": [r.value for r in (self.refusals or ((self.refusal,) if self.refusal else ()))],
             "detail": self.detail,
             "active_request_id": self.active_request_id,
+            "note": self.note,
         }
+
+
+#: P4-05. 종료 Case 의 일반 전송이 열린 이유. 화면이 이 값을 보고 "설명만"을 말한다.
+EXPLANATION_ONLY_NOTE = "explanation_only"
 
 
 def general_send_state(
     case_closed: bool,
     active_request: dict[str, Any] | None,
     runner_disconnected: bool = False,
+    explanation_allowed: bool = False,
 ) -> SendState:
     """일반·정정 메시지를 지금 받을 수 있는가(D-70·D-75·FR-11).
 
@@ -112,8 +120,12 @@ def general_send_state(
 
     `runner_disconnected` 는 원문을 저장할 PC 가 미연결이라는 판단이다(UI-02). 요청 잠금과
     함께 걸리면 둘 다 사유로 남는다.
+
+    `explanation_allowed` 는 P4-05 의 **종료 뒤 설명 전용 진입**(D-87)이다. 종료 Case 의 일반
+    메시지는 기존 결과·근거의 설명 응답만 받고, 수정 요청은 연결된 새 대화로 옮겨진다. 그 사실을
+    `note` 로 함께 준다 — 열린 것이 "업무 재개"로 보이지 않게.
     """
-    if case_closed:
+    if case_closed and not explanation_allowed:
         return SendState(
             False,
             ConversationRefusal.CASE_ALREADY_CLOSED,
@@ -153,6 +165,15 @@ def general_send_state(
             )
         )
     if not reasons:
+        if case_closed:
+            return SendState(
+                True,
+                None,
+                "종료된 업무다. 기존 결과·근거의 설명만 답하고, 실제 수정 요청은 연결된 새"
+                " 대화로 옮긴다",
+                None,
+                note=EXPLANATION_ONLY_NOTE,
+            )
         return SendState(True, None, "보낼 수 있다", None)
     return SendState(
         False,
@@ -160,6 +181,7 @@ def general_send_state(
         " · ".join(detail for _code, detail in reasons),
         active_id,
         tuple(code for code, _detail in reasons),
+        note=EXPLANATION_ONLY_NOTE if case_closed else None,
     )
 
 

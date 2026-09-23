@@ -140,6 +140,8 @@ export interface CaseDetail extends Case {
   artifacts: ArtifactRef[]
   intent_versions: IntentVersion[]
   decisions: Decision[]
+  // UI-01 부터 같은 응답에 실린다. P4-05 의 피드백 처리 카드가 쓴다.
+  feedback?: FeedbackRecord[]
   runs: Run[]
   gate: GateResult
   quality_gates: QualityGateState
@@ -2150,7 +2152,10 @@ export interface ConversationMessage {
 export interface ConversationRequest {
   id: string
   case_id: string
-  opened_by_message_id: string
+  // P4-05. 시스템이 연 진행 요청은 여는 메시지가 없다(`origin` 이 말한다).
+  opened_by_message_id: string | null
+  origin?: 'user_message' | 'human_decision' | 'system_resume'
+  origin_ref?: string | null
   state: RequestState
   opened_at: string
   settled_at: string | null
@@ -2214,6 +2219,8 @@ export interface SendState {
   refusals: string[]
   detail: string
   active_request_id: string | null
+  // P4-05. 열려 있어도 **무엇으로** 열렸는지. `explanation_only` 는 종료 뒤 설명 전용이다(D-87).
+  note?: string | null
 }
 
 // UI-02. PC 연결은 heartbeat 에서 도출한다. `basis` 는 어느 PC 를 기준으로 판단했는가다.
@@ -2251,6 +2258,10 @@ export interface ConversationView {
   processing?: { auto: boolean; actor: string; scope: string }
   // UI-03. 준비 단계 응답의 AI 해석(본문 없음). 업무화의 **근거가 아니라 기록**이다.
   interpretations?: ConversationInterpretation[]
+  // P4-05. 업무 단계 진행 상태·이력(행이 없으면 null — 진행기가 잇지 않는 Case)과 연결 Case·종료 기록.
+  progress?: ProgressView | null
+  relations?: CaseRelationView[]
+  closure?: ClosureRecord | null
 }
 
 export interface ConversationInterpretation {
@@ -2446,6 +2457,9 @@ export interface RunnerWithConnection extends RunnerInfo {
 }
 
 export interface ConversationRow extends Case {
+  // P4-05. 진행 상태(서버 도출). null 은 진행기가 잇지 않는 Case.
+  progress_state?: ProgressStateCode | null
+  progress_wait?: string[]
   stage?: 'discussion' | 'work' | null
   profile?: string | null
   effective_stage: 'discussion' | 'work'
@@ -2493,4 +2507,184 @@ export const shellApi = {
 
   repositories: (projectId: string) =>
     request<{ repositories: ProjectRepository[] }>(`/api/projects/${projectId}/repositories`),
+}
+
+// ===================================================================== P4-05
+//
+// 업무 단계 자동 진행·완료·예외·후속. **판단 값은 서버가 준다** — 진행 상태·대기 사유·연결 Case 는
+// 서버가 도출한 값이며 화면은 그 코드로 카드를 고를 뿐이다. 카드의 확인 동작은 기존 사람 경로
+// (동의·확인 지점·delta·단계 검토·피드백·예외·인수)를 그대로 부른다.
+
+export type ProgressStateCode = 'running' | 'waiting_human' | 'blocked' | 'paused' | 'done'
+
+export interface ProgressWait {
+  code: string
+  detail: string
+  [key: string]: unknown
+}
+
+export interface ProgressEvent {
+  id: string
+  case_id: string
+  seq: number
+  at: string
+  step: string
+  action: string
+  run_id: string | null
+  request_id: string | null
+  detail: string | null
+  codes: string[]
+}
+
+export interface ProgressView {
+  case_id: string
+  state: ProgressStateCode
+  step: string
+  step_detail: string | null
+  wait: ProgressWait[]
+  request_id: string | null
+  last_run_id: string | null
+  attempts: Record<string, number>
+  paused_at: string | null
+  paused_by: string | null
+  started_at: string
+  updated_at: string
+  events: ProgressEvent[]
+  actor: string
+  auto: boolean
+}
+
+export interface CaseRelationView {
+  relation: string
+  direction: 'successor' | 'predecessor'
+  case_id: string
+  title: string
+  status: string
+  reason_summary: string | null
+  created_at: string
+}
+
+export const PROGRESS_STATE_LABEL: Record<ProgressStateCode, string> = {
+  running: '진행 중',
+  waiting_human: '확인 필요',
+  blocked: '막힘',
+  paused: '멈춤',
+  done: '완료',
+}
+
+export const WAIT_LABEL: Record<string, string> = {
+  intent_questions: '의도 질문에 답하기',
+  intent_agreement: '의도 동의',
+  material_delta: '동의된 의도의 변경 확인',
+  gate_repair_exhausted: 'QG-01 지적이 남음',
+  sizing_not_decided: '작업 수준 미결정',
+  controlled_start: '시작 범위 확인(controlled)',
+  stage_review: '준비 산출물 검토',
+  preparation_repair_exhausted: '준비 산출물의 필수 항목 미정',
+  deferred_questions: '이월 질문에 답하기',
+  work_graph_missing: '작업 그래프 없음',
+  tasks_blocked: '배정 가능한 작업 없음',
+  repository_selection: '코드 쓰기 저장소 선택',
+  task_failed: '작업 실행 실패',
+  unresolved_feedback: '미해결 피드백',
+  controlled_result: '결과 확인(controlled)',
+  criteria_unresolved: '미충족·미검증 기준',
+  objective_without_criteria: '목적 의무에 기준 없음',
+  quality_gate: '명시 품질 게이트 미통과',
+  admission_refused: '진입 검사 거부',
+  tool_unavailable: '도구를 쓸 수 없음',
+  workspace_failed: '작업공간 준비 실패',
+  budget_hard_limit: '예산 hard 한도 도달',
+  context_unavailable: '핵심 입력을 읽을 수 없음',
+  run_not_created: '실행을 만들지 못함',
+}
+
+export const PROGRESS_STEP_LABEL: Record<string, string> = {
+  work_started: '업무화',
+  intent_authoring: '의도 초안 작성',
+  intent_rewrite_answers: '답을 반영한 의도 재작성',
+  intent_repair: 'QG-01 지적 반영 재작성',
+  intent_gate_review: 'QG-01 독립 검토',
+  light_conformance: '가벼운 정합성 확인',
+  design_authoring: '설계 작성',
+  design_rewrite: '설계 재작성',
+  plan_authoring: '개발계획 작성',
+  plan_rewrite: '개발계획 재작성',
+  combined_authoring: '결합 기록 작성',
+  combined_rewrite: '결합 기록 재작성',
+  plan_rewrite_stale_graph: '개발계획 재작성(의도 변경)',
+  analysis: '분석 실행',
+  analysis_retry: '분석 다시 시도',
+  candidate: '종료 후보 확인',
+  request_opened: '진행 요청 열림',
+  resumed: '계속 진행',
+  paused: '멈춤',
+  closed: '종료',
+  criteria: '기준 판정',
+}
+
+export const PROGRESS_ACTION_LABEL: Record<string, string> = {
+  started: '업무화',
+  run_created: '실행 만듦',
+  run_exists: '실행 있음',
+  workspace_requested: '작업공간 요청',
+  recorded: '기록',
+  candidate: '종료 후보',
+  waiting_human: '확인 필요',
+  blocked: '막힘',
+  paused: '멈춤',
+  resumed: '계속 진행',
+  done: '완료',
+  request_opened: '진행 요청',
+  admission_refused: '진입 거부',
+  criteria_recorded: '기준 판정 기록',
+  criteria_refused: '기준 판정 거부',
+}
+
+export const progressApi = {
+  get: (caseId: string) =>
+    request<{ case_id: string; progress: ProgressView | null; auto: boolean }>(
+      `/api/cases/${caseId}/progress`,
+    ),
+
+  // 멈춤·막힘·실패 뒤 **계속 진행**. 확인·동의·인수가 아니다 — 다음 걸음을 다시 보라는 요청이다.
+  resume: (caseId: string) =>
+    request<{ result: unknown; progress: ProgressView | null }>(`/api/cases/${caseId}/progress/resume`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner' }),
+    }),
+
+  // controlled 확인 지점. **대상·해시를 함께** 보낸다(FR-23) — 대상이 바뀌면 서버가 낡은 확인으로 본다.
+  confirmCheckpoint: (
+    caseId: string,
+    checkpoint: 'start_scope' | 'result_candidate',
+    subjectType: string,
+    subjectId: string,
+    subjectHash: string | null,
+    note: string,
+  ) =>
+    request<ControlledCheckpointRow[]>(
+      `/api/cases/${caseId}/controlled-checkpoints/${checkpoint}/confirmation`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          confirmed_by: 'owner',
+          explicit: true,
+          subject_type: subjectType,
+          subject_id: subjectId,
+          subject_hash: subjectHash,
+          note_summary: note || null,
+        }),
+      },
+    ),
+
+  materialDeltas: (caseId: string) =>
+    request<MaterialDeltaState>(`/api/cases/${caseId}/material-deltas`),
+
+  // 단계 검토(결합 기록 포함). `reviewed` 를 명시로 보낸다 — 화면을 열어 본 것이 검토가 아니다.
+  reviewStage: (caseId: string, stage: string, note: string) =>
+    request<StageReview>(`/api/cases/${caseId}/stage-reviews/${stage}`, {
+      method: 'POST',
+      body: JSON.stringify({ reviewed: true, note, actor: 'owner' }),
+    }),
 }

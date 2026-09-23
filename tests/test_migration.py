@@ -1857,8 +1857,10 @@ def test_a_v18_database_gets_no_interpretation_it_never_had(tmp_path):
 
     conn = db.connect(path)
     db.migrate(conn)
-    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 19
-    assert db.SCHEMA_VERSION == 19
+    # 뜻은 "현재 판으로 이행한다"다. v20(P4-05)이 표·컬럼을 더했으므로 19 고정을 `>=` 로 바꿨다 —
+    # v20 고정은 `test_a_v19_database_gets_no_progress_it_never_had` 가 한다.
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] >= 19
+    assert db.SCHEMA_VERSION >= 19
     assert conn.execute("SELECT COUNT(*) FROM conversation_interpretation").fetchone()[0] == 0
     request = conn.execute("SELECT * FROM conversation_request WHERE id = 'req-1'").fetchone()
     assert (request["state"], request["settled_by"]) == ("processing", None)
@@ -1882,9 +1884,9 @@ def test_a_v18_database_gets_no_interpretation_it_never_had(tmp_path):
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(statement)
 
-    # 반복 이행이 멱등이다.
+    # 반복 이행이 멱등이다(현재 판의 표식이 하나다).
     db.migrate(conn)
     assert conn.execute(
-        "SELECT COUNT(*) FROM schema_version WHERE version = 19"
+        "SELECT COUNT(*) FROM schema_version WHERE version = ?", (db.SCHEMA_VERSION,)
     ).fetchone()[0] == 1
     conn.close()

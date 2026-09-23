@@ -132,6 +132,9 @@ class System:
             env=self._env(
                 HADS_CONTROLLER_DATA=str(data), HADS_WEB_DIST=str(DIST),
                 HADS_RUNNER_STALE_SECONDS=str(STALE_SECONDS), HADS_AUTO_PROCESS_REQUESTS="1",
+                # P4-05 부터 업무 단계는 진행기가 잇는다. 이 라이브는 UI-03 계약(업무화 뒤 실행 없음)을
+                # 보므로 진행기만 끈다 — 그 흐름의 라이브는 `ui/live/p405_progress.py` 다.
+                HADS_AUTO_PROGRESS_WORK="0",
             ),
             stdout=(data / "uvicorn.log").open("a", encoding="utf-8"),
             stderr=subprocess.STDOUT,

@@ -262,6 +262,9 @@ FAKE_IMPLEMENTATION_RESPONSE = """구현했습니다.
 """
 
 #: 검증 실행의 기본 응답. 명령 하나가 성공으로 끝난다.
+#:
+#: P4-05. **기준별 판정**도 함께 낸다(`criteria`). 진행기가 잇는 Case 에서만 적용되고, 사람·
+#: 하네스가 진행하는 기존 시험에서는 결과에 실릴 뿐 아무 것도 적지 않는다.
 FAKE_VERIFICATION_RESPONSE = """확인했습니다.
 
 ```json
@@ -270,10 +273,63 @@ FAKE_VERIFICATION_RESPONSE = """확인했습니다.
     {"command": "python -m pytest tests/test_reader.py", "summary": "reader 시험", "exit_code": 0}
   ],
   "result_summary": "시험 2건이 통과했다",
+  "criteria": [
+    {"key": "C-01", "verdict": "met", "summary": "표본 파일 시험이 통과했다"},
+    {"key": "C-02", "verdict": "met", "summary": "경로 처리 시험이 통과했다"}
+  ],
   "detail": "ERROR 2줄·INFO 2줄 표본으로 확인했다"
 }
 ```
 """
+
+#: P4-05. 진행기 시험용 계획 — **검증 Task 가 기준을 `verifies` 로 잇는다.** 기본 `FAKE_TASKS` 는
+#: 구현 Task 만 있어 기준을 확인하는 작업이 없다(그 계획으로는 제품이 기준을 적지 않는다).
+FAKE_TASKS_VERIFIED: list[dict[str, Any]] = [
+    {
+        "key": "T1",
+        "kind": "implementation",
+        "purpose": "필터 함수를 구현한다",
+        "purpose_summary": "필터 함수 구현",
+        "deliverable": "reader.py 의 filter_errors",
+        "deliverable_summary": "filter_errors 함수",
+        "completion": "표본 파일에서 기대한 줄만 남는다",
+        "completion_summary": "표본 파일에서 기대한 줄만 남는다",
+        "relates_to": "goal",
+        "criteria": [
+            {"key": "C-01", "relation": "implements"},
+            {"key": "C-02", "relation": "implements"},
+        ],
+    },
+    {
+        "key": "T2",
+        "kind": "verification",
+        "purpose": "표본 파일 시험을 돌린다",
+        "purpose_summary": "표본 파일 시험",
+        "deliverable": "시험 실행 기록",
+        "deliverable_summary": "시험 실행 기록",
+        "completion": "시험이 실제로 실행되고 결과가 보고됐다",
+        "completion_summary": "시험이 실제로 실행되고 결과가 보고됐다",
+        "relates_to": "expected_outcome",
+        "depends_on": ["T1"],
+        "criteria": [
+            {"key": "C-01", "relation": "verifies"},
+            {"key": "C-02", "relation": "verifies"},
+        ],
+    },
+]
+
+FAKE_PLAN_VERIFIED = fake_preparation_response("계획", FAKE_PLAN_SECTIONS, tasks=FAKE_TASKS_VERIFIED)
+
+#: P4-05. Fast Lane 의 결합 기록 응답 — 결합 기록의 네 항목과 검증 Task 가 있는 계획.
+FAKE_COMBINED_SECTIONS: dict[str, str] = {
+    "change_summary": "reader 모듈에 필터 함수를 더한다",
+    "verifiability": "표본 파일의 기대 줄 수와 실제 출력을 비교한다",
+    "tasks": "T1 구현 → T2 검증",
+    "verification": "표본 파일 시험 1건",
+}
+FAKE_COMBINED_VERIFIED = fake_preparation_response(
+    "결합", FAKE_COMBINED_SECTIONS, tasks=FAKE_TASKS_VERIFIED
+)
 
 
 class FakeCliExecutor:
