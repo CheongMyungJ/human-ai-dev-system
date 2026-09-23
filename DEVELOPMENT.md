@@ -4,13 +4,13 @@
 
 **UI-01(대화·요청 기반)을 구현·검증했다(S-020, 아래 10절).** 주요 UI 동작·제품 정책·개발 순서는 D-68~90으로 확정돼 있다. [대화 중심 UI 설계](ui-conversation-design.md)의 확정 내용과 [UI-01 결과](ui/evidence/UI-01-results.md), 아래 1.3절의 다음 작업을 먼저 읽는다. 정확한 화면 치수·단축키·기술 상세는 실제 구현에서 검토한다.
 
-**앞선 문서 세션의 후속 지시(2026-09-23, 당시 기록):** UI 설계·개발 인계 문서 20개의 커밋과 `origin/main` push를 허용했고 `a8ee278`로 반영됐다. 그 허용은 UI-01 코드 변경으로 확대되지 않으며 **UI-01 변경은 커밋·push하지 않고 작업 트리에 남겼다**(S-020).
+**앞선 문서 세션의 후속 지시(2026-09-23, 당시 기록):** UI 설계·개발 인계 문서 20개의 커밋과 `origin/main` push를 허용했고 `a8ee278`로 반영됐다. 그 허용은 UI-01로 확대되지 않았고, **UI-01은 S-020의 별도 사용자 지시로 `a509063`에 커밋해 `origin/main`에 push했다.**
 
 다른 개발 세션에 전달할 요청:
 
-> C:\git\human-ai-dev-system-design\DEVELOPMENT.md의 최신 인계(S-020)와 UI-01 결과를 읽고 P4-04 문맥·재개 개발을 진행해줘. UI-01·P4-03 완료 상태와 미커밋 작업 트리를 보존하고, 실제 코드·환경을 확인한 뒤 P4-PLAN-04를 기록·공유하고 구현·검증·인계를 해줘. 이번 범위는 P4-04 하나이며 UI-02(수신/실행 분리·중단)나 UI-03 화면까지 자동 확대하지 마. 새 제품 판단이 필요하면 질문해줘.
+> C:\git\human-ai-dev-system-design\DEVELOPMENT.md의 최신 인계(S-020)와 UI-01 결과를 읽고 P4-04 문맥·재개 개발을 진행해줘. UI-01·P4-03 완료 상태를 보존하고, 실제 코드·환경을 확인한 뒤 P4-PLAN-04를 기록·공유하고 구현·검증·인계를 해줘. 이번 범위는 P4-04 하나이며 UI-02(수신/실행 분리·중단)나 UI-03 화면까지 자동 확대하지 마. 새 제품 판단이 필요하면 질문해줘.
 
-**기본 수행 단위는 현재 하위 작업 하나**다. **P4-01·P4-02·P4-03·UI-01은 끝났고 P3의 남은 라이브 하나(경로 C)는 사용자 지시로 스킵됐다.** D-90에 따라 다음은 **P4-04**, 이어서 UI-02를 별도 plan으로 진행하고 그 뒤 UI-03 기본 화면이다. P4 전체로 범위를 자동 확대하지 않는다. 사용자 지시가 우선하고, 필요한 기술 선택은 진행하되 새 제품 판단이 필요한 경우만 질문한다. P4-03의 변경은 당시 사용자 지시로 커밋·push 했다(`bf86590`). **UI-01 변경은 커밋·push 허용을 받지 않았으므로 작업 트리에 미커밋으로 남아 있다.**
+**기본 수행 단위는 현재 하위 작업 하나**다. **P4-01·P4-02·P4-03·UI-01은 끝났고 P3의 남은 라이브 하나(경로 C)는 사용자 지시로 스킵됐다.** D-90에 따라 다음은 **P4-04**, 이어서 UI-02를 별도 plan으로 진행하고 그 뒤 UI-03 기본 화면이다. P4 전체로 범위를 자동 확대하지 않는다. 사용자 지시가 우선하고, 필요한 기술 선택은 진행하되 새 제품 판단이 필요한 경우만 질문한다. P4-03의 변경은 당시 사용자 지시로 커밋·push 했다(`bf86590`). UI-01 변경은 **사용자 지시로 커밋·push 했다**(`a509063`, S-020 인계). 그 허용은 그 변경과 인계 기록에만 적용되며 다음 변경의 외부 쓰기 허용이 아니다.
 
 ## 1. 현재 상태
 
@@ -24,9 +24,9 @@
 | 활성 plan | **없다.** [UI-PLAN-01](plans/UI-PLAN-01.md)은 완료됐고 [실행 결과](ui/evidence/UI-01-results.md)가 있다. 다음 개발 세션에서 **P4-PLAN-04를 새로 기록·공유**한다. 완료된 plan을 다시 열지 않음 |
 | 다음 순서 | ~~UI-01~~ → P4-04 → UI-02 → UI-03 기본 화면 → P4-05~07·UI-04 → P5 → P6. 단계 안에서도 현재 작업 하나씩 계획·검증. 스킵 경로 C는 관련 예산 라이브가 필요해질 때 다시 검토 |
 | 마지막 제품 검증 | **pytest 513 + P1 계약 unittest 18 통과**(S-020, 기준선 481에서 +32), 스키마 **v16**, `npm run build` 성공. UI-01 집중 시험 30·v15→v16 이행·**실제 uvicorn 강제 종료** 재시작 확인. **실제 `codex-cli 0.154.0`** 논의 응답 2회·업무화 뒤 의도 작성 1회를 두 번 실행해 제품 규칙 20건 통과([UI-01 결과](ui/evidence/UI-01-results.md) 3절). 이전 수치는 당시 사실로 보존 |
-| 이 문서 개정 시작 상태 | S-020 시작 시 `main`, HEAD `a8ee278`(UI 설계·개발 인계 문서), 작업 트리 clean, 로컬 추적 ref `origin/main`과 같음으로 관측(원격을 새로 조회하지 않음). 종료 시 HEAD 그대로이며 UI-01 변경은 **미커밋**이다(10절 S-020) |
+| 이 문서 개정 시작 상태 | S-020 시작 시 `main`, HEAD `a8ee278`(UI 설계·개발 인계 문서), 작업 트리 clean, 로컬 추적 ref `origin/main`과 같음으로 관측(원격을 새로 조회하지 않음). 종료 시 사용자 지시로 UI-01을 `a509063`으로 커밋·push했고 이 인계 기록도 이어서 커밋·push한다(10절 S-020) |
 | 남은 상세 | [UI 설계](ui-conversation-design.md) 14절의 실제 화면·CLI 능력 검증. UI-01이 준비 Case·요청 상태/API·잠금·이행을 정했다. 요청 `unknown` 해제·PC 단절 전송 거부·Runner 수신/실행 분리는 UI-02, 활성 Case 변경(D-86)은 UI-04. 경로 C 스킵·시험 기능 A·미기록 Autonomy의 controlled 취급은 유지 |
-| 이번 허용 범위 | S-020: **UI-01의 plan·구현·검증·인계**(사용자 요청 "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행"). 커밋·push·PR 허용은 받지 않았고 하지 않았다. 앞선 문서 세션의 push 허용을 승계하지 않으며 제품의 실제 외부 게시는 여전히 P5다 |
+| 이번 허용 범위 | S-020: **UI-01의 plan·구현·검증·인계**(사용자 요청 "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행"). 작업 뒤 사용자 지시("커밋푸시해줘")로 **UI-01 변경과 이 인계 기록의 커밋·`origin/main` push**. PR은 만들지 않았다. 앞선 문서 세션의 허용을 승계한 것이 아니며 제품의 실제 외부 게시는 여전히 P5다 |
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
 
@@ -106,7 +106,7 @@ P4-04의 고정 입력·새 세션·usage 복원은 이 설계와 연결되지�
 2. 현재 상태와 최신 2차 인계, [UI 설계](ui-conversation-design.md), P4-03 결과, [사용자 결정](decisions.md), [전체 설계](design-draft.md), [문맥](review-context-contract.md), [품질 게이트](quality-gates.md), [게이트 운영](gate-operations.md), [완료](completion-lifecycle.md)을 읽는다. 전체 옛 개발 일지를 다시 읽을 필요는 없지만 현재 하위 작업과 UI 설계의 접점·미구현 경계는 확인한다.
 3. 실제 코드의 정책·스키마·진입 검사·화면과 새 설계의 차이를 확인한다. 문서상 목표를 구현 사실로 취급하지 않는다. 기존 Case·결정·원문·증거·실행 이력은 보존한다.
 4. 기존 실행 환경을 확인하고 `scripts\bootstrap.ps1`, `scripts\run-tests.ps1` 등 저장소의 재현 경로로 기준선을 확인한다. 설치/복구가 필요하면 기존 허용·환경에 맞게 처리한다. 481+18은 인계 시점 수치이며 현재 시험 결과를 대신하지 않는다.
-5. **P4-PLAN-01~03·UI-PLAN-01은 완료다.** 다시 열지 말고 다음 **P4-PLAN-04를 기록·공유한 뒤** P4-04를 구현한다. UI-02는 그 뒤 별도 plan이다. P4-01~03이 남긴 정책 리비전·예약·재검증 판정·repair 누적·Profile 정의판·목적 의무·결론과 UI-01의 준비 단계·메시지·요청·잠금·업무화 기록을 보존한다. **UI-01 변경은 미커밋이다** — 시작 시 작업 트리에 그대로 있는지 확인하고 자동 reset·stash 하지 않는다.
+5. **P4-PLAN-01~03·UI-PLAN-01은 완료다.** 다시 열지 말고 다음 **P4-PLAN-04를 기록·공유한 뒤** P4-04를 구현한다. UI-02는 그 뒤 별도 plan이다. P4-01~03이 남긴 정책 리비전·예약·재검증 판정·repair 누적·Profile 정의판·목적 의무·결론과 UI-01의 준비 단계·메시지·요청·잠금·업무화 기록을 보존한다. UI-01은 `a509063`에 커밋·push됐다 — 시작 시 `git log`·원격 ref로 확인하고, 이전 인계의 원격 상태를 현재 사실로 가정하지 않는다.
 6. 작업을 수행한 뒤 현재 표와 진행표·plan·결과를 함께 갱신한다. 선택한 하위 작업에서 이후 항목으로 자동 확대하지 않는다. P3-R4의 고정 컨텍스트(`run_context_ref`)·material delta, P4-01~02의 게이트 실행·재검증, P4-03의 완료 의미(`completion_meaning`)를 재사용한다. 기존 판정을 소급 변경하지 않는다.
 
 기본 작업공간은 이 checkout이다. 다른 작업공간이 필요하면 정확한 경로·이유를 plan과 인계에 기록한다. 다른 세션과 같은 파일을 동시에 수정하지 않는다. 이 안내서는 구현을 위임하지만 외부 쓰기나 기존 데이터 파괴를 포괄하지 않는다.
@@ -272,8 +272,9 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 - **실제 CLI:** **수행.** 새 지시문(논의 응답)·새 문맥 역할이므로 `ui/live/ui01_conversation.py` 로 실제 `codex-cli 0.154.0` 논의 응답 2회·업무화 뒤 의도 작성 1회를 **두 번** 돌렸다(1회차 하네스는 본문 요약 문제로 증거에서 제외). 제품 규칙 20건 통과, 지시와 다른 관찰 없음 — 저장소 무변경, 작업 주장 없음, 앞선 금지를 문맥으로 정확히 회상, 논의의 "문서 만들지 말 것"이 초안 `exclusions` 에 `user_requirement` 로 옮겨짐. 자동 판정 밖 관찰: 초안 `constraints` 의 Profile 유래 문장이 `user_requirement` 로 적힘(9절). 표본은 대화 하나다.
 - **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 브라우저 초안(UI-03), PC 단절 전송 거부·Runner 수신/실행 분리·중단·`unknown` 해제(UI-02), 활성 Profile 이행(D-86), 종료 후 설명(D-87), 자연어 자동 분류(UI-03), 문맥 크기(P4-04)는 구현하지 않았다.
 - **다음 행동:** **P4-04(문맥·재개)** 를 새 plan 으로 시작한다(1.3절). 완료된 UI-PLAN-01·P4-PLAN-01~03 을 다시 열지 않고 UI-02·UI-03 으로 자동 확대하지 않는다.
-- **사람에게 물어야 할 것:** 없다. 커밋·push 를 원하면 사용자 지시가 필요하다 — 이 세션은 허용을 받지 않았다.
-- **작업공간:** 시작·종료 HEAD `main`/`a8ee278`. **UI-01 변경은 미커밋이다.** 새 파일 `domain/conversation.py`, `tests/test_conversation.py`, `plans/UI-PLAN-01.md`, `ui/evidence/UI-01-*`, `ui/live/ui01_conversation.py`, `web/src/ConversationPanel.tsx` 와 수정 파일 `controller/{admission,api,db,repository,schema.sql}`, `domain/models.py`, `runner/prompts.py`, `tests/{conftest,test_migration,test_restart_recovery}.py`, `web/src/{App.tsx,api.ts}`, 문서 `DEVELOPMENT.md`·`README.md`·`ui-conversation-design.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 상태는 `git status --short` 로 재확인한다.
+- **사람에게 물어야 할 것:** 없다. P4-04 는 문서에 확정된 범위로 plan 을 쓸 수 있다.
+- **사용자 지시로 한 일:** 작업을 마친 뒤 사용자 지시("커밋푸시해줘")로 UI-01 변경을 **`a509063` 으로 커밋해 `origin/main` 에 push** 했다(`a8ee278..a509063`, push 전에 원격을 fetch 해 앞서 간 커밋이 없음을 확인). 이 인계 기록을 이어서 커밋·push 했다. 커밋 뒤 `tests/test_migration.py` 를 다시 돌려 `_v15_schema()` 가 커밋 이력에서 `bf86590` 의 v15 스키마를 찾는 것을 확인했다(11건 통과, 건너뜀 없음). 허용은 이 변경에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`a8ee278`, clean·로컬 `origin/main` 과 같음. 이 세션이 그 위에 UI-01 커밋 `a509063` 과 인계 기록 커밋을 올렸다 — 새 파일 `domain/conversation.py`, `tests/test_conversation.py`, `plans/UI-PLAN-01.md`, `ui/evidence/UI-01-*`, `ui/live/ui01_conversation.py`, `web/src/ConversationPanel.tsx` 와 수정 파일 `controller/{admission,api,db,repository,schema.sql}`, `domain/models.py`, `runner/prompts.py`, `tests/{conftest,test_migration,test_restart_recovery}.py`, `web/src/{App.tsx,api.ts}`, 문서 `DEVELOPMENT.md`·`README.md`·`ui-conversation-design.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 커밋은 `git log --oneline a8ee278..HEAD`, 원격 반영은 로컬/원격 ref 로, 작업 트리는 `git status --short` 로 재확인한다.
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 스크립트가 `finally` 에서 내렸다. 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-ui-01-live\{154349674,154607866}` 에 남아 있고(두 회차) 저장소 `var\` 는 건드리지 않았다. 증거 사본은 2회차의 `ui/evidence/UI-01-live*` 다.
 - **다음 세션이 이어서 할 때:** `tests/test_migration.py` 의 `_v15_schema()` 는 `스키마 v16` 표식이 **없는** 가장 최근 커밋 스키마를 찾는다 — UI-01 을 커밋하기 전에도 뒤에도 `bf86590` 의 스키마를 고른다. 대화 도우미는 `tests/conftest.py` 의 `create_conversation`·`send_message`(접수까지)·`post_message`(응답만)·`discussion_reply`·`settle`·`start_work`·`intake_count` 다. `post_message` 의 기본 요약은 본문이 아닌 표시다 — 시험도 본문을 요약으로 넣지 않는다.
 
