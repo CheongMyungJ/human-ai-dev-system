@@ -31,6 +31,7 @@ from domain import context as ctxmod
 from domain import conversation as convmod
 from domain import ids, prep_doc, profiles, quality
 from domain import progression
+from domain import run_control as runctl
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
     NEEDS_CONTROLLED_START,
@@ -141,6 +142,8 @@ from domain.models import (
     RequestOutcomeReason,
     RequestSettleOutcome,
     RequestState,
+    ResidualBasis,
+    ResidualSource,
     ReviewMode,
     RunOutcome,
     RunPurpose,
@@ -227,6 +230,14 @@ class RequestNotProcessing(ConflictError):
 
     진입 검사는 트랜잭션 밖에서 돌기 때문에 그 사이 요청 종료가 끼어들 수 있다. 예산의
     `BudgetExhausted` 와 같은 자리다 — 검사만 두면 경합에서 끝난 요청에 실행이 붙는다.
+    """
+
+
+class RequestStopRequested(RequestNotProcessing):
+    """Run 생성 트랜잭션 안에서 그 요청에 **중단이 요청된 것**을 발견했다(UI-02).
+
+    처리 중이라는 사실만 보면 중단 요청 뒤에 새 실행이 붙는다(D-76 "후속 실행 시작을
+    막는다"). 진입 검사와 같은 경쟁 자리이며 사유만 다르다.
     """
 
 
@@ -351,11 +362,14 @@ class Repository:
         self,
         conn: sqlite3.Connection,
         context_inline_limit: int = ctxmod.DEFAULT_INLINE_LIMIT_BYTES,
+        runner_stale_seconds: float = runctl.DEFAULT_RUNNER_STALE_SECONDS,
     ) -> None:
         self.conn = conn
         #: P4-04. 한 실행의 지시 + 인라인 고정 참조의 한도(바이트). 제어부 설정에서 온다.
         #: 생성 때 적용한 값이 실행에 기록된다(`run.context_inline_limit`).
         self.context_inline_limit = int(context_inline_limit)
+        #: UI-02. 이만큼 heartbeat 가 없으면 PC 미연결로 본다(D-75). 제어부 설정에서 온다.
+        self.runner_stale_seconds = float(runner_stale_seconds)
 
     # ------------------------------------------------------------------ owner
 
@@ -458,6 +472,9 @@ class Repository:
                         now,
                     ),
                 )
+        # UI-02. **재시작한 Runner 는 이전에 확인하지 못한 잔류를 다시 본다.** 그 사이 재부팅
+        # 됐거나 job 이 닫혔으면 이번에 확인 근거가 생긴다.
+        self.request_runner_rechecks(runner_id)
         return self.get_runner(runner_id)
 
     def get_runner(self, runner_id: str) -> dict[str, Any]:
@@ -477,14 +494,37 @@ class Repository:
         rows = self.conn.execute("SELECT id FROM runner ORDER BY registered_at").fetchall()
         return [self.get_runner(r["id"]) for r in rows]
 
-    def heartbeat(self, runner_id: str) -> None:
+    def heartbeat(
+        self, runner_id: str, executing: Iterable[dict[str, Any]] = ()
+    ) -> dict[str, Any]:
+        """생존 보고. **지금 실행 중인 실행**도 함께 받는다(UI-02).
+
+        실행 중 보고는 그 Runner 에 배정된 같은 세대의 끝나지 않은 실행에만 적는다 —
+        다른 Runner·옛 세대의 보고가 "살아 있다"를 만들지 않는다. 응답은 이 Runner 가 할
+        일(중단·잔류 재확인)이다. 한 번의 왕복으로 생존과 제어를 함께 주고받는다.
+        """
+        now = utc_now()
         with transaction(self.conn):
             cur = self.conn.execute(
                 "UPDATE runner SET last_heartbeat_at = ?, status = 'registered' WHERE id = ?",
-                (utc_now(), runner_id),
+                (now, runner_id),
             )
+            if cur.rowcount:
+                for item in executing:
+                    self.conn.execute(
+                        "UPDATE run SET liveness_at = ? WHERE run_id = ? AND assigned_runner_id = ?"
+                        " AND assignment_generation = ? AND status <> ?",
+                        (
+                            now,
+                            str(item.get("run_id")),
+                            runner_id,
+                            int(item.get("generation") or 0),
+                            RunStatus.FINISHED.value,
+                        ),
+                    )
         if cur.rowcount == 0:
             raise NotFoundError(f"runner not found: {runner_id}")
+        return self.runner_controls(runner_id)
 
     # ------------------------------------------------------------------- case
 
@@ -1126,13 +1166,20 @@ class Repository:
                     # 트랜잭션 밖이라 그 사이 요청 종료가 끼어들 수 있고, 그러면 끝난
                     # 요청에 실행이 붙어 잠금이 풀린 채 실행이 돈다.
                     live = self.conn.execute(
-                        "SELECT state FROM conversation_request WHERE id = ? AND case_id = ?",
+                        "SELECT state, stop_requested_at FROM conversation_request"
+                        " WHERE id = ? AND case_id = ?",
                         (request_id, case_id),
                     ).fetchone()
                     if live is None or live["state"] != RequestState.PROCESSING.value:
                         raise RequestNotProcessing(
                             f"request {request_id} is"
                             f" {live['state'] if live else 'not in this case'}"
+                        )
+                    if live["stop_requested_at"]:
+                        # UI-02. 중단이 요청된 요청에 후속 실행을 붙이지 않는다(D-76).
+                        raise RequestStopRequested(
+                            f"request {request_id} has a stop requested at"
+                            f" {live['stop_requested_at']}"
                         )
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
@@ -1223,8 +1270,14 @@ class Repository:
         # 사유를 보게 된다(`ClaimDeferral`).
         write_slots = RUNNER_WRITE_LIMIT - len(self.unfinished_write_runs(runner_id=runner_id))
         with transaction(self.conn):
+            # UI-02. **한 번도 배정되지 않은 채 중단이 요청된 실행은 가져가지 않는다** —
+            # 제어부가 시작하지 않은 실행으로 끝낸다(`stop_request`). 재배정된 대기 실행(세대
+            # >1)은 가져간다: 이전 세대가 돌았을 수 있고 그 판단은 원장을 가진 Runner 가 한다.
             rows = self.conn.execute(
-                "SELECT run_id, permission FROM run WHERE status = ? ORDER BY created_at LIMIT ?",
+                "SELECT run_id, permission FROM run WHERE status = ?"
+                " AND NOT (stop_requested_at IS NOT NULL AND assignment_generation = 1"
+                "          AND assigned_at IS NULL)"
+                " ORDER BY created_at LIMIT ?",
                 (RunStatus.PENDING.value, limit),
             ).fetchall()
             for row in rows:
@@ -1338,6 +1391,9 @@ class Repository:
             {"repository_id": r["id"], "name": r["name"]}
             for r in self.code_repository_choices(run["case_id"])
         ]
+        # UI-02. **중단이 요청된 실행인가.** Runner 는 이 표시가 있으면 CLI 를 부르지 않는다
+        # (원장에 이미 있으면 원장대로 판단한다).
+        run["stop_requested"] = bool(run.get("stop_requested_at"))
         return run
 
     def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
@@ -1482,6 +1538,10 @@ class Repository:
         residual_activity: str = "unknown",
         observed_tool_version: str | None = None,
         not_started_reason: NotStartedReason | None = None,
+        residual_basis: str | None = None,
+        residual_terminated: int | None = None,
+        residual_source: ResidualSource = ResidualSource.RESULT,
+        reporter: str = "runner",
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
@@ -1490,15 +1550,30 @@ class Repository:
 
         **P4-04: 시작하지 않은 실행.** `not_started_reason` 은 Runner 가 CLI 를 부르기
         **전에** 멈췄다는 보고다. 그 실행은 호출이 없었으므로 소비가 0 으로 확정된다.
-        실패 + 잔류 없음일 때만 받는다 — 결과를 모르거나 무언가 남아 있는 실행을
-        "시작하지 않았다"로 적으면 실제 소비가 사라진다.
+        실패(UI-02 부터는 중단의 `cancelled` 도) + 잔류 없음일 때만 받는다 — 결과를 모르거나
+        무언가 남아 있는 실행을 "시작하지 않았다"로 적으면 실제 소비가 사라진다.
+
+        **UI-02: 잔류 활동의 근거.** `residual_basis` 가 있으면 관측 한 건으로 남긴다.
+        근거가 확인이 아닌데 `none` 을 주장하면 거부한다 — 확인하지 않은 것을 "남은 것
+        없음"으로 적으면 잠금이 풀린다. 근거를 보내지 않는 보고는 기존 계약 그대로 받는다.
         """
         if not_started_reason is not None:
             not_started_reason = NotStartedReason(not_started_reason)
-            if outcome is not RunOutcome.FAILED or residual_activity != "none":
+            if (
+                outcome not in (RunOutcome.FAILED, RunOutcome.CANCELLED)
+                or residual_activity != "none"
+            ):
                 raise ConflictError(
-                    "a run reported as not started must be failed with no residual activity"
+                    "a run reported as not started must be failed or cancelled with no"
+                    " residual activity"
                 )
+        if residual_basis is not None:
+            residual_basis = ResidualBasis(residual_basis).value
+        if not runctl.residual_claim_valid(residual_activity, residual_basis):
+            raise ConflictError(
+                f"residual activity {residual_activity!r} is not backed by basis"
+                f" {residual_basis!r}; report 'unknown' when it was not confirmed"
+            )
         run = self._check_generation(run_id, generation)
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
@@ -1557,10 +1632,27 @@ class Repository:
                 usage,
                 finished_at,
             )
+            if residual_basis is not None:
+                # UI-02. 결과와 **같은 트랜잭션**에 관측을 남긴다. 결과는 있는데 근거가
+                # 없는 중간 상태를 만들지 않는다.
+                self._record_residual(
+                    run_id,
+                    generation,
+                    residual_source,
+                    residual_activity,
+                    residual_basis,
+                    residual_terminated,
+                    reporter,
+                    finished_at,
+                )
         # UI-01. 끝난 논의 응답은 **AI 메시지로 대화에 붙는다.** 결과 기록과 다른
         # 트랜잭션인 이유는 결과가 먼저 확정돼야 하기 때문이다 — 메시지를 붙이다 실패해도
         # 실행 결과·정산은 남는다. 재전송은 실행당 하나 규칙이 막는다.
         self.record_assistant_reply(run_id)
+        # UI-02. **중단된 요청·불명 요청은 실행이 끝날 때 제어부가 판정한다.** 처리 중이고
+        # 중단 요청이 없으면 아무 것도 하지 않는다 — 그 요청은 처리하는 쪽이 끝낸다(UI-01).
+        if run.get("request_id"):
+            self._evaluate_request(run["request_id"])
         # **실행이 끝나는 것도 마지막 조건일 수 있다**(P3-R4). 미정리 실행이 남아
         # 있으면 자동 완료가 보류되므로(completion-lifecycle 5절), 그 실행이 끝난
         # 순간이 조건이 갖춰지는 시점이다. 조건을 못 갖추면 아무 것도 하지 않는다.
@@ -4403,13 +4495,21 @@ class Repository:
         except RequestNotProcessing as lost_race:
             # UI-01. 진입 검사는 통과했는데 트랜잭션 안에서 요청이 이미 끝나 있었다 =
             # **종료 기록과의 경쟁에서 졌다.** 예산 경쟁과 같은 모양으로 거부를 남긴다.
+            # UI-02. 그 사이 중단이 요청된 경우도 같은 자리이며 사유만 다르다.
+            refusal = (
+                AdmissionRefusal.REQUEST_STOP_REQUESTED
+                if isinstance(lost_race, RequestStopRequested)
+                else AdmissionRefusal.REQUEST_NOT_PROCESSING
+            )
             result = AdmissionResult(
                 outcome=AdmissionOutcome.REFUSED,
                 profile=result.profile,
-                refusals=[AdmissionRefusal.REQUEST_NOT_PROCESSING],
+                refusals=[refusal],
                 reasons={
-                    AdmissionRefusal.REQUEST_NOT_PROCESSING.value: (
-                        f"요청이 그 사이 끝났다({lost_race}). 끝난 요청에 실행을 붙이지 않는다"
+                    refusal.value: (
+                        f"요청에 중단이 요청됐다({lost_race}). 후속 실행을 시작하지 않는다"
+                        if refusal is AdmissionRefusal.REQUEST_STOP_REQUESTED
+                        else f"요청이 그 사이 끝났다({lost_race}). 끝난 요청에 실행을 붙이지 않는다"
                     )
                 },
                 intent_version_id=result.intent_version_id,
@@ -4955,14 +5055,34 @@ class Repository:
         진행 중(`pending`/`assigned`/`running`)이거나 결과가 `unknown` 인 Run이다.
         **이들이 남아 있는 동안은 업무 종료를 확정하지 않는다**(completion-lifecycle
         5절). 인수 결정 자체는 보존하되 종료 기록을 만들지 않는다.
+
+        UI-02. **중단(`cancelled`)됐는데 실제로 끝났는지 확인하지 못한 실행**도 여기 든다 —
+        트리가 남아 쓰고 있을 수 있다. 확인되면 빠진다.
         """
         rows = self.conn.execute(
-            "SELECT run_id, status, outcome, purpose, tool_id FROM run"
-            " WHERE case_id = ? AND (status != ? OR outcome = ? OR outcome IS NULL)"
+            "SELECT run_id, status, outcome, purpose, tool_id, residual_activity,"
+            " not_started_reason FROM run"
+            " WHERE case_id = ? AND (status != ? OR outcome IN (?, ?) OR outcome IS NULL)"
             " ORDER BY created_at",
-            (case_id, RunStatus.FINISHED.value, RunOutcome.UNKNOWN.value),
+            (
+                case_id,
+                RunStatus.FINISHED.value,
+                RunOutcome.UNKNOWN.value,
+                RunOutcome.CANCELLED.value,
+            ),
         ).fetchall()
-        return [dict(r) for r in rows]
+        unsettled = []
+        for row in rows:
+            run = dict(row)
+            if run["outcome"] == RunOutcome.CANCELLED.value and run["status"] == (
+                RunStatus.FINISHED.value
+            ):
+                if not runctl.execution_unconfirmed(self._with_residual(dict(run))):
+                    continue
+            unsettled.append(
+                {k: run[k] for k in ("run_id", "status", "outcome", "purpose", "tool_id")}
+            )
+        return unsettled
 
     # ----------------------------------------------------- 최종 결과 후보
 
@@ -6861,7 +6981,7 @@ class Repository:
             have = {r["seq"]: (r["role"], r["status"]) for r in existing}
             if have != wanted:
                 raise ConflictError("a different context receipt was already recorded")
-            return self.run_context_view(run_id)
+            return self._receipt_answer(run_id)
         if run["status"] == RunStatus.FINISHED.value:
             raise ConflictError("run already finished; a receipt comes before execution")
         now = utc_now()
@@ -6873,7 +6993,20 @@ class Repository:
                     " VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (run_id, generation, seq, role, status, runner_id, now),
                 )
-        return self.run_context_view(run_id)
+        return self._receipt_answer(run_id)
+
+    def _receipt_answer(self, run_id: str) -> dict[str, Any]:
+        """영수증 응답. **CLI 호출 직전의 마지막 확인**이므로 중단 요청 여부를 함께 준다(UI-02).
+
+        배정 뒤에 중단이 요청됐는데 제어 수신보다 먼저 CLI 를 부르면 중단 전달 전까지 CLI 가
+        돈다. 이 응답이 그 틈을 줄인다 — Runner 는 표시가 있으면 CLI 를 부르지 않는다.
+        """
+        view = self.run_context_view(run_id)
+        row = self.conn.execute(
+            "SELECT stop_requested_at FROM run WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        view["stop_requested"] = bool(row and row["stop_requested_at"])
+        return view
 
     # ---------------------------------------------------------- P4-04 최신성
 
@@ -10631,24 +10764,71 @@ class Repository:
         return dict(row) if row is not None else None
 
     def _request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        """요청에 연결된 실행과 **실제로 끝났는지 판단할 사실**(UI-02).
+
+        잔류 활동은 결과 보고 값과 그 뒤의 가장 최근 관측을 함께 싣는다 — 판정은
+        `domain.run_control` 이 한다.
+        """
         rows = self.conn.execute(
-            "SELECT run_id, purpose, status, outcome, task_id FROM run WHERE request_id = ?"
-            " ORDER BY created_at",
+            "SELECT run_id, purpose, status, outcome, task_id, permission, residual_activity,"
+            " not_started_reason, stop_requested_at, stop_delivered_at, liveness_at,"
+            " assigned_runner_id, assignment_generation, workspace_effect_json,"
+            " residual_check_requested_at"
+            " FROM run WHERE request_id = ? ORDER BY created_at",
             (request_id,),
         ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._with_residual(dict(r)) for r in rows]
+
+    def _with_residual(self, run: dict[str, Any]) -> dict[str, Any]:
+        """실행 행에 가장 최근 잔류 관측을 붙인다. **원래 보고 값은 그대로 둔다.**"""
+        if "workspace_effect_json" in run:
+            effect = run.pop("workspace_effect_json")
+            run["workspace_effect"] = json.loads(effect) if effect else None
+        latest = self._latest_residual(run["run_id"])
+        run["residual_observed"] = latest["residual"] if latest else None
+        run["residual_basis"] = latest["basis"] if latest else None
+        run["residual_observed_at"] = latest["observed_at"] if latest else None
+        run["residual_terminated"] = latest["terminated"] if latest else None
+        return run
 
     def request_view(self, request: dict[str, Any]) -> dict[str, Any]:
-        """요청과 그 실행들. **무엇이 잠금을 붙들고 있는지**를 함께 보인다(FR-14)."""
+        """요청과 그 실행들. **무엇이 잠금을 붙들고 있는지**를 함께 보인다(FR-14).
+
+        UI-02. 중단 요청 여부, 실행마다 **지금 실제 상태**(실행 중·확인 끊김·끝남·끝났는지
+        모름)와 잔류 근거, 중단·불명 요청의 사실 요약을 더한다.
+        """
         runs = self._request_runs(request["id"])
         opening = self.get_message(request["opened_by_message_id"])
+        connected: dict[str, bool] = {}
+        for run in runs:
+            runner_id = run.get("assigned_runner_id")
+            if runner_id and runner_id not in connected:
+                state = self.runner_connection_state(runner_id)
+                connected[runner_id] = state["state"] == "connected"
+            run["execution_state"] = runctl.run_execution_state(
+                run,
+                runner_connected=connected.get(runner_id) if runner_id else None,
+                stale_seconds=self.runner_stale_seconds,
+            ).value
+        stopping = bool(request.get("stop_requested_at")) and (
+            request["state"] == RequestState.PROCESSING.value
+        )
+        interrupted_like = request["state"] in (
+            RequestState.INTERRUPTED.value,
+            RequestState.UNKNOWN.value,
+        ) or bool(request.get("stop_requested_at"))
         return {
             **request,
             "locking": convmod.is_locking(request["state"]),
+            "stopping": stopping,
             "opening_receipt": opening["receipt"],
             "runs": runs,
             "unfinished_runs": sum(1 for r in runs if r["status"] != RunStatus.FINISHED.value),
             "unknown_runs": sum(1 for r in runs if r["outcome"] == RunOutcome.UNKNOWN.value),
+            "unconfirmed_runs": sum(1 for r in runs if runctl.execution_unconfirmed(r)),
+            "interruption_summary": (
+                runctl.interruption_summary(runs) if interrupted_like else None
+            ),
         }
 
     def request_admission_state(self, case_id: str, request_id: str) -> dict[str, Any]:
@@ -10663,6 +10843,8 @@ class Repository:
             "id": request_id,
             "in_case": row["case_id"] == case_id,
             "state": row["state"],
+            # UI-02. 중단이 요청된 요청에는 후속 실행을 붙이지 않는다.
+            "stop_requested_at": row["stop_requested_at"],
             "opening_receipt": opening["receipt"],
             "opening_artifact_id": opening["artifact_id"],
             "opening_artifact_rev": opening["artifact_rev"],
@@ -10691,8 +10873,8 @@ class Repository:
         if request["state"] == RequestState.UNKNOWN.value:
             raise ConversationRefused(
                 [ConversationRefusal.REQUEST_STATE_UNKNOWN],
-                "this request's execution state is unknown; confirming the actual stop"
-                " and residual activity is UI-02, and the lock stays until then",
+                "this request's execution state is unknown; the lock stays until the runner"
+                " confirms the actual end and residual activity (ask for a recheck)",
             )
         if request["state"] != RequestState.PROCESSING.value:
             if request["state"] == outcome.value:
@@ -10711,18 +10893,20 @@ class Repository:
                     [ConversationRefusal.REQUEST_ALREADY_SETTLED],
                     f"request became {live['state']} while settling",
                 )
-            runs = self.conn.execute(
-                "SELECT run_id, status, outcome FROM run WHERE request_id = ?", (request_id,)
-            ).fetchall()
+            runs = self._request_runs(request_id)
             opening = self.conn.execute(
                 "SELECT i.state AS intake_state FROM conversation_message m"
                 " JOIN intake i ON i.id = m.intake_id WHERE m.id = ?",
                 (request["opened_by_message_id"],),
             ).fetchone()
+            stop = self.conn.execute(
+                "SELECT stop_requested_at FROM conversation_request WHERE id = ?", (request_id,)
+            ).fetchone()
             decision = convmod.decide_settle(
                 outcome,
                 convmod.receipt_for_intake(opening["intake_state"] if opening else None),
-                [dict(r) for r in runs],
+                runs,
+                stop_requested=bool(stop["stop_requested_at"]),
             )
             if decision.refusal is not None:
                 raise ConversationRefused([decision.refusal], decision.detail)
@@ -10739,6 +10923,9 @@ class Repository:
                     RequestState.PROCESSING.value,
                 ),
             )
+        if decision.state is RequestState.UNKNOWN:
+            # UI-02. 잠긴 요청은 **확인을 요청해 둔다** — Runner 가 받아 잔류를 확인한다.
+            self._request_rechecks(request_id)
         return self.request_view(self.get_request(request_id))
 
     # ---------------------------------------------------------------- 메시지
@@ -10996,9 +11183,19 @@ class Repository:
         self.get_runner(target_runner_id)
         opens_request = kind in OPENS_REQUEST
         if opens_request:
-            state = convmod.general_send_state(False, self.active_request(case_id))
+            # UI-02. **원문을 저장할 PC 가 연결돼 있어야 받는다**(D-75). 요청 잠금과 함께 걸리면
+            # 둘 다 사유로 돌려준다 — 대화 조회의 `send.general` 과 같은 판정이다.
+            disconnected = runctl.connection_refuses(
+                self.runner_connection_state(target_runner_id, "target")
+            )
+            state = convmod.general_send_state(
+                False, self.active_request(case_id), disconnected
+            )
             if not state.allowed:
-                raise ConversationRefused([state.refusal], state.detail)
+                raise ConversationRefused(list(state.refusals), state.detail)
+        else:
+            # 카드 답변도 PC 가 미연결이면 받지 않는다. 원문을 열기 전이다(고아 intake 없음).
+            self.guard_runner_connected(target_runner_id)
         if kind is MessageKind.CORRECTION:
             self._check_correction_target(case_id, corrects_message_id)
         elif corrects_message_id is not None:
@@ -11422,17 +11619,23 @@ class Repository:
             return 0
         return len(self.list_questions(latest["id"], QuestionState.OPEN))
 
-    def conversation_view(self, case_id: str) -> dict[str, Any]:
+    def conversation_view(self, case_id: str, runner_id: str | None = None) -> dict[str, Any]:
         """대화 한 벌. **화면이 무엇을 비활성화할지를 서버가 말한다**(FR-11).
 
         `send` 는 표시용이 아니라 서버가 실제로 적용하는 판정과 같은 함수의 결과다.
         "답변 필요"는 열린 질문에서만 나온다 — 질문 없는 휴식을 답변 필요로 표시하지
         않는다(D-69).
+
+        UI-02. **어느 PC 를 기준으로 판단했는지**를 함께 준다(`runner_connection.basis`).
+        서버는 실제 전송의 대상 PC 로 다시 판단한다 — 이 값은 그 판단의 예고다.
         """
         case = self.get_case(case_id)
         stage, source = self.case_stage(case_id)
         closed = self.case_is_closed(case_id)
         active = self.active_request(case_id)
+        target, basis = self.conversation_runner(case_id, runner_id)
+        connection = self.runner_connection_state(target, basis)
+        disconnected = runctl.connection_refuses(connection)
         rows = self.conn.execute(
             "SELECT * FROM conversation_request WHERE case_id = ? ORDER BY opened_at",
             (case_id,),
@@ -11454,14 +11657,19 @@ class Repository:
             "requests": [self.request_view(dict(r)) for r in rows],
             "current_request": self.request_view(active) if active is not None else None,
             "send": {
-                "general": convmod.general_send_state(closed, active).to_dict(),
+                "general": convmod.general_send_state(closed, active, disconnected).to_dict(),
                 "card_answer": {
-                    "allowed": (not closed) and open_questions > 0,
+                    # 카드 답변은 처리 중·중단 요청 중·불명에도 **대상이 유효하면** 받는다.
+                    # PC 미연결이면 받지 않는다(D-75). 답변이 중단을 확인하지 않는다.
+                    "allowed": (not closed) and open_questions > 0 and not disconnected,
                     "open_questions": open_questions,
+                    "refusal": (
+                        ConversationRefusal.RUNNER_DISCONNECTED.value if disconnected else None
+                    ),
                 },
-                # PC 연결 상태에 따른 전송 차단과 재연결 대조는 UI-02 다. 지금 heartbeat 는
-                # Runner 의 동기 루프가 긴 실행 중 멈추므로 연결 판정의 근거가 되지 못한다.
-                "runner_connection_enforced": False,
+                # UI-02. heartbeat 가 실행과 분리됐으므로 연결 판정의 근거가 된다.
+                "runner_connection_enforced": True,
+                "runner_connection": connection,
             },
             "needs_response": open_questions > 0,
         }
@@ -11478,3 +11686,419 @@ class Repository:
         case["current_request_state"] = active["state"] if active is not None else None
         case["needs_response"] = self._open_question_count(case["id"]) > 0
         return case
+
+
+    # ================================================================== UI-02
+    #
+    # 입력·실행 제어. **실행이 실제로 끝났는가는 결과와 다른 축이다** — 판정은
+    # `domain.run_control` 한 곳에 있고 여기서는 사실을 모아 넘기고 기록한다.
+    #
+    #   PC 연결      heartbeat 에서 도출한다. 미연결 PC 로 가는 사용자 입력은 받지 않는다
+    #   중단         요청(또는 요청 없는 실행)에 적고, 미배정 실행은 제어부가 끝내며,
+    #                배정된 실행은 Runner 에 전달한다. 끝내는 것은 확인한 뒤다
+    #   잔류 관측    결과 보고의 값은 그대로 두고 그 뒤의 확인을 쌓는다
+    #   재확인       잠긴 요청의 확인되지 않은 실행을 Runner 가 다시 본다
+
+    #: 제어부가 스스로 기록할 때의 주체 표시.
+    CONTROLLER_ACTOR = "controller"
+
+    # ------------------------------------------------------------- PC 연결
+
+    def runner_connection_state(
+        self, runner_id: str | None, basis: str = ""
+    ) -> dict[str, Any]:
+        """그 PC 의 연결 상태(D-75). **저장하지 않고 heartbeat 에서 도출한다.**"""
+        runner: dict[str, Any] | None = None
+        if runner_id:
+            row = self.conn.execute(
+                "SELECT id, last_heartbeat_at FROM runner WHERE id = ?", (runner_id,)
+            ).fetchone()
+            runner = dict(row) if row is not None else None
+        return runctl.runner_connection(
+            runner, stale_seconds=self.runner_stale_seconds, basis=basis
+        )
+
+    def conversation_runner(
+        self, case_id: str, runner_id: str | None = None
+    ) -> tuple[str | None, str]:
+        """이 대화의 원문을 저장할 PC 와 **그렇게 정한 이유**.
+
+        요청한 PC → 마지막 사용자 메시지 원문을 가진 PC → 등록된 PC 가 하나뿐이면 그것.
+        정할 수 없으면 `None` 이다 — 아무 PC 나 골라 연결됐다고 보이지 않는다.
+        """
+        if runner_id:
+            return runner_id, "requested"
+        row = self.conn.execute(
+            "SELECT a.owner_runner_id FROM conversation_message m"
+            " JOIN artifact_ref a ON a.artifact_id = m.artifact_id AND a.revision = m.artifact_rev"
+            " WHERE m.case_id = ? AND m.author = ? ORDER BY m.seq DESC LIMIT 1",
+            (case_id, MessageAuthor.USER.value),
+        ).fetchone()
+        if row is not None and row["owner_runner_id"]:
+            return row["owner_runner_id"], "last_user_message_owner"
+        runners = self.conn.execute("SELECT id FROM runner").fetchall()
+        if len(runners) == 1:
+            return runners[0]["id"], "only_registered_runner"
+        return None, "not_determined"
+
+    def guard_runner_connected(self, runner_id: str) -> None:
+        """원문을 저장할 PC 가 미연결이면 **받지 않는다**(D-75). 대기열은 없다."""
+        state = self.runner_connection_state(runner_id, "target")
+        if runctl.connection_refuses(state):
+            raise ConversationRefused(
+                [ConversationRefusal.RUNNER_DISCONNECTED],
+                f"runner {runner_id} is {state['state']} (last seen {state['last_seen_at']});"
+                " nothing was received or queued — send again when it is connected",
+            )
+
+    # ---------------------------------------------------------- Runner 제어
+
+    def runner_controls(self, runner_id: str) -> dict[str, Any]:
+        """이 Runner 가 지금 할 일: **중단할 실행**과 **잔류를 다시 확인할 실행**."""
+        stops = self.conn.execute(
+            "SELECT run_id, assignment_generation, request_id, stop_requested_at,"
+            " stop_delivered_at FROM run WHERE assigned_runner_id = ? AND status IN (?, ?)"
+            " AND stop_requested_at IS NOT NULL ORDER BY stop_requested_at",
+            (runner_id, RunStatus.ASSIGNED.value, RunStatus.RUNNING.value),
+        ).fetchall()
+        checks = self.conn.execute(
+            "SELECT run_id, assignment_generation, tool_id, residual_check_requested_at"
+            " FROM run WHERE assigned_runner_id = ? AND status = ?"
+            " AND residual_check_requested_at IS NOT NULL ORDER BY residual_check_requested_at",
+            (runner_id, RunStatus.FINISHED.value),
+        ).fetchall()
+        return {
+            "stop": [
+                {
+                    "run_id": r["run_id"],
+                    "generation": r["assignment_generation"],
+                    "request_id": r["request_id"],
+                    "requested_at": r["stop_requested_at"],
+                    "delivered_at": r["stop_delivered_at"],
+                }
+                for r in stops
+            ],
+            "residual_checks": [
+                {
+                    "run_id": r["run_id"],
+                    "generation": r["assignment_generation"],
+                    "tool_id": r["tool_id"],
+                    "requested_at": r["residual_check_requested_at"],
+                }
+                for r in checks
+            ],
+        }
+
+    def acknowledge_stop(self, run_id: str, runner_id: str, generation: int) -> dict[str, Any]:
+        """Runner 가 중단을 **받았다**. 끝났다는 뜻이 아니다 — 끝남은 결과가 말한다."""
+        run = self._check_generation(run_id, generation)
+        if run.get("assigned_runner_id") and run["assigned_runner_id"] != runner_id:
+            raise ConflictError("this run is assigned to another runner")
+        if not run.get("stop_requested_at"):
+            raise ConflictError("no stop was requested for this run")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE run SET stop_delivered_at = COALESCE(stop_delivered_at, ?)"
+                " WHERE run_id = ?",
+                (utc_now(), run_id),
+            )
+        return self.get_run(run_id)
+
+    def runner_unfinished_runs(self, runner_id: str) -> list[dict[str, Any]]:
+        """이 Runner 에 배정돼 **끝나지 않은** 실행의 배정 내용(재시작 대조).
+
+        Runner 는 기동하면 작업자를 띄우기 전에 이것을 받아 원장으로 대조한다. 세대를
+        올리지 않는다 — 새 예약이 생기지 않는다.
+        """
+        self.get_runner(runner_id)
+        rows = self.conn.execute(
+            "SELECT run_id FROM run WHERE assigned_runner_id = ? AND status IN (?, ?)"
+            " ORDER BY created_at",
+            (runner_id, RunStatus.ASSIGNED.value, RunStatus.RUNNING.value),
+        ).fetchall()
+        return [self.assignment_payload(r["run_id"]) for r in rows]
+
+    # ------------------------------------------------------------------ 중단
+
+    def stop_request(
+        self, case_id: str, request_id: str, *, actor: str, reason: str = ""
+    ) -> dict[str, Any]:
+        """현재 요청을 **중단한다**(D-76). 취소 성공·롤백이 아니다.
+
+        1. 요청에 중단을 적고 연결된 미종료 실행에 중단을 찍는다(한 트랜잭션).
+        2. 한 번도 배정되지 않은 실행은 제어부가 **시작하지 않은 실행**으로 끝낸다 — 소비 0.
+        3. 배정된 실행은 heartbeat 응답으로 Runner 에 전달된다.
+        4. 연결 실행이 전부 끝나면 제어부가 판정한다(`_evaluate_request`).
+
+        이미 중단이 요청된 요청의 재전송은 아무 것도 바꾸지 않는다.
+        """
+        request = self.get_request(request_id)
+        if request["case_id"] != case_id:
+            raise NotFoundError(f"request not in case {case_id}: {request_id}")
+        if request.get("stop_requested_at"):
+            return self.request_view(request)
+        if request["state"] != RequestState.PROCESSING.value:
+            raise ConversationRefused(
+                [ConversationRefusal.REQUEST_NOT_STOPPABLE],
+                f"request is {request['state']}; only a request being processed can be stopped",
+            )
+        now = utc_now()
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                "UPDATE conversation_request SET stop_requested_at = ?, stop_requested_by = ?,"
+                " stop_reason_summary = ? WHERE id = ? AND state = ?"
+                " AND stop_requested_at IS NULL",
+                (
+                    now,
+                    actor,
+                    _summary(reason) if reason and reason.strip() else None,
+                    request_id,
+                    RequestState.PROCESSING.value,
+                ),
+            )
+            if cur.rowcount != 1:
+                live = self.conn.execute(
+                    "SELECT state, stop_requested_at FROM conversation_request WHERE id = ?",
+                    (request_id,),
+                ).fetchone()
+                if not live["stop_requested_at"]:
+                    raise ConversationRefused(
+                        [ConversationRefusal.REQUEST_NOT_STOPPABLE],
+                        f"request became {live['state']} while stopping",
+                    )
+            self.conn.execute(
+                "UPDATE run SET stop_requested_at = ?, stop_requested_by = ?"
+                " WHERE request_id = ? AND status <> ? AND stop_requested_at IS NULL",
+                (now, actor, request_id, RunStatus.FINISHED.value),
+            )
+        self._finish_unassigned_stopped("request_id = ?", (request_id,))
+        self._evaluate_request(request_id)
+        return self.request_view(self.get_request(request_id))
+
+    def stop_run(self, run_id: str, *, actor: str) -> dict[str, Any]:
+        """요청에 연결되지 **않은** 실행의 중단(관리 화면·옛 경로).
+
+        요청에 연결된 실행은 요청 단위로 중단한다 — 실행 하나만 멈추면 그 요청은 처리 중인
+        채 다음 실행을 만들 수 있고, 그것은 중단이 아니다(D-76).
+        """
+        run = self.get_run(run_id)
+        if run.get("request_id"):
+            raise ConversationRefused(
+                [ConversationRefusal.RUN_LINKED_TO_REQUEST],
+                f"run {run_id} belongs to request {run['request_id']}; stop the request",
+            )
+        if run["status"] == RunStatus.FINISHED.value:
+            raise ConversationRefused(
+                [ConversationRefusal.RUN_ALREADY_FINISHED], f"run {run_id} already finished"
+            )
+        if not run.get("stop_requested_at"):
+            with transaction(self.conn):
+                self.conn.execute(
+                    "UPDATE run SET stop_requested_at = ?, stop_requested_by = ?"
+                    " WHERE run_id = ? AND status <> ? AND stop_requested_at IS NULL",
+                    (utc_now(), actor, run_id, RunStatus.FINISHED.value),
+                )
+        self._finish_unassigned_stopped("run_id = ?", (run_id,))
+        return self.get_run(run_id)
+
+    def _finish_unassigned_stopped(self, where: str, params: tuple[Any, ...]) -> None:
+        """한 번도 배정되지 않은 채 중단이 요청된 실행을 **시작하지 않은 실행**으로 끝낸다.
+
+        배정 수신이 이 실행을 가져가지 않으므로(`claim_assignments`) 여기와 경쟁하지 않는다.
+        재배정된 대기 실행(세대 >1)은 여기서 끝내지 않는다 — 이전 세대가 돌았을 수 있다.
+        """
+        rows = self.conn.execute(
+            f"SELECT run_id FROM run WHERE {where} AND status = ? AND assignment_generation = 1"
+            " AND assigned_at IS NULL AND stop_requested_at IS NOT NULL",
+            (*params, RunStatus.PENDING.value),
+        ).fetchall()
+        for row in rows:
+            self.report_result(
+                row["run_id"],
+                1,
+                RunOutcome.CANCELLED,
+                residual_activity="none",
+                observed_tool_version=None,
+                not_started_reason=NotStartedReason.STOP_REQUESTED,
+                residual_basis=ResidualBasis.NOT_LAUNCHED.value,
+                reporter=self.CONTROLLER_ACTOR,
+            )
+
+    # ------------------------------------------------------------ 잔류 관측
+
+    def _record_residual(
+        self,
+        run_id: str,
+        generation: int,
+        source: ResidualSource,
+        residual: str,
+        basis: str,
+        terminated: int | None,
+        reporter: str,
+        now: str,
+    ) -> None:
+        """잔류 관측 한 건. **호출자의 트랜잭션 안에서 돈다.**"""
+        seq = self.conn.execute(
+            "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM run_residual_observation"
+            " WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()["n"]
+        self.conn.execute(
+            "INSERT INTO run_residual_observation"
+            " (id, run_id, generation, seq, source, residual, basis, terminated, runner_id,"
+            "  observed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ids.new_id("resid"),
+                run_id,
+                generation,
+                seq,
+                ResidualSource(source).value,
+                residual,
+                ResidualBasis(basis).value,
+                terminated,
+                reporter,
+                now,
+            ),
+        )
+
+    def _latest_residual(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM run_residual_observation WHERE run_id = ? ORDER BY seq DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def residual_observations(self, run_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM run_residual_observation WHERE run_id = ? ORDER BY seq", (run_id,)
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def report_residual_observation(
+        self,
+        run_id: str,
+        runner_id: str,
+        residual: str,
+        basis: str,
+        terminated: int | None = None,
+    ) -> dict[str, Any]:
+        """끝난 실행의 잔류를 **다시 확인한** 결과(UI-02). 원래 보고 값은 고치지 않는다.
+
+        확인 근거 없는 `none` 은 받지 않는다. 확인되면 그 실행의 요청을 다시 판정한다 —
+        잠긴 요청(`unknown`)이 이것으로 풀린다.
+        """
+        run = self.get_run(run_id)
+        if run.get("assigned_runner_id") and run["assigned_runner_id"] != runner_id:
+            raise ConflictError("this run is assigned to another runner")
+        if run["status"] != RunStatus.FINISHED.value:
+            raise ConflictError("a residual recheck is for a finished run")
+        basis = ResidualBasis(basis).value
+        if residual not in ("none", "unknown") or not runctl.residual_claim_valid(
+            residual, basis
+        ):
+            raise ConflictError(f"residual {residual!r} is not backed by basis {basis!r}")
+        now = utc_now()
+        with transaction(self.conn):
+            self._record_residual(
+                run_id,
+                run["assignment_generation"],
+                ResidualSource.RECHECK,
+                residual,
+                basis,
+                terminated,
+                runner_id,
+                now,
+            )
+            self.conn.execute(
+                "UPDATE run SET residual_check_requested_at = NULL WHERE run_id = ?", (run_id,)
+            )
+        if run.get("request_id"):
+            self._evaluate_request(run["request_id"])
+        return {"run_id": run_id, "observations": self.residual_observations(run_id)}
+
+    def request_residual_recheck(self, case_id: str, request_id: str) -> dict[str, Any]:
+        """잠긴 요청(`unknown`)의 확인되지 않은 실행을 **다시 확인해 달라고** 적는다.
+
+        사람이 확인을 대신 선언하는 경로가 아니다 — Runner 가 확인 근거를 보내야 풀린다.
+        """
+        request = self.get_request(request_id)
+        if request["case_id"] != case_id:
+            raise NotFoundError(f"request not in case {case_id}: {request_id}")
+        if request["state"] != RequestState.UNKNOWN.value:
+            raise ConversationRefused(
+                [ConversationRefusal.REQUEST_NOT_UNKNOWN],
+                f"request is {request['state']}; a recheck is for a request whose runs are"
+                " not confirmed ended",
+            )
+        self._request_rechecks(request_id)
+        return self.request_view(self.get_request(request_id))
+
+    def _request_rechecks(self, request_id: str) -> int:
+        runs = [r for r in self._request_runs(request_id) if runctl.execution_unconfirmed(r)]
+        if not runs:
+            return 0
+        now = utc_now()
+        with transaction(self.conn):
+            for run in runs:
+                self.conn.execute(
+                    "UPDATE run SET residual_check_requested_at = ? WHERE run_id = ?",
+                    (now, run["run_id"]),
+                )
+        return len(runs)
+
+    def request_runner_rechecks(self, runner_id: str) -> int:
+        """그 Runner 가 맡았던, **잠긴 요청의 확인되지 않은 실행**에 재확인을 요청한다.
+
+        Runner 가 등록(재시작)할 때 부른다 — 재부팅·job 종료처럼 그 사이 생긴 확인 근거를
+        그때 본다.
+        """
+        rows = self.conn.execute(
+            "SELECT id FROM conversation_request WHERE state = ? AND id IN"
+            " (SELECT request_id FROM run WHERE assigned_runner_id = ?"
+            "  AND request_id IS NOT NULL)",
+            (RequestState.UNKNOWN.value, runner_id),
+        ).fetchall()
+        count = 0
+        for row in rows:
+            count += self._request_rechecks(row["id"])
+        return count
+
+    # ------------------------------------------------------------ 요청 판정
+
+    def _evaluate_request(self, request_id: str) -> dict[str, Any] | None:
+        """제어부가 **스스로** 요청을 끝내거나 옮길 수 있으면 그렇게 한다(D-76).
+
+        판정은 `domain.run_control.system_settlement` 한 곳에 있다. 처리 중이고 중단 요청이
+        없는 요청은 건드리지 않는다 — 그 요청은 처리하는 쪽이 끝낸다(UI-01).
+        """
+        request = self.get_request(request_id)
+        decision = runctl.system_settlement(
+            self._request_runs(request_id),
+            state=request["state"],
+            stop_requested=bool(request.get("stop_requested_at")),
+        )
+        if decision is None:
+            return None
+        state, reason = decision
+        if state.value == request["state"]:
+            return None
+        now = utc_now()
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                "UPDATE conversation_request SET state = ?, outcome_reason = ?,"
+                " settled_at = COALESCE(settled_at, ?), settled_by = ?"
+                " WHERE id = ? AND state = ?",
+                (
+                    state.value,
+                    reason.value,
+                    now,
+                    self.CONTROLLER_ACTOR,
+                    request_id,
+                    request["state"],
+                ),
+            )
+        if cur.rowcount != 1:
+            return None  # 그 사이 다른 기록이 먼저 옮겼다
+        if state is RequestState.UNKNOWN:
+            self._request_rechecks(request_id)
+        return self.get_request(request_id)

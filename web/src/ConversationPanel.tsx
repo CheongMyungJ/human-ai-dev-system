@@ -16,6 +16,17 @@
 //   않는다(D-70).
 //
 //   **보관은 종료가 아니다.** 보관 버튼 옆에 종료 상태를 따로 보인다(D-69).
+//
+// UI-02 가 더한 것 셋.
+//
+//   **PC 연결을 서버가 말한다.** heartbeat 가 끊긴 PC 로는 메시지·카드 답변을 받지 않는다
+//   (D-75). 입력은 그대로 남고 연결되면 사람이 직접 보낸다 — 자동 전송하지 않는다.
+//
+//   **중단은 취소 성공이 아니다.** 버튼은 중단을 요청할 뿐이고, 관련 실행이 실제로 끝난
+//   것을 서버가 확인해야 `중단됨` 이 되어 전송이 열린다. 확인하지 못하면 `실행 상태 확인
+//   필요` 로 잠긴다(D-76).
+//
+//   **다시 확인은 선언이 아니다.** PC 가 확인 근거를 보내야 풀린다.
 
 import { useState } from 'react'
 
@@ -28,8 +39,11 @@ import {
   RECEIPT_LABEL,
   REFUSAL_LABEL,
   REQUEST_STATE_LABEL,
+  RUN_EXECUTION_LABEL,
+  RUNNER_CONNECTION_LABEL,
   type CaseDetail,
   type ConversationMessage,
+  type ConversationRequest,
   type RunnerInfo,
 } from './api'
 
@@ -65,6 +79,39 @@ function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
+function describeRun(run: ConversationRequest['runs'][number]): string {
+  const parts = [run.run_id, run.purpose ?? '목적 미기록', RUN_EXECUTION_LABEL[run.execution_state]]
+  if (run.outcome) parts.push(`결과 ${run.outcome}`)
+  if (run.not_started_reason) parts.push(`시작하지 않음(${run.not_started_reason})`)
+  const residual = run.residual_observed ?? run.residual_activity
+  parts.push(`잔류 ${residual}${run.residual_basis ? ` · 근거 ${run.residual_basis}` : ''}`)
+  if (run.residual_terminated) parts.push(`종료한 프로세스 ${run.residual_terminated}`)
+  if (run.stop_requested_at) {
+    parts.push(run.stop_delivered_at ? '중단 전달됨' : '중단 전달 대기')
+  }
+  return parts.join(' · ')
+}
+
+function InterruptionSummaryView(props: { request: ConversationRequest }) {
+  const summary = props.request.interruption_summary
+  if (!summary) return null
+  return (
+    <p className="small">
+      요약: 실행 {summary.runs}건 (
+      {Object.entries(summary.by_outcome)
+        .map(([outcome, count]) => `${outcome} ${count}`)
+        .join(', ') || '결과 없음'}
+      ) · 시작하지 않음 {summary.not_started.length} · 결과 모름 {summary.result_unknown.length} ·
+      종료 확인 못 함 {summary.execution_unconfirmed.length} · 작업공간을 바꾼 실행{' '}
+      {summary.workspace_changed_by.length}
+      {summary.workspace_files_changed_cumulative !== null &&
+        ` (누적 변경 파일 ${summary.workspace_files_changed_cumulative})`}
+      <br />
+      <span className="muted">{summary.detail}</span>
+    </p>
+  )
+}
+
 function newClientId(): string {
   // 전송 식별자. 같은 값의 재전송은 새 메시지를 만들지 않는다.
   const random =
@@ -87,12 +134,15 @@ export function ConversationPanel(props: {
   const [pendingClientId, setPendingClientId] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [profile, setProfile] = useState('feature')
+  const [stopReason, setStopReason] = useState('')
   const runnerId = props.runners[0]?.id
   const cliTools = codingCliTools(props.runners).map((t) => t.tool_id)
 
   if (!view) return null
   const current = view.current_request
   const general = view.send.general
+  const connection = view.send.runner_connection
+  const lastRequest = view.requests.length ? view.requests[view.requests.length - 1] : null
   const userMessages = view.messages.filter(
     (m) => m.author === 'user' && m.message_kind !== 'card_answer',
   )
@@ -153,6 +203,14 @@ export function ConversationPanel(props: {
         {view.needs_response && ' · 답변이 필요한 질문이 있다'}
       </p>
       {notice && <div className="notice">{notice}</div>}
+      <p className={connection.state === 'connected' ? 'small' : 'warn small'}>
+        {RUNNER_CONNECTION_LABEL[connection.state]}
+        {connection.runner_id && ` (${connection.runner_id}, 기준 ${connection.basis})`}
+        {connection.last_seen_at && ` · 마지막 확인 ${connection.last_seen_at}`}
+        {connection.state !== 'connected' &&
+          connection.state !== 'not_determined' &&
+          ' — 메시지·카드 답변은 PC 가 연결될 때까지 받지 않는다. 입력은 그대로 남는다.'}
+      </p>
 
       <ul className="list">
         {view.messages.map((m) => (
@@ -173,13 +231,23 @@ export function ConversationPanel(props: {
       {current ? (
         <div className="small">
           <p>
-            {current.id} · {REQUEST_STATE_LABEL[current.state]} · 여는 메시지{' '}
+            {current.id} · {REQUEST_STATE_LABEL[current.state]}
+            {current.stopping && ' · 중단 요청 중(실제 종료 확인 대기)'} · 여는 메시지{' '}
             {RECEIPT_LABEL[current.opening_receipt]} · 실행 {current.runs.length}건(미종료{' '}
-            {current.unfinished_runs}, 불명 {current.unknown_runs})
+            {current.unfinished_runs}, 불명 {current.unknown_runs}, 종료 확인 못 함{' '}
+            {current.unconfirmed_runs})
           </p>
+          <ul className="list">
+            {current.runs.map((run) => (
+              <li key={run.run_id} className="small mono">
+                {describeRun(run)}
+              </li>
+            ))}
+          </ul>
+          <InterruptionSummaryView request={current} />
           <button
             type="button"
-            disabled={current.state !== 'processing' || !cliTools.length}
+            disabled={current.state !== 'processing' || current.stopping || !cliTools.length}
             onClick={() =>
               guard(async () => {
                 const opening = view.messages.find((m) => m.id === current.opened_by_message_id)
@@ -204,28 +272,76 @@ export function ConversationPanel(props: {
               거부한다 — 실행 사이에 잠금을 풀지 않는다. */}
           <button
             type="button"
-            disabled={current.state !== 'processing'}
+            disabled={current.state !== 'processing' || current.stopping}
             onClick={() => guard(async () => void (await conversationApi.settle(detail.id, current.id, 'completed')))}
           >
             처리 완료 기록
           </button>{' '}
           <button
             type="button"
-            disabled={current.state !== 'processing'}
+            disabled={current.state !== 'processing' || current.stopping}
             onClick={() => guard(async () => void (await conversationApi.settle(detail.id, current.id, 'failed')))}
           >
             처리 실패 기록
           </button>
+          <div>
+            {/* UI-02. 중단은 **요청**이다. 서버가 관련 실행의 실제 종료를 확인해야 끝난다. */}
+            <input
+              value={stopReason}
+              placeholder="중단 이유(선택)"
+              onChange={(e) => setStopReason(e.target.value)}
+            />{' '}
+            <button
+              type="button"
+              disabled={current.state !== 'processing' || current.stopping}
+              onClick={() =>
+                guard(async () => {
+                  const result = await conversationApi.stop(detail.id, current.id, stopReason)
+                  setNotice(
+                    result.state === 'interrupted'
+                      ? '중단됨 — 관련 실행이 끝난 것을 확인했다. 이미 만든 결과·사용량은 남아 있다.'
+                      : '중단을 요청했다. PC 가 실행을 끝내고 확인하면 전송이 열린다.',
+                  )
+                })
+              }
+            >
+              중단
+            </button>{' '}
+            <button
+              type="button"
+              disabled={current.state !== 'unknown'}
+              onClick={() =>
+                guard(async () => {
+                  await conversationApi.reconcile(detail.id, current.id)
+                  setNotice('PC 에 실행 상태를 다시 확인하게 했다. 확인 근거가 오면 풀린다.')
+                })
+              }
+            >
+              상태 다시 확인
+            </button>
+          </div>
         </div>
       ) : (
         <p className="muted small">처리 중인 요청이 없다.</p>
+      )}
+      {!current && lastRequest && lastRequest.state === 'interrupted' && (
+        <div className="small">
+          <p>
+            직전 요청 {lastRequest.id} · {REQUEST_STATE_LABEL[lastRequest.state]} (
+            {lastRequest.outcome_reason})
+          </p>
+          <InterruptionSummaryView request={lastRequest} />
+        </div>
       )}
 
       <h4>메시지 보내기</h4>
       {!general.allowed && (
         <p className="warn small">
-          지금은 보낼 수 없다: {CONVERSATION_REFUSAL_LABEL[general.refusal ?? ''] ?? general.detail}
-          {' '}— 입력은 편집할 수 있고 자동으로 보내지지 않는다.
+          지금은 보낼 수 없다:{' '}
+          {(general.refusals.length ? general.refusals : [general.refusal ?? ''])
+            .map((code) => CONVERSATION_REFUSAL_LABEL[code] ?? general.detail)
+            .join(' · ')}{' '}
+          — 입력은 편집할 수 있고 자동으로 보내지지 않는다.
         </p>
       )}
       <form
@@ -332,12 +448,6 @@ export function ConversationPanel(props: {
         </button>{' '}
         <span className="muted">보관은 목록 정리이며 종료·취소·실행 중단이 아니다.</span>
       </p>
-      {!view.send.runner_connection_enforced && (
-        <p className="muted small">
-          PC 연결 상태에 따른 전송 차단·재연결 대조는 아직 없다(UI-02). 접수는 PC 저장 보고로만
-          확정된다.
-        </p>
-      )}
     </div>
   )
 }

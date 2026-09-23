@@ -38,6 +38,8 @@ class ExecutionOutput:
     exit_code: int
     usage: Any
     residual_activity: str
+    #: UI-02. 잔류 값의 근거. 이 실행기는 Runner 프로세스 안에서 돈다.
+    residual_basis: str | None = None
 
 
 class LocalEchoExecutor:
@@ -108,4 +110,5 @@ class LocalEchoExecutor:
             usage="not_reported",
             # 자식 프로세스를 만들지 않으므로 잔여 활동 없음을 확인할 수 있다.
             residual_activity="none",
+            residual_basis="in_process",
         )

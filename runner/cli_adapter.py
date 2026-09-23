@@ -24,13 +24,14 @@ import os
 import shutil
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from domain.models import CapabilityState, EventType, Permission, RunOutcome
-from runner import cli_events
+from runner import cli_events, process_tree
 
 #: 추상 권한 → 실제 CLI 인자. p1-environment-contract.md 6절과 P1-02 관측 결과.
 #:
@@ -60,6 +61,16 @@ PERMISSION_MAP: dict[str, dict[str, list[str]]] = {
 }
 
 DEFAULT_MODE = {"codex": "exec", "claude": "print"}
+
+#: 실제 CLI 로 **중단 뒤 트리 종료를 확인한** 도구와 그 근거(UI-02). 여기 없는 도구는
+#: `cancel_confirmed = unknown` 이다 — 같은 OS 수단을 쓰더라도 그 CLI 로 실증하지 않았다(D-76).
+CANCEL_CONFIRMED_EVIDENCE: dict[str, str] = {
+    "codex": (
+        "UI-02 실증: codex-cli 0.154.0 실행 중 요청 중단·Runner 강제 종료 뒤 트리"
+        "(cmd→node→codex.exe→명령 실행기→pwsh) 종료를 OS 목록으로 확인"
+        " (ui/evidence/UI-02-results.md 3절)"
+    ),
+}
 
 #: 이 어댑터가 다루는 도구. OpenCode는 설치 흔적이 없어 여기 없다(P1-04).
 SUPPORTED_TOOLS = tuple(PERMISSION_MAP)
@@ -188,7 +199,26 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
         cap("tool_boundary_observed", CapabilityState.VERIFIED, source_p102),
         cap("safe_stop_next_call", CapabilityState.VERIFIED, source_p103 + " (조건부)"),
         cap("session_resume", CapabilityState.DOC_ONLY, "--help 만 확인"),
-        cap("cancel_confirmed", CapabilityState.UNKNOWN, source_p103 + ": 프로세스 잔류 관측"),
+        # **UI-02: 트리 종료와 그 확인은 OS 의 job object 가 한다.** 도구와 무관한 수단이지만
+        # CLI 가 이탈(breakaway)을 요구하면 실행 자체가 막히므로 CLI 별 실증을 따로 적는다.
+        cap(
+            "process_tree_control",
+            CapabilityState.VERIFIED if process_tree.IS_WINDOWS else CapabilityState.UNSUPPORTED,
+            (
+                "UI-02: Windows job object(KILL_ON_JOB_CLOSE, 이탈 불허) 트리 종료·활성 0 확인"
+                " — tests/test_process_control.py"
+                if process_tree.IS_WINDOWS
+                else "UI-02: 비 Windows 는 트리 제어를 지원하지 않는다"
+            ),
+        ),
+        cap(
+            "cancel_confirmed",
+            *(
+                (CapabilityState.VERIFIED, CANCEL_CONFIRMED_EVIDENCE[tool_id])
+                if process_tree.IS_WINDOWS and tool_id in CANCEL_CONFIRMED_EVIDENCE
+                else (CapabilityState.UNKNOWN, source_p103 + ": 프로세스 잔류 관측")
+            ),
+        ),
         # **P3-03: 지원하지 않는 것을 지원하지 않는다고 보고한다.** Case 전용
         # worktree 는 파일 배치의 분리이며 다른 경로·공유 자격증명 접근을 막지
         # 못한다(D-44, execution-workspace-review 2절). 실행 전후 대조로 경계 밖
@@ -235,6 +265,12 @@ class ExecutionOutput:
     #: 무엇이 바뀌었는지는 CLI 의 보고가 아니라 git 이 답한다. 관측하지 않았으면
     #: `None` 이며 그것은 "변경 없음"이 아니라 **모른다**이다.
     workspace_effect: dict[str, Any] | None = None
+    #: UI-02. 잔류 활동 값의 **근거**(`process_tree.BASIS_*`). 없으면 근거를 보내지 않는다.
+    residual_basis: str | None = None
+    #: UI-02. 확인하면서 종료한 프로세스 수.
+    residual_terminated: int | None = None
+    #: UI-02. 실행을 끊은 이유(`stop_requested` · `timeout`). 끊지 않았으면 `None`.
+    stop_reason: str | None = None
 
 
 class CliExecutor:
@@ -244,10 +280,17 @@ class CliExecutor:
     로그가 아니라 **관측 가능한 부수효과**로 판정하기 위해서다.
     """
 
-    def __init__(self, effects_dir: Path, timeout: float = 600.0) -> None:
+    def __init__(
+        self,
+        effects_dir: Path,
+        timeout: float = 600.0,
+        confirm_timeout: float = process_tree.DEFAULT_CONFIRM_TIMEOUT,
+    ) -> None:
         self.effects_dir = effects_dir
         self.effects_dir.mkdir(parents=True, exist_ok=True)
         self.timeout = timeout
+        #: UI-02. 트리를 끝낸 뒤 활성 프로세스 0 을 기다리는 시간.
+        self.confirm_timeout = confirm_timeout
 
     # 부수효과 기록은 P2-01 실행기와 같은 규칙을 쓴다.
     def record_effect(self, case_id: str, run_id: str) -> Path:
@@ -276,15 +319,32 @@ class CliExecutor:
         permission: Permission,
         workspace: Path,
         raw_dir: Path | None = None,
+        *,
+        on_launch: Callable[[dict[str, Any]], None] | None = None,
+        stop_event: threading.Event | None = None,
+        job_name: str | None = None,
     ) -> ExecutionOutput:
+        """CLI 를 실행한다. **UI-02: 프로세스 트리를 job 안에서 돌리고 끝을 확인한다.**
+
+        순서가 규칙이다(Windows).
+
+            1. job 을 만든다(`KILL_ON_JOB_CLOSE`, 이탈 불허). 못 만들면 실행하지 않는다
+            2. CLI 를 **일시 정지 상태로** 만들어 job 에 넣는다
+            3. `on_launch` 로 시작 기록을 남긴다 — 호출자가 원장에 fsync 한다
+            4. 재개한다. 여기서부터 CLI 가 돈다
+            5. 루트가 끝나거나, 중단 신호가 오거나, 시간을 넘길 때까지 기다린다
+            6. job 에 남은 것을 종료하고 **활성 0 을 확인한다**(`terminate_and_confirm`)
+            7. job 핸들을 닫는다 — 그래도 남은 것이 있으면 OS 가 끝낸다
+
+        중단 신호로 끊은 실행은 `cancelled`, 시간 초과는 `unknown` 이다. 원시 출력·이벤트는
+        끊긴 데까지 그대로 남는다. 비 Windows 는 트리 제어가 없어 잔류가 `unknown` 이다.
+        """
         command = build_command(tool_id, mode, permission, workspace)
         version = observed_version(tool_id)
         if not workspace.is_dir():
             # 없는 작업공간을 만들어 주지 않는다. 프로젝트가 가리키는 저장소가
             # 이 PC에 없다는 사실을 빈 디렉터리로 가려서는 안 된다.
             raise AdapterError(f"작업공간이 이 호스트에 없다: {workspace}")
-
-        self.record_effect(case_id, run_id)
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
@@ -297,60 +357,128 @@ class CliExecutor:
                 for line in pipe:
                     if handle:
                         handle.write(line)
+                        # 원시 출력은 재시작 복구(P4-04)의 입력이다. 줄마다 내보낸다.
+                        handle.flush()
                     sink.append(line.decode("utf-8", errors="replace").rstrip("\r\n"))
             finally:
                 if handle:
                     handle.close()
 
-        try:
-            proc = subprocess.Popen(
-                command,
-                cwd=str(workspace),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.PIPE,
-                bufsize=0,
+        popen_kwargs: dict[str, Any] = {
+            "cwd": str(workspace),
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.PIPE,
+            "stdin": subprocess.PIPE,
+            "bufsize": 0,
+        }
+        tree: process_tree.JobTree | None = None
+        if process_tree.IS_WINDOWS:
+            # 못 만들면 `TreeControlUnavailable` 이 올라간다. **멈출 수 없는 CLI 를 조용히
+            # 실행하지 않는다** — 호출자가 시작하지 않은 실행으로 보고한다.
+            tree = process_tree.JobTree.create(
+                job_name or process_tree.job_name_for("runner", run_id, 0)
             )
-        except OSError as exc:
-            raise AdapterError(f"프로세스를 시작하지 못했다: {exc}") from exc
-
-        threads = [
-            threading.Thread(
-                target=consume,
-                args=(proc.stdout, stdout_lines, raw_dir / f"{run_id}.stdout.jsonl" if raw_dir else None),
-                daemon=True,
-            ),
-            threading.Thread(
-                target=consume,
-                args=(proc.stderr, stderr_lines, raw_dir / f"{run_id}.stderr.log" if raw_dir else None),
-                daemon=True,
-            ),
-        ]
-        for t in threads:
-            t.start()
-
-        assert proc.stdin is not None
-        proc.stdin.write(prompt.encode("utf-8"))
-        proc.stdin.close()
-
-        timed_out = False
         try:
-            exit_code = proc.wait(timeout=self.timeout)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            proc.kill()
-            exit_code = proc.wait()
-        for t in threads:
-            t.join(timeout=10)
+            try:
+                if tree is not None:
+                    proc = tree.spawn_suspended(command, **popen_kwargs)
+                    launch: dict[str, Any] = {
+                        "job_name": tree.name,
+                        "kill_on_close": True,
+                        **process_tree.JobTree.launch_identity(proc),
+                    }
+                else:
+                    proc = subprocess.Popen(command, **popen_kwargs)
+                    launch = {"pid": proc.pid, "kill_on_close": False}
+            except OSError as exc:
+                raise AdapterError(f"프로세스를 시작하지 못했다: {exc}") from exc
+            launch["launched_at"] = _now()
+            if on_launch is not None:
+                # 재개 전에 기록한다. 여기서 실패하면 CLI 는 한 줄도 돌지 않았고, job 을 닫을
+                # 때 정지된 프로세스가 끝난다.
+                on_launch(launch)
+            self.record_effect(case_id, run_id)
+            if tree is not None:
+                process_tree.JobTree.resume(proc)
+
+            threads = [
+                threading.Thread(
+                    target=consume,
+                    args=(proc.stdout, stdout_lines, raw_dir / f"{run_id}.stdout.jsonl" if raw_dir else None),
+                    daemon=True,
+                ),
+                threading.Thread(
+                    target=consume,
+                    args=(proc.stderr, stderr_lines, raw_dir / f"{run_id}.stderr.log" if raw_dir else None),
+                    daemon=True,
+                ),
+            ]
+            for t in threads:
+                t.start()
+
+            assert proc.stdin is not None
+            try:
+                proc.stdin.write(prompt.encode("utf-8"))
+                proc.stdin.close()
+            except OSError:
+                # CLI 가 입력을 받기 전에 끝났다. 판정은 아래에서 이벤트·종료 코드로 한다.
+                pass
+
+            deadline = time.monotonic() + self.timeout
+            stop_reason: str | None = None
+            exit_code: int | None = None
+            while True:
+                try:
+                    exit_code = proc.wait(timeout=0.2)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                if stop_event is not None and stop_event.is_set():
+                    stop_reason = "stop_requested"
+                    break
+                if time.monotonic() >= deadline:
+                    stop_reason = "timeout"
+                    break
+
+            if tree is not None:
+                if stop_reason is None:
+                    # 루트와 함께 끝나는 중인 자식이 잔류로 세어지지 않게 잠깐 기다린다.
+                    # 이 뒤에도 남은 것이 그 실행의 잔류 활동이다.
+                    tree.wait_empty(min(1.0, self.confirm_timeout))
+                # **남은 것을 끝내고 0 을 확인한다.** 중단이면 루트까지, 정상 종료면 루트가
+                # 남긴 잔류 프로세스를. 처음부터 0 이면 아무 것도 종료하지 않는다.
+                observation = tree.terminate_and_confirm(self.confirm_timeout)
+            else:
+                if stop_reason is not None:
+                    proc.kill()
+                observation = process_tree.ResidualObservation(
+                    "unknown", process_tree.BASIS_NOT_OBSERVABLE
+                )
+            if exit_code is None:
+                try:
+                    exit_code = proc.wait(timeout=self.confirm_timeout)
+                except subprocess.TimeoutExpired:
+                    exit_code = None
+            for t in threads:
+                t.join(timeout=10)
+        finally:
+            if tree is not None:
+                tree.close()
 
         stream = cli_events.normalize(tool_id, stdout_lines)
         for event in stream.events:
             if not event["ts"]:
                 event["ts"] = _now()
 
-        outcome = self._judge(stream, exit_code, timed_out)
+        if stop_reason == "stop_requested":
+            # 끊은 실행은 결과가 아니라 **중단**이다. 끊긴 데까지의 출력이 성공으로 읽히지
+            # 않게 판정을 따로 둔다(P1 계약 7.2 의 `cancelled`).
+            outcome = RunOutcome.CANCELLED
+        else:
+            outcome = self._judge(stream, exit_code, stop_reason == "timeout")
         body = self._compose_output(
-            run_id, case_id, tool_id, mode, permission, version, exit_code, outcome, stream
+            run_id, case_id, tool_id, mode, permission, version, exit_code, outcome, stream,
+            stop_reason=stop_reason, observation=observation,
         )
         return ExecutionOutput(
             events=stream.events,
@@ -358,13 +486,15 @@ class CliExecutor:
             outcome=outcome,
             exit_code=exit_code,
             usage=stream.usage,
-            # 강제 종료는 안전 중지가 아니다. 자식 프로세스가 남았는지 확인할 수단이
-            # 없으므로 확인하지 않은 것을 "없음"으로 적지 않는다(P1-03 3절).
-            residual_activity="unknown",
+            # 확인했을 때만 `none` 이다. 트리 제어가 없으면 `unknown` 이다(P1-03 3절).
+            residual_activity=observation.residual,
             session_ref=stream.session_ref,
             observed_tool_version=version,
             final_message=stream.final_message,
             unmapped=stream.unmapped,
+            residual_basis=observation.basis,
+            residual_terminated=observation.terminated,
+            stop_reason=stop_reason,
         )
 
     @staticmethod
@@ -400,8 +530,15 @@ class CliExecutor:
         exit_code: int | None,
         outcome: RunOutcome,
         stream: cli_events.NormalizedStream,
+        stop_reason: str | None = None,
+        observation: process_tree.ResidualObservation | None = None,
     ) -> bytes:
         """실행 결과 원문. **Runner에 저장되고 제어부에는 참조만 올라간다.**"""
+        residual = (
+            f"{observation.residual} ({observation.basis}, terminated={observation.terminated})"
+            if observation is not None
+            else "unknown"
+        )
         header = (
             f"run_id={run_id}\n"
             f"case_id={case_id}\n"
@@ -410,6 +547,8 @@ class CliExecutor:
             f"session_ref={stream.session_ref or 'not_reported'}\n"
             f"exit_code={exit_code}\n"
             f"outcome={outcome.value}\n"
+            f"stop_reason={stop_reason or 'none'}\n"
+            f"residual_activity={residual}\n"
             f"normalized_events={len(stream.events)} unmapped={len(stream.unmapped)}\n"
             f"executed_at={_now()}\n"
             "--- final message ---\n"

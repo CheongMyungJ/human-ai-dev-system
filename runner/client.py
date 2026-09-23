@@ -39,8 +39,37 @@ class ControllerClient:
             {"runner_id": runner_id, "name": name, "host": host, "capabilities": capabilities},
         )
 
-    def heartbeat(self, runner_id: str) -> Any:
-        return self._post(f"/api/runner/{runner_id}/heartbeat")
+    def heartbeat(self, runner_id: str, executing: list[dict] | None = None) -> Any:
+        """생존 보고. UI-02 부터 **지금 실행 중인 실행**을 함께 보내고, 응답으로 할 일
+        (중단·잔류 재확인)을 받는다."""
+        return self._post(
+            f"/api/runner/{runner_id}/heartbeat", {"executing": executing or []}
+        )
+
+    def reconcile(self, runner_id: str) -> list[dict]:
+        """이 Runner 에 배정돼 끝나지 않은 실행(UI-02). 재시작 뒤 원장과 대조한다."""
+        return self._post(f"/api/runner/{runner_id}/reconcile")
+
+    def stop_ack(self, run_id: str, runner_id: str, generation: int) -> Any:
+        """중단을 **받았다**(끝났다는 뜻이 아니다)."""
+        return self._post(
+            f"/api/runner/runs/{run_id}/stop-ack",
+            {"runner_id": runner_id, "generation": generation},
+        )
+
+    def send_residual(
+        self, run_id: str, runner_id: str, residual: str, basis: str, terminated: int | None
+    ) -> Any:
+        """끝난 실행의 잔류를 다시 확인한 결과. 값·근거·종료한 수뿐이다."""
+        return self._post(
+            f"/api/runner/runs/{run_id}/residual",
+            {
+                "runner_id": runner_id,
+                "residual": residual,
+                "basis": basis,
+                "terminated": terminated,
+            },
+        )
 
     # ----------------------------------------------------------------- 원문
 

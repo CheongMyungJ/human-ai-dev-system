@@ -7,6 +7,7 @@ NFR-01은 "저장 완료로 응답한 기록은 프로세스 재시작 후 복�
 
 from __future__ import annotations
 
+import re
 import sqlite3
 import threading
 from contextlib import contextmanager
@@ -15,9 +16,10 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from domain import ids
+from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 
 def utc_now() -> str:
@@ -349,12 +351,14 @@ def migrate(conn: sqlite3.Connection) -> None:
     )
     _add_column_if_missing(conn, "run_context_ref", "byte_size", "INTEGER")
     _add_column_if_missing(conn, "run", "context_inline_limit", "INTEGER")
+    # UI-02(v18) 가 허용값을 늘렸다. 새 DB 는 여기서 새 목록을 받고, 이미 이 컬럼이 있는
+    # DB 는 아래 v18 이행이 표를 다시 만들어 목록을 바꾼다.
     _add_column_if_missing(
         conn,
         "run",
         "not_started_reason",
         "TEXT CHECK (not_started_reason IS NULL OR not_started_reason IN"
-        " ('required_context_unavailable', 'no_execution_path', 'workspace_busy'))",
+        f" ({_sql_list(NOT_STARTED_REASONS)}))",
     )
     # 역할·참조 id·버전의 목록이다. 본문 자리가 아니다.
     _add_column_if_missing(
@@ -364,6 +368,40 @@ def migrate(conn: sqlite3.Connection) -> None:
         "TEXT CHECK (context_freshness_json IS NULL OR length(context_freshness_json) <= 20000)",
     )
 
+    # v18: 입력·실행 제어(UI-02). 잔류 관측 표는 schema.sql 이 만들고 여기서는 컬럼을
+    #      더하고 **두 표의 허용값 목록을 넓힌다.**
+    #
+    #      `run.stop_requested_at`·`_by` 이 실행에 중단이 요청된 시각·주체. 옛 행은 NULL —
+    #                                 중단 경로가 없었다.
+    #      `run.stop_delivered_at`    Runner 가 중단을 받았다고 확인한 시각. 받았다는 뜻이지
+    #                                 끝났다는 뜻이 아니다.
+    #      `run.liveness_at`          Runner 가 "지금 실행 중"이라고 마지막으로 알린 시각.
+    #      `run.residual_check_requested_at` 끝난 실행의 잔류 재확인을 요청한 시각.
+    #      `conversation_request.stop_requested_*` 요청 중단의 시각·주체·짧은 이유.
+    #
+    #      `run.not_started_reason` 과 요청 상태·이유의 CHECK 는 **표를 다시 만들어** 바꾼다
+    #      (`_widen_check`). 행·색인은 그대로 옮기고 값을 지어내지 않는다. 옛 `unknown`
+    #      요청은 그대로 잠겨 있다 — 그 실행의 잔류는 확인 근거가 생길 때만 풀린다.
+    for column in (
+        "stop_requested_at",
+        "stop_requested_by",
+        "stop_delivered_at",
+        "liveness_at",
+        "residual_check_requested_at",
+    ):
+        _add_column_if_missing(conn, "run", column, "TEXT")
+    _add_column_if_missing(conn, "conversation_request", "stop_requested_at", "TEXT")
+    _add_column_if_missing(conn, "conversation_request", "stop_requested_by", "TEXT")
+    _add_column_if_missing(
+        conn,
+        "conversation_request",
+        "stop_reason_summary",
+        "TEXT CHECK (stop_reason_summary IS NULL OR length(stop_reason_summary) <= 200)",
+    )
+    _widen_check(conn, "run", "not_started_reason", NOT_STARTED_REASONS)
+    _widen_check(conn, "conversation_request", "state", REQUEST_STATES)
+    _widen_check(conn, "conversation_request", "outcome_reason", REQUEST_OUTCOME_REASONS)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -371,6 +409,73 @@ def migrate(conn: sqlite3.Connection) -> None:
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, utc_now()),
         )
+
+
+def _sql_list(values: Iterable[str]) -> str:
+    """CHECK 의 허용값 목록. 값은 열거형에서 오며 따옴표를 담지 않는다."""
+    return ", ".join(f"'{v}'" for v in values)
+
+
+def _widen_check(
+    conn: sqlite3.Connection, table: str, column: str, values: Iterable[str]
+) -> bool:
+    """표의 `{column} IN (...)` CHECK 허용값 목록을 `values` 로 바꾼다(UI-02, v18).
+
+    **이미 같은 값 목록이면 아무 것도 하지 않는다**(값으로 비교한다 — 줄바꿈이 다른 같은
+    목록 때문에 새 DB 를 다시 만들지 않는다).
+
+    SQLite 에는 CHECK 를 바꾸는 ALTER 가 없어 표를 다시 만든다. 새 DDL 은 **저장된 DDL 에서
+    그 목록만 바꾼 것**이다 — 손으로 다시 적으면 여러 판에 걸쳐 붙은 컬럼·기본값·제약 하나를
+    빠뜨리기 쉽다. 순서는 SQLite 의 일반 절차를 따른다: 외래 키 검사를 끄고, 새 표를 만들어
+    행을 그대로 옮기고, 옛 표를 지운 뒤 새 표의 이름을 바꾸고, 색인을 다시 만들고,
+    `foreign_key_check` 가 비어 있음을 확인한다. 다른 표의 외래 키는 이름으로 이 표를
+    가리키므로 이름을 바꾼 뒤 그대로 새 표를 가리킨다.
+    """
+    wanted = list(values)
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+    ).fetchone()
+    if row is None:
+        return False
+    ddl = row["sql"]
+    match = re.search(r"\b" + re.escape(column) + r"\s+IN\s*\(([^)]*)\)", ddl)
+    if match is None:
+        return False
+    if re.findall(r"'([^']*)'", match.group(1)) == wanted:
+        return False
+    new_ddl = ddl[: match.start()] + f"{column} IN ({_sql_list(wanted)})" + ddl[match.end():]
+    temp = f"{table}__rebuild"
+    header = re.compile(r'^CREATE TABLE\s+(IF NOT EXISTS\s+)?"?' + re.escape(table) + r'"?', re.I)
+    if not header.search(new_ddl):
+        raise RuntimeError(f"v18 이행: {table} 의 DDL 머리를 해석하지 못했다")
+    create_temp = header.sub(f'CREATE TABLE "{temp}"', new_ddl, count=1)
+    indexes = [
+        r["sql"]
+        for r in conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = ?"
+            " AND sql IS NOT NULL",
+            (table,),
+        ).fetchall()
+    ]
+    conn.execute("PRAGMA foreign_keys = OFF")
+    try:
+        with transaction(conn):
+            conn.execute(f'DROP TABLE IF EXISTS "{temp}"')
+            conn.execute(create_temp)
+            conn.execute(f'INSERT INTO "{temp}" SELECT * FROM "{table}"')
+            conn.execute(f'DROP TABLE "{table}"')
+            conn.execute(f'ALTER TABLE "{temp}" RENAME TO "{table}"')
+            for index_sql in indexes:
+                conn.execute(index_sql)
+            broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if broken:
+                raise RuntimeError(
+                    f"v18 이행: {table} 을 다시 만든 뒤 외래 키가 맞지 않는다: "
+                    + ", ".join(str(tuple(b)) for b in broken[:5])
+                )
+    finally:
+        conn.execute("PRAGMA foreign_keys = ON")
+    return True
 
 
 #: 쓰기 트랜잭션을 **연결 단위로 직렬화한다**(P3-04).

@@ -2120,7 +2120,7 @@ export const policyApi = {
 // 거부한다(FR-11). 초안의 브라우저 저장·복구(D-83)는 UI-03 이다.
 
 export type MessageReceipt = 'pending' | 'stored' | 'lost_before_persist'
-export type RequestState = 'processing' | 'completed' | 'failed' | 'unknown'
+export type RequestState = 'processing' | 'completed' | 'failed' | 'unknown' | 'interrupted'
 
 export interface ConversationMessage {
   id: string
@@ -2159,16 +2159,70 @@ export interface ConversationRequest {
   note_summary: string | null
   locking: boolean
   opening_receipt: MessageReceipt
-  runs: { run_id: string; purpose: string | null; status: string; outcome: string | null }[]
+  runs: RequestRun[]
   unfinished_runs: number
   unknown_runs: number
+  // UI-02. 중단 요청과 실제 종료 확인.
+  stop_requested_at: string | null
+  stop_requested_by: string | null
+  stop_reason_summary: string | null
+  stopping: boolean
+  unconfirmed_runs: number
+  interruption_summary: InterruptionSummary | null
+}
+
+// UI-02. 실행이 **지금 실제로** 어떤가. 결과(`outcome`)와 다른 축이다.
+export type RunExecutionState =
+  | 'pending'
+  | 'executing'
+  | 'unconfirmed'
+  | 'ended'
+  | 'ended_unconfirmed'
+
+export interface RequestRun {
+  run_id: string
+  purpose: string | null
+  status: string
+  outcome: string | null
+  not_started_reason: string | null
+  residual_activity: string
+  residual_observed: string | null
+  residual_basis: string | null
+  residual_terminated: number | null
+  stop_requested_at: string | null
+  stop_delivered_at: string | null
+  liveness_at: string | null
+  execution_state: RunExecutionState
+}
+
+export interface InterruptionSummary {
+  runs: number
+  by_outcome: Record<string, number>
+  not_started: string[]
+  result_unknown: string[]
+  execution_unconfirmed: string[]
+  workspace_changed_by: string[]
+  workspace_unobserved: string[]
+  workspace_files_changed_cumulative: number | null
+  detail: string
 }
 
 export interface SendState {
   allowed: boolean
   refusal: string | null
+  // UI-02. 지금 걸리는 사유 전부(요청 잠금과 PC 미연결이 함께 걸릴 수 있다).
+  refusals: string[]
   detail: string
   active_request_id: string | null
+}
+
+// UI-02. PC 연결은 heartbeat 에서 도출한다. `basis` 는 어느 PC 를 기준으로 판단했는가다.
+export interface RunnerConnectionState {
+  state: 'connected' | 'disconnected' | 'never_seen' | 'not_determined'
+  runner_id: string | null
+  last_seen_at: string | null
+  stale_after_seconds: number
+  basis: string
 }
 
 export interface ConversationView {
@@ -2188,8 +2242,9 @@ export interface ConversationView {
   current_request: ConversationRequest | null
   send: {
     general: SendState
-    card_answer: { allowed: boolean; open_questions: number }
+    card_answer: { allowed: boolean; open_questions: number; refusal: string | null }
     runner_connection_enforced: boolean
+    runner_connection: RunnerConnectionState
   }
   needs_response: boolean
 }
@@ -2212,6 +2267,22 @@ export const REQUEST_STATE_LABEL: Record<RequestState, string> = {
   completed: '완료',
   failed: '실패',
   unknown: '실행 상태 확인 필요',
+  interrupted: '중단됨 (실행 종료 확인)',
+}
+
+export const RUN_EXECUTION_LABEL: Record<RunExecutionState, string> = {
+  pending: '배정 대기',
+  executing: '실행 중',
+  unconfirmed: '실행 상태 확인 끊김',
+  ended: '종료 확인',
+  ended_unconfirmed: '끝났는지 확인 못 함',
+}
+
+export const RUNNER_CONNECTION_LABEL: Record<RunnerConnectionState['state'], string> = {
+  connected: 'PC 연결됨',
+  disconnected: 'PC 미연결',
+  never_seen: 'PC 연결 기록 없음',
+  not_determined: '이 대화의 PC 를 아직 정할 수 없다',
 }
 
 export const CONVERSATION_REFUSAL_LABEL: Record<string, string> = {
@@ -2234,6 +2305,12 @@ export const CONVERSATION_REFUSAL_LABEL: Record<string, string> = {
   request_runs_unfinished: '이 요청의 실행이 아직 끝나지 않았다 — 실행 사이에 잠금을 풀지 않는다',
   request_original_not_stored: '요청을 연 메시지가 저장되지 않았다 — 완료로 적지 않는다',
   request_already_settled: '이미 끝난 요청이다',
+  runner_disconnected: 'PC 가 연결돼 있지 않다 — 입력은 그대로 두고 연결되면 직접 보낸다',
+  request_stop_requested: '중단 요청 중 — 관련 실행이 실제로 끝난 것을 확인하면 다시 보낼 수 있다',
+  request_not_stoppable: '처리 중인 요청만 중단할 수 있다',
+  run_linked_to_request: '요청에 연결된 실행은 요청 단위로 중단한다',
+  run_already_finished: '이미 끝난 실행이다',
+  request_not_unknown: '다시 확인할 것은 실행 상태를 모르는 요청뿐이다',
 }
 
 export const conversationApi = {
@@ -2243,7 +2320,10 @@ export const conversationApi = {
       body: JSON.stringify({ title }),
     }),
 
-  get: (caseId: string) => request<ConversationView>(`/api/cases/${caseId}/conversation`),
+  get: (caseId: string, runnerId?: string) =>
+    request<ConversationView>(
+      `/api/cases/${caseId}/conversation${runnerId ? `?runner_id=${encodeURIComponent(runnerId)}` : ''}`,
+    ),
 
   // 202 는 **접수 대기**다. `receipt === 'stored'` 가 될 때까지 초안을 비우지 않는다.
   send: (
@@ -2274,6 +2354,21 @@ export const conversationApi = {
     request<ConversationRequest>(`/api/cases/${caseId}/requests/${requestId}/settle`, {
       method: 'POST',
       body: JSON.stringify({ outcome, actor: 'owner' }),
+    }),
+
+  // UI-02. **중단은 취소 성공이 아니다.** 관련 실행이 실제로 끝난 것을 서버가 확인하면
+  // 요청이 `interrupted` 가 되고 전송이 열린다. 확인하지 못하면 `unknown` 으로 잠긴다.
+  stop: (caseId: string, requestId: string, reason: string) =>
+    request<ConversationRequest>(`/api/cases/${caseId}/requests/${requestId}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner', reason }),
+    }),
+
+  // UI-02. 잠긴 요청의 실행 상태를 PC 가 **다시 확인하게** 한다. 사람이 확인을 선언하는
+  // 경로가 아니다 — PC 가 확인 근거를 보내야 풀린다.
+  reconcile: (caseId: string, requestId: string) =>
+    request<ConversationRequest>(`/api/cases/${caseId}/requests/${requestId}/reconcile`, {
+      method: 'POST',
     }),
 
   startWork: (caseId: string, requestMessageId: string, profile: string, summary: string) =>

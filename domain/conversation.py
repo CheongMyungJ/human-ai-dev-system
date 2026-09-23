@@ -28,6 +28,7 @@ from domain.models import (
     RunStatus,
     StageSource,
 )
+from domain.run_control import execution_unconfirmed
 
 
 # ================================================================ 단계
@@ -71,27 +72,40 @@ def receipt_for_intake(intake_state: str | None) -> MessageReceipt:
 
 @dataclass(frozen=True)
 class SendState:
-    """일반 전송을 지금 받을 수 있는가. 화면과 서버가 같은 값을 본다."""
+    """일반 전송을 지금 받을 수 있는가. 화면과 서버가 같은 값을 본다.
+
+    `refusal` 은 대표 사유이고 `refusals` 는 **지금 걸리는 사유 전부**다(UI-02). 요청 처리
+    중이면서 PC 도 미연결이면 둘 다 풀려야 보낼 수 있다.
+    """
 
     allowed: bool
     refusal: ConversationRefusal | None
     detail: str
     active_request_id: str | None
+    refusals: tuple[ConversationRefusal, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "allowed": self.allowed,
             "refusal": self.refusal.value if self.refusal else None,
+            "refusals": [r.value for r in (self.refusals or ((self.refusal,) if self.refusal else ()))],
             "detail": self.detail,
             "active_request_id": self.active_request_id,
         }
 
 
-def general_send_state(case_closed: bool, active_request: dict[str, Any] | None) -> SendState:
-    """일반·정정 메시지를 지금 받을 수 있는가(D-70·FR-11).
+def general_send_state(
+    case_closed: bool,
+    active_request: dict[str, Any] | None,
+    runner_disconnected: bool = False,
+) -> SendState:
+    """일반·정정 메시지를 지금 받을 수 있는가(D-70·D-75·FR-11).
 
     **대기열이 없다.** 막힌 전송은 거부이며 나중에 자동으로 보내지지 않는다. 사용자의
     초안은 사용자에게 남는다(D-83 은 UI-03 이 연결한다).
+
+    `runner_disconnected` 는 원문을 저장할 PC 가 미연결이라는 판단이다(UI-02). 요청 잠금과
+    함께 걸리면 둘 다 사유로 남는다.
     """
     if case_closed:
         return SendState(
@@ -100,21 +114,46 @@ def general_send_state(case_closed: bool, active_request: dict[str, Any] | None)
             "종료된 업무다. 실제 수정은 연결된 새 업무로 한다",
             None,
         )
-    if active_request is None:
-        return SendState(True, None, "보낼 수 있다", None)
-    state = RequestState(active_request["state"])
-    if state is RequestState.UNKNOWN:
-        return SendState(
-            False,
-            ConversationRefusal.REQUEST_STATE_UNKNOWN,
-            "현재 요청의 실행 상태를 확인하지 못했다. 확인 전에는 새 요청을 받지 않는다",
-            active_request["id"],
+    reasons: list[tuple[ConversationRefusal, str]] = []
+    active_id = active_request["id"] if active_request is not None else None
+    if active_request is not None:
+        state = RequestState(active_request["state"])
+        if state is RequestState.UNKNOWN:
+            reasons.append(
+                (
+                    ConversationRefusal.REQUEST_STATE_UNKNOWN,
+                    "현재 요청의 실행 상태를 확인하지 못했다. 확인 전에는 새 요청을 받지 않는다",
+                )
+            )
+        elif active_request.get("stop_requested_at"):
+            reasons.append(
+                (
+                    ConversationRefusal.REQUEST_STOP_REQUESTED,
+                    "중단을 요청했다. 관련 실행이 실제로 끝난 것을 확인하면 다시 보낼 수 있다",
+                )
+            )
+        else:
+            reasons.append(
+                (
+                    ConversationRefusal.REQUEST_IN_PROGRESS,
+                    "현재 요청을 처리하고 있다. 초안은 편집할 수 있고 질문 카드에는 답할 수 있다",
+                )
+            )
+    if runner_disconnected:
+        reasons.append(
+            (
+                ConversationRefusal.RUNNER_DISCONNECTED,
+                "원문을 저장할 PC 가 연결돼 있지 않다. 입력은 그대로 두고 연결되면 직접 보낸다",
+            )
         )
+    if not reasons:
+        return SendState(True, None, "보낼 수 있다", None)
     return SendState(
         False,
-        ConversationRefusal.REQUEST_IN_PROGRESS,
-        "현재 요청을 처리하고 있다. 초안은 편집할 수 있고 질문 카드에는 답할 수 있다",
-        active_request["id"],
+        reasons[0][0],
+        " · ".join(detail for _code, detail in reasons),
+        active_id,
+        tuple(code for code, _detail in reasons),
     )
 
 
@@ -139,20 +178,31 @@ def decide_settle(
     requested: RequestSettleOutcome,
     opening_receipt: MessageReceipt,
     runs: Iterable[dict[str, Any]],
+    stop_requested: bool = False,
 ) -> SettleDecision:
     """처리 중인 요청을 어떤 상태로 끝낼 수 있는가.
 
     순서가 판정의 일부다.
 
-    1. **끝나지 않은 실행이 있으면 거부한다.** 요청을 끝내면 잠금이 풀리므로, 실행이
+    1. **중단이 요청됐으면 거부한다**(UI-02). 끝내는 것은 실제 종료를 확인한 제어부다 —
+       실행이 남아 있든 아니든 처리하는 쪽이 할 일이 없다는 답이 먼저다.
+    2. **끝나지 않은 실행이 있으면 거부한다.** 요청을 끝내면 잠금이 풀리므로, 실행이
        아직 돌고 있는데 새 일반 전송을 받게 된다 — Run 사이에 잠금을 푸는 것과 같다.
-    2. **결과를 모르는 실행이 있으면 `unknown` 이다.** 요청한 결과가 `failed` 여도
-       그렇다. 모르는 실행을 실패로 적으면 잠금이 풀리고, 그 실행이 아직 무엇을
-       쓰고 있을지 모르는 채로 새 요청이 열린다(D-76).
-    3. **`completed` 는 여는 메시지가 저장됐을 때만이다.** 받지 않은 말을 처리했다고
+    3. **실제로 끝났는지 모르는 실행이 있으면 `unknown` 이다.** 요청한 결과가 `failed`
+       여도 그렇다. 모르는 실행을 실패로 적으면 잠금이 풀리고, 그 실행이 아직 무엇을
+       쓰고 있을지 모르는 채로 새 요청이 열린다(D-76). 결과 `unknown`·`cancelled` 이면서
+       잔류 활동을 확인하지 못한 실행이다(`domain.run_control.execution_unconfirmed`).
+    4. **결과를 모르지만 끝난 것은 확인한 실행이 있으면 `interrupted` 다**(UI-02). 완료로도
+       실패로도 적지 않는다 — 결과를 모른다는 사실이 남는다.
+    5. **`completed` 는 여는 메시지가 저장됐을 때만이다.** 받지 않은 말을 처리했다고
        적지 않는다. `failed` 는 막지 않는다 — 처리하지 못했다는 사실은 적을 수 있다.
     """
     runs = list(runs)
+    if stop_requested:
+        return SettleDecision(
+            ConversationRefusal.REQUEST_STOP_REQUESTED,
+            "중단이 요청된 요청이다. 관련 실행의 실제 종료를 확인한 제어부가 끝낸다",
+        )
     unfinished = [r for r in runs if r.get("status") != RunStatus.FINISHED.value]
     if unfinished:
         return SettleDecision(
@@ -160,12 +210,23 @@ def decide_settle(
             "이 요청에 연결된 실행이 아직 끝나지 않았다: "
             + ", ".join(r["run_id"] for r in unfinished),
         )
+    unconfirmed = [r for r in runs if execution_unconfirmed(r)]
+    if unconfirmed:
+        outcome_unknown = any(r.get("outcome") == RunOutcome.UNKNOWN.value for r in unconfirmed)
+        return SettleDecision(
+            None,
+            "연결된 실행 중 실제로 끝났는지 모르는 것이 있다. 확인 전에는 잠금을 풀지 않는다",
+            RequestState.UNKNOWN,
+            RequestOutcomeReason.RUN_OUTCOME_UNKNOWN
+            if outcome_unknown
+            else RequestOutcomeReason.RUN_RESIDUAL_UNCONFIRMED,
+        )
     if any(r.get("outcome") == RunOutcome.UNKNOWN.value for r in runs):
         return SettleDecision(
             None,
-            "연결된 실행 중 결과를 모르는 것이 있다. 확인 전에는 잠금을 풀지 않는다",
-            RequestState.UNKNOWN,
-            RequestOutcomeReason.RUN_OUTCOME_UNKNOWN,
+            "결과를 모르는 실행이 있지만 그 실행이 끝난 것은 확인했다. 완료·실패로 적지 않는다",
+            RequestState.INTERRUPTED,
+            RequestOutcomeReason.EXECUTION_ENDED_RESULT_UNKNOWN,
         )
     if requested is RequestSettleOutcome.COMPLETED and opening_receipt is not MessageReceipt.STORED:
         return SettleDecision(

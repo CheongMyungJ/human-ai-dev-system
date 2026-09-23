@@ -23,7 +23,7 @@ import pytest
 from controller import db
 from controller.db import utc_now
 from controller.repository import Repository
-from domain.models import ConformanceMethod
+from domain.models import NOT_STARTED_REASONS, ConformanceMethod
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -1351,9 +1351,11 @@ def test_a_v15_database_gets_no_conversation_it_never_had(tmp_path):
             (case_id, case_id, kind, now, now, profile, version,
              "explicit" if profile else None),
         )
+    # UI-02. 전송 가능 여부가 PC 연결도 본다(D-75). 이 시험이 보는 것은 "요청 잠금을 지어내지
+    # 않는다"이므로 **연결된 PC** 로 둔다 — heartbeat 가 없던 PC 는 미연결이 맞다.
     old.execute(
-        "INSERT INTO runner (id, name, host, status, registered_at)"
-        " VALUES ('runner-1','old','old-host','registered',?)", (now,)
+        "INSERT INTO runner (id, name, host, status, registered_at, last_heartbeat_at)"
+        " VALUES ('runner-1','old','old-host','registered',?,?)", (now, utc_now())
     )
     old.execute(
         "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
@@ -1519,11 +1521,14 @@ def test_a_v16_database_gets_no_receipt_or_freshness_it_never_had(tmp_path):
              r["receipt_status"]) for r in listed] == [
         ("supporting", False, "inline", False, None)
     ]
+    # **현재 판까지 이행됐는가**를 본다. v17 을 고정하던 것을 UI-02 에서 `>= 17` 로
+    # 바꿨다 — 이 시험의 뜻은 "v16 DB 가 지금 판으로 열린다"이고, v18 고정은 아래
+    # v17→v18 시험이 맡는다(P4-04 가 v15 시험에 한 것과 같은 판단이다).
     assert (
         conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
         == db.SCHEMA_VERSION
-        == 17
     )
+    assert db.SCHEMA_VERSION >= 17
 
     # 새 값의 제약. 모르는 등급·상태·사유를 넣을 수 없다.
     for statement in (
@@ -1541,4 +1546,222 @@ def test_a_v16_database_gets_no_receipt_or_freshness_it_never_had(tmp_path):
     again = conn.execute("SELECT tier FROM run_context_ref WHERE run_id = 'run-1'").fetchone()
     assert again["tier"] is None
     assert conn.execute("SELECT COUNT(*) FROM run_context_receipt").fetchone()[0] == 0
+    conn.close()
+
+
+# ===================================================================== UI-02
+
+
+def _v17_schema() -> str:
+    """UI-02 표식이 없고 v17 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v17" in schema and "스키마 v18" not in schema:
+            return schema
+    pytest.skip("v17 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v17_database_is_rebuilt_without_losing_rows_or_inventing_stops(tmp_path):
+    """v17 → v18 (UI-02 AC-17).
+
+    **이 이행은 표 둘을 다시 만든다**(`run`·`conversation_request` 의 허용값 목록). 지키는 것:
+    행·색인·외래 키가 그대로이고, 옛 실행·요청에 중단·잔류 확인을 지어내지 않으며, 옛
+    `unknown` 요청은 **잠긴 채**다 — 확인 근거 없이 풀지 않는다. 반복 이행은 다시 만들지 않는다.
+    """
+    path = tmp_path / "controller.sqlite3"
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v17_schema())
+    # 실제 v17 DB 에는 db.py 이행이 붙인 컬럼이 있다(커밋된 `schema.sql` 에는 없다).
+    for column in ("profile", "profile_version", "profile_source", "stage"):
+        old.execute(f'ALTER TABLE "case" ADD COLUMN {column} TEXT')
+    old.execute("ALTER TABLE run ADD COLUMN purpose TEXT")
+    old.execute("ALTER TABLE run ADD COLUMN request_id TEXT REFERENCES conversation_request(id)")
+    old.execute("ALTER TABLE run ADD COLUMN context_inline_limit INTEGER")
+    old.execute(
+        "ALTER TABLE run ADD COLUMN not_started_reason TEXT CHECK (not_started_reason IS NULL"
+        " OR not_started_reason IN ('required_context_unavailable', 'no_execution_path',"
+        " 'workspace_busy'))"
+    )
+    old.execute("ALTER TABLE run ADD COLUMN context_freshness_json TEXT")
+    for column in ("tier", "inclusion", "byte_size"):
+        old.execute(f"ALTER TABLE run_context_ref ADD COLUMN {column} TEXT")
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (17, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at, stage)'
+        " VALUES ('case-1', 'prj-1', 'old', 'undecided', 'received', ?, ?, 'discussion')",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at, last_heartbeat_at)"
+        " VALUES ('runner-1','old','old-host','registered',?,?)", (now, now)
+    )
+    for artifact_id, kind in (("art-msg", "message"), ("art-out", "run_output")):
+        old.execute(
+            "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
+            " content_hash, byte_size, summary, availability, created_at)"
+            " VALUES (?,1,'case-1',?,'runner-1','h',10,'s','available',?)",
+            (artifact_id, kind, now),
+        )
+    old.execute(
+        "INSERT INTO intake (id, case_id, kind, artifact_id, revision, target_runner_id, state,"
+        " expected_hash, byte_size, summary, created_at, stored_at)"
+        " VALUES ('int-1','case-1','message','art-msg',1,'runner-1','stored','h',10,'s',?,?)",
+        (now, now),
+    )
+    # 결과를 모르는 실행 때문에 **잠긴 요청**. v17 에는 풀 길이 없었다.
+    old.execute(
+        "INSERT INTO conversation_request (id, case_id, opened_by_message_id, state, opened_at,"
+        " settled_at, settled_by, outcome_reason)"
+        " VALUES ('req-1','case-1','msg-1','unknown',?,?,'system','run_outcome_unknown')",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO conversation_message (id, case_id, seq, author, message_kind, actor,"
+        " client_message_id, artifact_id, artifact_rev, content_hash, intake_id, request_id,"
+        " summary, created_at) VALUES ('msg-1','case-1',1,'user','general','owner','c-1',"
+        " 'art-msg',1,'h','int-1','req-1','사용자 메시지 · 3자',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+        " instruction_artifact_id, instruction_artifact_rev, status, assignment_generation,"
+        " assigned_runner_id, created_at, outcome, residual_activity, request_id, purpose)"
+        " VALUES ('run-1','case-1','task-1','author','codex','exec','read_only','art-msg',1,"
+        " 'finished',2,'runner-1',?,'unknown','unknown','req-1','discussion_reply')",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+        " instruction_artifact_id, instruction_artifact_rev, status, assignment_generation,"
+        " created_at, outcome, residual_activity, not_started_reason)"
+        " VALUES ('run-2','case-1','task-1','author','codex','exec','read_only','art-msg',1,"
+        " 'finished',1,?,'failed','none','workspace_busy')",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run_event (run_id, seq, ts, type, received_at)"
+        " VALUES ('run-1', 1, ?, 'run_started', ?)", (now, now)
+    )
+    old.execute(
+        "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
+        " VALUES ('run-1', 1, 'conversation_user_message', 'art-msg', 1)"
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    # 행이 그대로 옮겨졌다.
+    runs = {r["run_id"]: r for r in conn.execute("SELECT * FROM run").fetchall()}
+    assert set(runs) == {"run-1", "run-2"}
+    assert (runs["run-1"]["outcome"], runs["run-1"]["residual_activity"]) == ("unknown", "unknown")
+    assert runs["run-1"]["assignment_generation"] == 2
+    assert runs["run-2"]["not_started_reason"] == "workspace_busy"
+    # **지어내지 않는다.** 중단·실행 중·재확인 기록과 잔류 관측이 없다.
+    for column in (
+        "stop_requested_at", "stop_requested_by", "stop_delivered_at", "liveness_at",
+        "residual_check_requested_at",
+    ):
+        assert runs["run-1"][column] is None, column
+    assert conn.execute("SELECT COUNT(*) FROM run_residual_observation").fetchone()[0] == 0
+    request = conn.execute("SELECT * FROM conversation_request WHERE id = 'req-1'").fetchone()
+    assert (request["state"], request["outcome_reason"]) == ("unknown", "run_outcome_unknown")
+    assert request["stop_requested_at"] is None
+    # 외래 키·색인이 새 표를 가리킨다.
+    assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+    assert conn.execute(
+        "SELECT COUNT(*) FROM run_event e JOIN run r ON r.run_id = e.run_id"
+    ).fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT COUNT(*) FROM conversation_message m JOIN conversation_request q"
+        " ON q.id = m.request_id"
+    ).fetchone()[0] == 1
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(
+            "INSERT INTO run_event (run_id, seq, ts, type, received_at)"
+            " VALUES ('run-missing', 1, 't', 'run_started', 't')"
+        )
+    with pytest.raises(sqlite3.IntegrityError):
+        # 활성 요청은 Case 당 하나 — 부분 유일 색인이 다시 만들어졌다.
+        conn.execute(
+            "INSERT INTO conversation_request (id, case_id, opened_by_message_id, state,"
+            " opened_at) VALUES ('req-2', 'case-1', 'msg-1', 'processing', 't')"
+        )
+
+    # 옛 unknown 요청은 **잠긴 채**다.
+    repo = Repository(conn)
+    view = repo.conversation_view("case-1")
+    assert view["current_request"]["id"] == "req-1"
+    assert view["send"]["general"]["refusal"] == "request_state_unknown"
+    assert view["current_request"]["unconfirmed_runs"] == 1
+
+    # 넓어진 허용값 — 새 값은 받고 모르는 값은 거부한다.
+    conn.execute("UPDATE run SET not_started_reason = 'stop_requested' WHERE run_id = 'run-2'")
+    conn.execute("UPDATE run SET not_started_reason = 'workspace_busy' WHERE run_id = 'run-2'")
+    for statement in (
+        "UPDATE run SET not_started_reason = 'felt_like_it' WHERE run_id = 'run-2'",
+        "UPDATE conversation_request SET state = 'paused' WHERE id = 'req-1'",
+        "UPDATE conversation_request SET outcome_reason = 'because' WHERE id = 'req-1'",
+        "INSERT INTO run_residual_observation (id, run_id, generation, seq, source, residual,"
+        " basis, runner_id, observed_at) VALUES ('o1','run-1',2,1,'recheck','none','vibes',"
+        " 'runner-1','t')",
+        "INSERT INTO run_residual_observation (id, run_id, generation, seq, source, residual,"
+        " basis, runner_id, observed_at) VALUES ('o2','run-1',2,1,'recheck','maybe',"
+        " 'job_empty','runner-1','t')",
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(statement)
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+        == 18
+    )
+
+    # 반복 이행이 멱등이다 — 다시 만들지 않는다.
+    ddl_before = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name IN ('run', 'conversation_request')"
+        " ORDER BY name"
+    ).fetchall()
+    db.migrate(conn)
+    ddl_after = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE name IN ('run', 'conversation_request')"
+        " ORDER BY name"
+    ).fetchall()
+    assert [r[0] for r in ddl_before] == [r[0] for r in ddl_after]
+    assert conn.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 2
+    conn.close()
+
+
+def test_a_new_database_needs_no_rebuild():
+    """새 DB 는 처음부터 새 허용값 목록을 받는다 — 이행이 표를 다시 만들 일이 없다."""
+    conn = sqlite3.connect(":memory:", isolation_level=None)
+    conn.row_factory = sqlite3.Row
+    db.migrate(conn)
+    ddl = {
+        r["name"]: r["sql"]
+        for r in conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE name IN ('run', 'conversation_request')"
+        )
+    }
+    assert "'stop_requested'" in ddl["run"] and "'not_launched'" in ddl["run"]
+    assert "'interrupted'" in ddl["conversation_request"]
+    assert "run__rebuild" not in " ".join(ddl.values())
+    assert db._widen_check(  # noqa: SLF001
+        conn, "run", "not_started_reason", NOT_STARTED_REASONS
+    ) is False
     conn.close()

@@ -311,6 +311,12 @@ class FakeCliExecutor:
         self.usage: Any = "not_reported"
         #: 잔류 활동 보고. `none` 이 아니면 소비가 끝났다는 근거가 없다.
         self.residual_activity = "unknown"
+        #: UI-02. 잔류 값의 근거. 기본은 **보내지 않음**(UI-02 이전 계약)이다. 가짜는 Runner
+        #: 프로세스 안에서 돌므로 `in_process` 를 줄 수 있다.
+        self.residual_basis: str | None = None
+        #: UI-02. 시험이 "CLI 가 도는 동안"을 만들 때 쓴다. 세우면 가짜 실행이 풀려날 때까지
+        #: 기다린다(중단 신호가 오면 `cancelled` 로 끝난다).
+        self.hold: Any = None
         #: 세션 식별자를 고정하면 "작성과 검토가 같은 세션"을 만들 수 있다.
         self.fixed_session_ref: str | None = None
         self.calls: list[dict[str, Any]] = []
@@ -361,7 +367,15 @@ class FakeCliExecutor:
         permission: Permission,
         workspace: Path,
         raw_dir: Path | None = None,
+        *,
+        on_launch: Any = None,
+        stop_event: Any = None,
+        job_name: str | None = None,
     ) -> ExecutionOutput:
+        # UI-02. 실제 실행기와 같은 순서로 **시작 기록을 먼저** 남긴다. 가짜는 Runner
+        # 프로세스 안에서 돌므로 job 이 없다(`in_process`).
+        if on_launch is not None:
+            on_launch({"in_process": True, "fake": True})
         # 실제 실행기와 같이 부수효과를 한 줄 남긴다. 중복 실행 판정의 근거다.
         safe = case_id.replace("/", "_").replace("\\", "_")
         with open(self.effects_dir / f"{safe}.log", "a", encoding="utf-8") as fh:
@@ -385,6 +399,13 @@ class FakeCliExecutor:
             target.write_text(body, encoding="utf-8")
 
         final = self._final_message(prompt)
+        stopped = False
+        if self.hold is not None:
+            # "CLI 가 도는 동안". 풀려나거나 중단 신호가 올 때까지 기다린다.
+            while not self.hold.wait(0.05):
+                if stop_event is not None and stop_event.is_set():
+                    stopped = True
+                    break
         events = [
             {"seq": 1, "ts": "", "type": "run_started", "native_type": "fake.start", "raw_ref": None},
             {
@@ -408,10 +429,12 @@ class FakeCliExecutor:
         return ExecutionOutput(
             events=events,
             output_body=f"fake run {run_id}\n{final}".encode("utf-8"),
-            outcome=self.outcome,
+            outcome=RunOutcome.CANCELLED if stopped else self.outcome,
             exit_code=0,
             usage=self.usage,
             residual_activity=self.residual_activity,
+            residual_basis=self.residual_basis,
+            stop_reason="stop_requested" if stopped else None,
             session_ref=self._session_ref(run_id),
             observed_tool_version=f"{tool_id}/fake-for-tests",
             final_message=final,
@@ -1418,6 +1441,21 @@ class Harness:
             body["interpretation_run_id"] = interpretation_run_id
         return self.client.post(f"/api/cases/{case_id}/work-start", json=body)
 
+    def age_heartbeat(self, seconds: float, runner_id: str = RUNNER_ID) -> None:
+        """UI-02. 그 Runner 의 마지막 heartbeat 를 `seconds` 초 전으로 옮긴다(PC 미연결 재현)."""
+        import sqlite3
+        from datetime import datetime, timedelta, timezone
+
+        past = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat(
+            timespec="microseconds"
+        )
+        conn = sqlite3.connect(self.controller_config.db_path)
+        try:
+            conn.execute("UPDATE runner SET last_heartbeat_at = ? WHERE id = ?", (past, runner_id))
+            conn.commit()
+        finally:
+            conn.close()
+
     def intake_count(self) -> int:
         """제어부에 있는 접수 행의 수. 거부된 전송이 고아 원문을 남기지 않았는지 본다."""
         import sqlite3
@@ -1429,9 +1467,19 @@ class Harness:
             conn.close()
 
 
+#: UI-02. 시험 하네스의 PC 미연결 기준(초). 하네스의 Runner 는 `poll_once` 를 부를 때만
+#: heartbeat 를 보내므로 기본값(15초)이면 느린 시험이 우연히 "PC 미연결"에 걸린다. 미연결을
+#: 보는 시험은 heartbeat 시각을 직접 옮겨 결정적으로 만든다(`Harness.age_heartbeat`).
+HARNESS_RUNNER_STALE_SECONDS = 3600.0
+
+
 @pytest.fixture
 def harness(tmp_path: Path):
-    controller_config = ControllerConfig(data_root=tmp_path / "controller", web_dist=None)
+    controller_config = ControllerConfig(
+        data_root=tmp_path / "controller",
+        web_dist=None,
+        runner_stale_seconds=HARNESS_RUNNER_STALE_SECONDS,
+    )
     app = create_app(controller_config)
     with TestClient(app) as client:
         runner_config = RunnerConfig(

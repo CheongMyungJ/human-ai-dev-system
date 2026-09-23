@@ -413,6 +413,9 @@ def test_general_input_is_locked_on_the_server_while_a_request_is_processing(har
     assert view["send"]["general"] == {
         "allowed": False,
         "refusal": ConversationRefusal.REQUEST_IN_PROGRESS.value,
+        # UI-02 가 **걸리는 사유 전부**를 더했다(요청 잠금과 PC 미연결이 함께 걸릴 수 있다).
+        # 여기서는 요청 잠금 하나뿐이다.
+        "refusals": [ConversationRefusal.REQUEST_IN_PROGRESS.value],
         "detail": view["send"]["general"]["detail"],
         "active_request_id": sent["request"]["id"],
     }

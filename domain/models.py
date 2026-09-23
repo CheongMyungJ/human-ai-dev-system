@@ -617,6 +617,12 @@ class AdmissionRefusal(str, Enum):
     CONTEXT_OVER_INLINE_LIMIT = "context_over_inline_limit"
     REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
 
+    # --- UI-02 입력·실행 제어 ----------------------------------------------
+    #
+    # 중단이 요청된 요청에는 **후속 실행을 붙이지 않는다**(D-76). 처리 중이라는 사실만으로
+    # 열면 중단 요청 뒤에 새 실행이 시작된다.
+    REQUEST_STOP_REQUESTED = "request_stop_requested"
+
 
 class GateId(str, Enum):
     """P4-01까지 구현한 품질 게이트.
@@ -1055,6 +1061,106 @@ class NotStartedReason(str, Enum):
     REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
     NO_EXECUTION_PATH = "no_execution_path"
     WORKSPACE_BUSY = "workspace_busy"
+    #: UI-02. CLI 를 부르기 전에 중단이 요청됐다. 제어부가 미배정 실행을 끝낼 때도 쓴다.
+    STOP_REQUESTED = "stop_requested"
+    #: UI-02. 원장에 착수는 있지만 **시작 기록**(job·pid)이 없다 — CLI 를 재개하기 전에
+    #: Runner 가 끝났다. 원장이 없는 배정도 같다(그 Runner 는 CLI 를 부르지 않았다).
+    NOT_LAUNCHED = "not_launched"
+    #: UI-02. 프로세스 트리를 제어할 수 없어(job 생성·넣기 실패) 실행하지 않았다. 멈출 수
+    #: 없는 CLI 를 조용히 실행하지 않는다.
+    PROCESS_CONTROL_UNAVAILABLE = "process_control_unavailable"
+
+
+#: `run.not_started_reason` 의 허용값. 스키마 CHECK 와 같은 목록이다.
+NOT_STARTED_REASONS: tuple[str, ...] = tuple(r.value for r in NotStartedReason)
+
+
+class ResidualBasis(str, Enum):
+    """잔류 활동 관측의 **근거**(UI-02). `none` 은 앞의 여섯 근거가 있을 때만이다.
+
+    `JOB_EMPTY`              job 의 활성 프로세스가 0 이다
+    `JOB_TERMINATED`         남은 프로세스를 종료했고 활성 0 을 확인했다(종료한 수와 함께)
+    `JOB_CLOSED_KILL_ON_CLOSE` job 이 이미 없고 시작 기록이 KILL_ON_JOB_CLOSE 다 — 마지막 핸들이
+                             닫힐 때(Runner 가 죽었거나 실행기가 정리했다) OS 가 트리를 끝냈다
+    `HOST_REBOOTED`          실행 착수 뒤 호스트가 다시 부팅됐다
+    `IN_PROCESS`             Runner 프로세스 안의 실행기였고 그 프로세스가 끝났다
+    `NOT_LAUNCHED`           CLI 가 재개되지 않았다(시작하지 않음)
+    `NOT_OBSERVABLE`         확인할 수단이 없다(비 Windows·시작 기록 없음·조회 실패)
+    `ROOT_PROCESS_ALIVE`     job 은 없는데 루트 프로세스가 같은 생성 시각으로 살아 있다
+    `TERMINATE_UNCONFIRMED`  종료했지만 활성 0 을 확인하지 못했다
+    `OWNER_RUNNER_ALIVE`     그 실행을 맡은 이전 Runner 프로세스가 아직 살아 있다
+    `NOT_REPORTED`           이 근거를 보내지 않는 Runner(UI-02 이전)의 결과다
+    """
+
+    JOB_EMPTY = "job_empty"
+    JOB_TERMINATED = "job_terminated"
+    JOB_CLOSED_KILL_ON_CLOSE = "job_closed_kill_on_close"
+    HOST_REBOOTED = "host_rebooted"
+    IN_PROCESS = "in_process"
+    NOT_LAUNCHED = "not_launched"
+    NOT_OBSERVABLE = "not_observable"
+    ROOT_PROCESS_ALIVE = "root_process_alive"
+    TERMINATE_UNCONFIRMED = "terminate_unconfirmed"
+    OWNER_RUNNER_ALIVE = "owner_runner_alive"
+    NOT_REPORTED = "not_reported"
+
+
+#: `none` 을 받쳐 주는 근거. 이 밖의 근거로 `none` 을 보고하면 제어부가 거부한다.
+CONFIRMING_RESIDUAL_BASES: frozenset[ResidualBasis] = frozenset(
+    {
+        ResidualBasis.JOB_EMPTY,
+        ResidualBasis.JOB_TERMINATED,
+        ResidualBasis.JOB_CLOSED_KILL_ON_CLOSE,
+        ResidualBasis.HOST_REBOOTED,
+        ResidualBasis.IN_PROCESS,
+        ResidualBasis.NOT_LAUNCHED,
+    }
+)
+
+
+class ResidualSource(str, Enum):
+    """잔류 관측이 **언제** 나왔는가(UI-02).
+
+    `RESULT`     실행 결과 보고와 함께
+    `RECONCILE`  재시작한 Runner 가 원장으로 대조하며
+    `RECHECK`    끝난 실행을 나중에 다시 확인하며
+    """
+
+    RESULT = "result"
+    RECONCILE = "reconcile"
+    RECHECK = "recheck"
+
+
+class RunnerConnection(str, Enum):
+    """PC(Runner) 연결 상태(D-75). **저장하지 않고 heartbeat 에서 도출한다.**
+
+    `CONNECTED`      기준 시간 안에 heartbeat 가 왔다
+    `DISCONNECTED`   마지막 heartbeat 가 기준 시간보다 오래됐다
+    `NEVER_SEEN`     heartbeat 기록이 없다
+    `NOT_DETERMINED` 이 대화가 어느 PC 를 쓰는지 정할 수 없다
+    """
+
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    NEVER_SEEN = "never_seen"
+    NOT_DETERMINED = "not_determined"
+
+
+class RunExecutionState(str, Enum):
+    """실행이 **지금 실제로** 어떤 상태인가(UI-02). 결과(`outcome`)와 다른 축이며 도출값이다.
+
+    `PENDING`           아직 배정되지 않았다
+    `EXECUTING`         배정됐고 그 Runner 가 연결돼 있으며 최근 실행 중으로 확인했다
+    `UNCONFIRMED`       배정됐지만 Runner 가 미연결이거나 실행 중 확인이 끊겼다
+    `ENDED`             끝났고 잔류 활동이 없음을 확인했다(또는 시작하지 않았다)
+    `ENDED_UNCONFIRMED` 끝났다고 보고됐지만 잔류 활동을 확인하지 못했다
+    """
+
+    PENDING = "pending"
+    EXECUTING = "executing"
+    UNCONFIRMED = "unconfirmed"
+    ENDED = "ended"
+    ENDED_UNCONFIRMED = "ended_unconfirmed"
 
 
 # --------------------------------------------------------------------- P3-02
@@ -1768,14 +1874,17 @@ class RequestState(str, Enum):
     `PROCESSING` 처리 중. 같은 Case 의 일반 전송을 잠근다
     `COMPLETED`  응답·처리가 끝났다
     `FAILED`     처리하지 못하고 끝났다. 부분 결과·소비는 그대로 남는다
-    `UNKNOWN`    연결된 실행의 결과를 모른다. **잠금을 풀지 않는다** — 실제 종료·잔류
-                 활동을 확인하는 경로는 UI-02 다(D-76)
+    `UNKNOWN`    연결된 실행의 실제 종료·잔류 활동을 확인하지 못했다. **잠금을 풀지
+                 않는다** — 확인되면(UI-02) 제어부가 `INTERRUPTED` 로 옮긴다(D-76)
+    `INTERRUPTED` 중단 요청으로 끝났거나 결과를 모르는 실행이 **끝난 것을 확인한 채**
+                 끝났다. 잠그지 않는다. 취소 성공·롤백이 아니다 — 부분 결과·소비는 남는다
     """
 
     PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
     UNKNOWN = "unknown"
+    INTERRUPTED = "interrupted"
 
 
 #: 일반 전송을 잠그는 요청 상태. DB 의 부분 유일 색인도 같은 집합을 쓴다.
@@ -1797,6 +1906,18 @@ class RequestOutcomeReason(str, Enum):
     SETTLED = "settled"
     RUN_OUTCOME_UNKNOWN = "run_outcome_unknown"
     ORIGINAL_LOST_BEFORE_PERSIST = "original_lost_before_persist"
+    #: UI-02. 중단 요청 뒤 연결 실행이 전부 끝난 것을 확인했다.
+    STOPPED_BY_REQUEST = "stopped_by_request"
+    #: UI-02. 결과를 모르는 실행이 있지만 그 실행이 **끝난 것은 확인했다.** 완료로도 실패로도
+    #: 적지 않는다.
+    EXECUTION_ENDED_RESULT_UNKNOWN = "execution_ended_result_unknown"
+    #: UI-02. 중단된 실행의 잔류 활동을 확인하지 못했다(결과는 알지만 트리가 끝났는지 모른다).
+    RUN_RESIDUAL_UNCONFIRMED = "run_residual_unconfirmed"
+
+
+#: `conversation_request` 의 CHECK 목록. 스키마와 같은 값이다.
+REQUEST_STATES: tuple[str, ...] = tuple(s.value for s in RequestState)
+REQUEST_OUTCOME_REASONS: tuple[str, ...] = tuple(r.value for r in RequestOutcomeReason)
 
 
 class WorkStartDecider(str, Enum):
@@ -1859,3 +1980,15 @@ class ConversationRefusal(str, Enum):
     REQUEST_ORIGINAL_NOT_STORED = "request_original_not_stored"
     #: 이미 다른 결과로 끝난 요청이다.
     REQUEST_ALREADY_SETTLED = "request_already_settled"
+    #: UI-02. 원문을 저장할 PC 가 연결돼 있지 않다(D-75). 입력은 사용자에게 남고 대기열은 없다.
+    RUNNER_DISCONNECTED = "runner_disconnected"
+    #: UI-02. 중단이 요청된 요청이다. 끝내는 것은 실제 종료를 확인한 제어부다.
+    REQUEST_STOP_REQUESTED = "request_stop_requested"
+    #: UI-02. 처리 중이 아닌 요청은 중단할 것이 없다.
+    REQUEST_NOT_STOPPABLE = "request_not_stoppable"
+    #: UI-02. 요청에 연결된 실행은 요청 단위로 중단한다(D-76).
+    RUN_LINKED_TO_REQUEST = "run_linked_to_request"
+    #: UI-02. 이미 끝난 실행이다.
+    RUN_ALREADY_FINISHED = "run_already_finished"
+    #: UI-02. 잔류 재확인은 확인되지 않은 실행이 있는 `unknown` 요청에만 한다.
+    REQUEST_NOT_UNKNOWN = "request_not_unknown"

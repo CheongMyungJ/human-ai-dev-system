@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"01a0cde7-8505-7a30-b552-447e5bd09506"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"요청하신 명령을 실행하고 완료될 때까지 기다리겠습니다.\n"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'Start-Sleep -Seconds 92'","aggregated_output":"","exit_code":null,"status":"in_progress"}}

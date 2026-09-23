@@ -31,7 +31,9 @@ class ReservationKind(str, Enum):
                          패키지의 바이트 수다. 이 지표만 절대 상한을 약속할 수 있다
     `OPEN_ENDED_PER_RUN` 끝나야 안다. 진행 중에는 지금까지의 노출만 관측된다.
                          돌고 있는 CLI 를 초 단위로 끊을 능력이 없으므로(P1-03
-                         `cancel_confirmed = unknown`) **절대 상한이 아니다**
+                         `cancel_confirmed = unknown`) **절대 상한이 아니다**. UI-02 가
+                         사람의 중단으로 트리를 끝내는 능력을 만들었지만 한도 도달에
+                         연결하지 않았다 — 여전히 절대 상한이 아니다
     `CASE_CLOCK`         Case 시작 시각에서 도출한다. 예약이라는 개념이 없다 —
                          벽시계는 배정을 줄인다고 느려지지 않는다
     `POST_HOC_REPORTED`  어댑터가 사후에 주거나 주지 않는다. 예약할 수 없다

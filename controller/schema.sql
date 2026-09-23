@@ -1510,12 +1510,14 @@ CREATE TABLE IF NOT EXISTS conversation_request (
     opened_by_message_id TEXT NOT NULL
         REFERENCES conversation_message(id) DEFERRABLE INITIALLY DEFERRED,
     state                TEXT NOT NULL
-        CHECK (state IN ('processing', 'completed', 'failed', 'unknown')),
+        CHECK (state IN ('processing', 'completed', 'failed', 'unknown', 'interrupted')),
     opened_at            TEXT NOT NULL,
     settled_at           TEXT,
     settled_by           TEXT,
     outcome_reason       TEXT CHECK (outcome_reason IS NULL OR outcome_reason IN
-                             ('settled', 'run_outcome_unknown', 'original_lost_before_persist')),
+                             ('settled', 'run_outcome_unknown', 'original_lost_before_persist',
+                              'stopped_by_request', 'execution_ended_result_unknown',
+                              'run_residual_unconfirmed')),
     note_summary         TEXT,
     CHECK (note_summary IS NULL OR length(note_summary) <= 200),
     CHECK ((state = 'processing') = (settled_at IS NULL))
@@ -1646,4 +1648,41 @@ CREATE TABLE IF NOT EXISTS run_context_receipt (
     reported_at  TEXT NOT NULL,
     PRIMARY KEY (run_id, generation, seq),
     CHECK (length(role) <= 64)
+);
+
+-- ===================================================================
+-- 스키마 v18 (UI-02) — 입력·실행 제어
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.** Runner 가
+-- 보고하는 것은 잔류 활동의 값·근거·종료한 수뿐이고 프로세스 목록·경로·명령줄은 올라오지
+-- 않는다.
+--
+-- `run` 에는 db.py 가 중단 요청·전달·실행 중 확인·재확인 요청 시각 컬럼을 붙이고,
+-- `conversation_request` 에는 중단 요청 컬럼을 붙인다. 두 표의 허용값 목록(`not_started_
+-- reason`, 요청 상태·이유)이 늘어나므로 db.py 가 **기존 DB 의 두 표를 다시 만든다** —
+-- SQLite 는 CHECK 를 바꾸는 ALTER 가 없다. 행은 그대로 옮기고 값을 지어내지 않는다.
+--
+-- **실행이 실제로 끝났는가는 결과와 다른 축이다.** 결과를 몰라도 끝난 것은 확인할 수 있고
+-- (Runner 가 죽으며 OS 가 트리를 끝냈다), 결과를 알아도 트리가 끝났는지는 모를 수 있다.
+-- `run.residual_activity` 는 결과 보고 때의 값 그대로 두고, 이 표가 그 뒤의 관측을 쌓는다.
+-- 옛 실행에는 아무 행도 만들지 않는다.
+-- ===================================================================
+
+-- 잔류 활동 관측. 근거 없는 `none` 은 들어오지 않는다(제어부가 거부한다).
+CREATE TABLE IF NOT EXISTS run_residual_observation (
+    id           TEXT PRIMARY KEY,
+    run_id       TEXT NOT NULL REFERENCES run(run_id),
+    generation   INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    source       TEXT NOT NULL CHECK (source IN ('result', 'reconcile', 'recheck')),
+    residual     TEXT NOT NULL CHECK (residual IN ('none', 'unknown')),
+    basis        TEXT NOT NULL CHECK (basis IN
+                     ('job_empty', 'job_terminated', 'job_closed_kill_on_close', 'host_rebooted',
+                      'in_process', 'not_launched', 'not_observable', 'root_process_alive',
+                      'terminate_unconfirmed', 'owner_runner_alive', 'not_reported')),
+    terminated   INTEGER,
+    runner_id    TEXT NOT NULL,
+    observed_at  TEXT NOT NULL,
+    UNIQUE (run_id, seq),
+    CHECK (terminated IS NULL OR terminated >= 0)
 );

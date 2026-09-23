@@ -62,6 +62,8 @@ from domain.models import (
     MessageKind,
     MessageRefKind,
     NotStartedReason,
+    ResidualBasis,
+    ResidualSource,
     Permission,
     PreparationStage,
     ReadRequestState,
@@ -83,9 +85,11 @@ router = APIRouter()
 
 def _repo(request: Request) -> Repository:
     # P4-04. 실행당 인라인 한도는 제어부 설정에서 온다. 시험은 설정을 바꿔 작게 둔다.
+    # UI-02. PC 미연결 판정 기준도 설정에서 온다.
     return Repository(
         request.app.state.conn,
         context_inline_limit=request.app.state.config.context_inline_limit_bytes,
+        runner_stale_seconds=request.app.state.config.runner_stale_seconds,
     )
 
 
@@ -267,6 +271,46 @@ class ResultIn(BaseModel):
     observed_tool_version: str | None = None
     #: P4-04. Runner 가 CLI 를 부르기 **전에** 멈췄다. 실패 + 잔류 없음일 때만 받는다.
     not_started_reason: NotStartedReason | None = None
+    #: UI-02. 잔류 활동의 **근거**. `none` 은 확인 근거가 있을 때만 받는다.
+    residual_basis: ResidualBasis | None = None
+    #: UI-02. 확인하면서 종료한 프로세스 수(`job_terminated`).
+    residual_terminated: int | None = Field(default=None, ge=0)
+    #: UI-02. 결과 보고(`result`)인가, 재시작한 Runner 의 원장 대조(`reconcile`)인가.
+    residual_source: ResidualSource = ResidualSource.RESULT
+
+
+class ExecutingIn(BaseModel):
+    """지금 실행 중인 실행 하나. 식별자와 세대뿐이다."""
+
+    run_id: str = Field(max_length=120)
+    generation: int = Field(ge=1)
+
+
+class HeartbeatIn(BaseModel):
+    """생존 보고(UI-02). 실행 중 목록은 **선택**이다 — 옛 Runner 는 본문 없이 보낸다."""
+
+    executing: list[ExecutingIn] = Field(default_factory=list, max_length=100)
+
+
+class StopAckIn(BaseModel):
+    runner_id: str
+    generation: int
+
+
+class ResidualIn(BaseModel):
+    """끝난 실행의 잔류 재확인 결과. 프로세스 목록·경로·명령줄은 보내지 않는다."""
+
+    runner_id: str
+    residual: str = Field(pattern="^(none|unknown)$")
+    basis: ResidualBasis
+    terminated: int | None = Field(default=None, ge=0)
+
+
+class StopIn(BaseModel):
+    """중단 요청. **취소 성공·롤백이 아니다**(D-76)."""
+
+    actor: str = "owner"
+    reason: str = Field(default="", max_length=400)
 
 
 class ContextReceiptItemIn(BaseModel):
@@ -593,11 +637,26 @@ def get_run(request: Request, run_id: str) -> dict[str, Any]:
     except NotFoundError as exc:
         raise _handle(exc)
     run["events"] = repo.list_events(run_id)
+    # 실제로 끝났는가(UI-02). 결과 보고 값과 그 뒤의 확인을 함께 보인다.
+    run["residual_observations"] = repo.residual_observations(run_id)
     # 무엇을 실제로 실행했는가(P3-03). 원문은 Runner 의 산출물에 있다.
     run["commands"] = repo.list_run_commands(run_id)
     # 무엇을 실제로 읽었는가·그 뒤 무엇이 새로 생겼는가(P4-04).
     run["context"] = repo.run_context_view(run_id)
     return run
+
+
+@router.post("/api/runs/{run_id}/stop")
+def stop_run(request: Request, run_id: str, payload: StopIn) -> dict[str, Any]:
+    """요청에 연결되지 **않은** 실행을 중단한다(UI-02). 요청에 연결된 실행은 요청으로 멈춘다.
+
+    한 번도 배정되지 않았으면 제어부가 시작하지 않은 실행으로 끝내고(소비 0), 배정됐으면
+    Runner 에 전달된다. 실제로 끝났는지는 결과·잔류 근거가 말한다.
+    """
+    try:
+        return _repo(request).stop_run(run_id, actor=payload.actor)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
 
 
 @router.post("/api/runs/{run_id}/reassign")
@@ -629,12 +688,57 @@ def runner_register(request: Request, payload: RunnerRegisterIn) -> dict[str, An
 
 
 @router.post("/api/runner/{runner_id}/heartbeat")
-def runner_heartbeat(request: Request, runner_id: str) -> dict[str, str]:
+def runner_heartbeat(
+    request: Request, runner_id: str, payload: HeartbeatIn | None = None
+) -> dict[str, Any]:
+    """생존 보고와 **지금 실행 중인 실행**. 응답은 이 Runner 가 할 일(중단·잔류 재확인)이다.
+
+    UI-02 부터 heartbeat 는 실행과 분리된 제어 루프에서 온다 — 긴 CLI 실행 중에도 온다.
+    그래서 PC 연결 판정(D-75)의 근거가 된다.
+    """
     try:
-        _repo(request).heartbeat(runner_id)
+        controls = _repo(request).heartbeat(
+            runner_id, [e.model_dump() for e in (payload.executing if payload else [])]
+        )
     except NotFoundError as exc:
         raise _handle(exc)
-    return {"status": "ok"}
+    return {"status": "ok", "controls": controls}
+
+
+@router.post("/api/runner/{runner_id}/reconcile")
+def runner_reconcile(request: Request, runner_id: str) -> list[dict[str, Any]]:
+    """이 Runner 에 배정돼 끝나지 않은 실행(UI-02). 재시작한 Runner 가 원장과 대조한다.
+
+    **세대를 올리지 않는다** — 재배정과 달리 새 예약을 잡지 않는다.
+    """
+    try:
+        return _repo(request).runner_unfinished_runs(runner_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/runs/{run_id}/stop-ack")
+def runner_stop_ack(request: Request, run_id: str, payload: StopAckIn) -> dict[str, Any]:
+    """Runner 가 중단을 **받았다.** 끝났다는 뜻이 아니다."""
+    try:
+        return _repo(request).acknowledge_stop(run_id, payload.runner_id, payload.generation)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/runs/{run_id}/residual")
+def runner_residual(request: Request, run_id: str, payload: ResidualIn) -> dict[str, Any]:
+    """끝난 실행의 잔류를 **다시 확인한** 결과. 확인 근거 없는 `none` 은 409 다."""
+    try:
+        return _repo(request).report_residual_observation(
+            run_id,
+            payload.runner_id,
+            payload.residual,
+            payload.basis.value,
+            payload.terminated,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
 
 
 @router.get("/api/runner/{runner_id}/intakes")
@@ -734,6 +838,10 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             residual_activity=payload.residual_activity,
             observed_tool_version=payload.observed_tool_version,
             not_started_reason=payload.not_started_reason,
+            residual_basis=payload.residual_basis.value if payload.residual_basis else None,
+            residual_terminated=payload.residual_terminated,
+            residual_source=payload.residual_source,
+            reporter=payload.runner_id,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -962,6 +1070,8 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
         # 원문만 접수된 고아 intake 가 남는다.
         _guard_user_input(repo, case_id)
         repo.guard_work_stage(case_id)
+        # UI-02. 원문을 저장할 PC 가 미연결이면 받지 않는다(D-75).
+        repo.guard_runner_connected(payload.target_runner_id)
         # **P3-R1: 문서 형식은 Case 의 Profile 이 정한다.** 사람이 직접 입력한
         # 초안도 같은 항목 집합을 쓴다 — 경로에 따라 항목이 달라지면 같은 Case 의
         # 의도 버전들이 서로 다른 형식이 된다.
@@ -1136,6 +1246,8 @@ def submit_feedback(request: Request, case_id: str, payload: FeedbackIn) -> dict
         # UI-01. 피드백은 **일반 입력**이다. 현재 요청이 처리 중이면 받지 않는다 —
         # 받으면 피드백 경로가 전송 잠금의 우회로가 된다(FR-11 수용 기준).
         _guard_user_input(repo, case_id)
+        # UI-02. 원문을 저장할 PC 가 미연결이면 받지 않는다(D-75).
+        repo.guard_runner_connected(payload.target_runner_id)
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -1240,6 +1352,8 @@ def answer_question(
         # 답하면 거부되는데, 그 전에 원문을 접수하면 고아 intake 가 남는다. 질문 답변은
         # 요청 처리 중에도 받는다(카드 답변은 잠금 대상이 아니다).
         repo.check_question_answerable(case_id, question_id)
+        # UI-02. 카드 답변도 PC 가 미연결이면 받지 않는다(D-75). 원문을 열기 전이다.
+        repo.guard_runner_connected(payload.target_runner_id)
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -3227,9 +3341,12 @@ def list_conversations(
 
 
 @router.get("/api/cases/{case_id}/conversation")
-def get_conversation(request: Request, case_id: str) -> dict[str, Any]:
+def get_conversation(
+    request: Request, case_id: str, runner_id: str | None = None
+) -> dict[str, Any]:
+    """대화 조회. `runner_id` 를 주면 그 PC 를 기준으로 전송 가능 여부를 판단한다(UI-02)."""
     try:
-        return _repo(request).conversation_view(case_id)
+        return _repo(request).conversation_view(case_id, runner_id)
     except NotFoundError as exc:
         raise _handle(exc)
 
@@ -3316,6 +3433,36 @@ def settle_request(
         return _repo(request).settle_request(
             case_id, request_id, payload.outcome, payload.actor, payload.note
         )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/requests/{request_id}/stop")
+def stop_request(
+    request: Request, case_id: str, request_id: str, payload: StopIn
+) -> dict[str, Any]:
+    """현재 요청을 **중단한다**(D-76). 취소 성공·롤백이 아니다.
+
+    후속 실행 생성을 막고, 한 번도 배정되지 않은 실행은 시작하지 않은 실행으로 끝내며,
+    배정된 실행은 Runner 에 전달한다. 관련 실행이 **실제로 끝난 것을 확인하면** 제어부가
+    요청을 `interrupted` 로 끝내 전송을 연다. 확인하지 못하면 `unknown` 으로 잠긴다.
+    """
+    try:
+        return _repo(request).stop_request(
+            case_id, request_id, actor=payload.actor, reason=payload.reason
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/requests/{request_id}/reconcile")
+def reconcile_request(request: Request, case_id: str, request_id: str) -> dict[str, Any]:
+    """잠긴(`unknown`) 요청의 확인되지 않은 실행을 **다시 확인해 달라고** 적는다(UI-02).
+
+    사람이 확인을 대신 선언하는 경로가 아니다. Runner 가 확인 근거를 보내야 풀린다.
+    """
+    try:
+        return _repo(request).request_residual_recheck(case_id, request_id)
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
 

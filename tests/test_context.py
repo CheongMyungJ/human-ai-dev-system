@@ -108,8 +108,14 @@ def _simulate_crash_after_start(harness, run_id: str, raw: Path | None) -> None:
 
     원장에 착수를 적고(실행 전 원장 기록은 실제 경로와 같다) CLI 원시 출력을 제자리에
     둔다. 원시 출력은 **실제 CLI 가 쓴 파일**이다(P1 증거).
+
+    UI-02 원장 v2 에서는 "시작한 뒤"가 **시작 기록**(`launch`)까지를 뜻한다 — 착수만 있고
+    시작 기록이 없으면 CLI 가 재개되지 않은 실행이다. 이 시험들이 보는 것은 P4-04 의 사용량
+    복구이므로 **트리 제어 없이 시작된** 기록을 둔다(job 이름·pid 없음). 그러면 잔류는
+    지금처럼 확인할 수 없다(`unknown`). job 으로 확인하는 경로는 `test_run_control.py` 가 본다.
     """
     harness.agent.ledger.claim(run_id, 1)
+    harness.agent.ledger.record_launch(run_id, {"pid": None, "kill_on_close": False})
     if raw is not None:
         target = harness.runner_config.raw_dir / f"{run_id}.stdout.jsonl"
         shutil.copyfile(raw, target)

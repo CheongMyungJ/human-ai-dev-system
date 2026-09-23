@@ -28,15 +28,30 @@
 목적이 요구하는 산출물을 만들지 못했으면 **CLI가 정상 종료했어도 완료가 아니다.**
 `_produce_for_purpose()` 가 그 판정을 한다(FR-28: 종료 코드만으로 완료를 선언하지
 않는다).
+
+**UI-02: 두 흐름.** `run_forever()` 는 **제어 루프**(heartbeat·실행 중 보고·원문 저장·열람·
+중단/재확인 수신)와 **실행 작업자**(작업공간 준비·배정·실행)를 나눠 돈다. 긴 CLI 실행 중에도
+원문(카드 답변 포함)이 저장되고 heartbeat 가 이어진다. 두 흐름은 **실행 중 표**를 잠금 하나로
+공유한다. `poll_once()` 는 두 흐름을 한 스레드에서 한 번씩 도는 동기 경로이며 시험·하네스가
+쓴다.
+
+**UI-02: 중단과 재시작 대조.** CLI 는 job 안에서 돌고(`runner.process_tree`), 중단 신호가
+오면 트리를 끝내고 활성 0 을 확인한다. 기동하면 작업자보다 먼저 "나에게 배정돼 끝나지 않은
+실행"을 원장 v2 로 대조한다 — CLI 를 다시 부르지 않고 세대를 올리지 않는다.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 import subprocess
+import threading
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
+
+import httpx
 
 from pathlib import Path
 
@@ -53,20 +68,44 @@ from domain.models import (
     NotStartedReason,
     Permission,
     PreparationStage,
+    ResidualBasis,
+    ResidualSource,
     RunOutcome,
     RunPurpose,
     WorkLevel,
 )
-from runner import cli_adapter, cli_events, prompts, workspace
+from runner import cli_adapter, cli_events, process_tree, prompts, workspace
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
-from runner.ledger import STATE_FINISHED, ExecutionLedger
+from runner.ledger import LEDGER_VERSION, STATE_FINISHED, ExecutionLedger
 from runner.store import ArtifactStore, content_hash
 
 
 #: 작업공간을 바꿀 수 있는 권한. `controller/admission.py` 의 같은 이름과 맞춘다.
 WRITE_PERMISSIONS = frozenset({Permission.WORKSPACE_WRITE, Permission.EXPLICIT_ESCALATED})
+
+
+@dataclass
+class InFlight:
+    """이 Runner 프로세스가 **지금 맡고 있는** 실행 하나(UI-02).
+
+    `queued`     배정을 받았고 아직 CLI 를 부르지 않았다
+    `executing`  CLI(또는 골격 실행기)를 부른 뒤다
+
+    `stop` 은 제어 루프가 중단 신호를 받으면 세운다. 실행기는 그것을 보고 트리를 끝낸다.
+    """
+
+    run_id: str
+    generation: int
+    state: str = "queued"
+    stop: threading.Event = field(default_factory=threading.Event)
+    acked: bool = False
+
+
+class StopBeforeLaunch(RuntimeError):
+    """CLI 를 재개하기 **직전에** 중단 신호를 봤다(UI-02). 정지된 프로세스는 job 이 닫히며
+    끝나고 한 줄도 실행하지 않았다 — 시작하지 않은 실행이다."""
 
 
 class WorkspaceBusy(RuntimeError):
@@ -129,10 +168,30 @@ class RunnerAgent:
         executor: LocalEchoExecutor | None = None,
         cli_executor: Any | None = None,
         capabilities: list[dict[str, Any]] | None = None,
+        control_client: ControllerClient | None = None,
     ) -> None:
         config.ensure_dirs()
         self.config = config
         self.client = client
+        #: UI-02. 제어 루프가 쓰는 클라이언트. 두 흐름이 한 HTTP 클라이언트를 나눠 쓰지 않게
+        #: 따로 둘 수 있다. 주지 않으면 같은 것을 쓴다(`poll_once` 는 한 스레드다).
+        self.control_client = control_client or client
+        #: UI-02. 이 프로세스가 지금 맡고 있는 실행. 두 흐름이 이 잠금으로 공유한다.
+        self._inflight: dict[str, InFlight] = {}
+        self._inflight_lock = threading.RLock()
+        #: UI-02. 작업자 흐름에서만 켠다 — 전송 오류면 보고를 다시 보낸다.
+        self._retry_reports = False
+        #: UI-02. 지금 스레드가 쓸 HTTP 클라이언트. 제어 루프는 `control_client` 로 바꿔 둔다 —
+        #: 재연결 대조처럼 제어 루프가 보내는 결과가 작업자의 클라이언트를 나눠 쓰지 않게.
+        self._local = threading.local()
+        self._shutdown = threading.Event()
+        self._controller_reachable: bool | None = None
+        #: 이 Runner 프로세스의 정체. 원장에 적어 재시작 대조가 "그 프로세스가 아직 살아
+        #: 있는가"를 본다.
+        self._process = process_tree.process_identity(os.getpid()) or {
+            "pid": os.getpid(),
+            "created": None,
+        }
         self.store = ArtifactStore(config.artifacts_dir)
         self.ledger = ExecutionLedger(config.ledger_dir)
         self.executor = executor or LocalEchoExecutor(config.effects_dir)
@@ -160,20 +219,26 @@ class RunnerAgent:
     def persist_pending_intakes(self) -> list[str]:
         """제어부가 중계 중인 원문을 받아 로컬에 저장하고 보고한다."""
         stored: list[str] = []
-        for intake in self.client.pending_intakes(self.config.runner_id):
+        client = self.control_client
+        for intake in client.pending_intakes(self.config.runner_id):
             body = base64.b64decode(intake["content_b64"])
             digest = content_hash(body)
             if digest != intake["expected_hash"]:
                 # 받은 본문이 제어부가 계산한 해시와 다르면 저장하지 않는다.
                 continue
             self.store.put(intake["artifact_id"], intake["revision"], body)
-            self.client.report_stored(intake["intake_id"], self.config.runner_id, digest)
+            client.report_stored(intake["intake_id"], self.config.runner_id, digest)
             stored.append(intake["intake_id"])
             if intake["kind"] == ArtifactKind.INTENT.value and intake.get("intent"):
-                self.report_intent_structure(body, intake["intent"])
+                self.report_intent_structure(body, intake["intent"], client=client)
         return stored
 
-    def report_intent_structure(self, body: bytes, context: dict[str, Any]) -> dict[str, Any]:
+    def report_intent_structure(
+        self,
+        body: bytes,
+        context: dict[str, Any],
+        client: ControllerClient | None = None,
+    ) -> dict[str, Any]:
         """방금 저장한 의도 원문에서 구조를 뽑아 제어부에 보고한다.
 
         **여기가 본문을 읽는 유일한 쪽이다.** 제어부는 어느 원문과 비교할지만 알려
@@ -205,7 +270,7 @@ class RunnerAgent:
             # 요청이 명시한 목적 의무(P4-03, v5). 열거값 목록이며 `None` 은 선언 없음이다.
             "objectives": structure.get("objectives"),
         }
-        return self.client.send_intent_structure(payload)
+        return (client or self.client).send_intent_structure(payload)
 
     # ------------------------------------------------------------- 원문 열람
 
@@ -216,13 +281,13 @@ class RunnerAgent:
         임의 파일 조회가 되지 않는다(data-boundary-review 3절).
         """
         served: list[str] = []
-        for request in self.client.pending_read_requests(self.config.runner_id):
+        for request in self.control_client.pending_read_requests(self.config.runner_id):
             try:
                 body = self.store.get(request["artifact_id"], request["revision"])
             except FileNotFoundError:
                 # 이 Runner에 원문이 없다. 빈 본문을 올리지 않고 요청을 그대로 둔다.
                 continue
-            self.client.send_read_content(
+            self.control_client.send_read_content(
                 request["id"],
                 self.config.runner_id,
                 base64.b64encode(body).decode("ascii"),
@@ -234,10 +299,41 @@ class RunnerAgent:
     # ------------------------------------------------------------------ 실행
 
     def handle_assignment(self, assignment: dict[str, Any]) -> dict[str, Any]:
+        """배정 하나를 처리한다. **실행 중 표에 올리고, 끝나면 내린다**(UI-02)."""
+        run_id = assignment["run_id"]
+        self._track(run_id, assignment["assignment_generation"])
+        try:
+            return self._handle_assignment(assignment)
+        finally:
+            with self._inflight_lock:
+                self._inflight.pop(run_id, None)
+
+    def _track(self, run_id: str, generation: int) -> InFlight:
+        with self._inflight_lock:
+            entry = self._inflight.get(run_id)
+            if entry is None or entry.generation != generation:
+                entry = InFlight(run_id, generation)
+                self._inflight[run_id] = entry
+            return entry
+
+    def _stop_wanted(self, run_id: str, assignment: dict[str, Any]) -> bool:
+        """이 실행에 중단이 요청됐는가 — 배정 내용의 표시 또는 제어 루프가 받은 신호."""
+        with self._inflight_lock:
+            entry = self._inflight.get(run_id)
+        return bool(assignment.get("stop_requested")) or bool(entry and entry.stop.is_set())
+
+    def _handle_assignment(self, assignment: dict[str, Any]) -> dict[str, Any]:
         run_id = assignment["run_id"]
         generation = assignment["assignment_generation"]
         case_id = assignment["case_id"]
         purpose = assignment.get("purpose") or RunPurpose.LIMITED_ANALYSIS.value
+
+        # **UI-02: 중단이 요청된 배정은 시작하지 않는다.** 원장에 없는 실행만이다 — 원장에
+        # 있으면 이미 판단된 실행이고 아래에서 원장대로 보고한다.
+        if self.ledger.read(run_id) is None and self._stop_wanted(run_id, assignment):
+            return self._refuse_not_started(
+                assignment, NotStartedReason.STOP_REQUESTED, "refused_stop_requested"
+            )
 
         # **이 Runner 가 실행할 수 없는 목적인가.** 진입 조건과 실행 경로는 서로 다른
         # 것이어서 한쪽만 먼저 열릴 수 있다 — P3-01에서 `feature_implementation` 의
@@ -255,6 +351,7 @@ class RunnerAgent:
                     "generation": generation,
                     "outcome": RunOutcome.FAILED.value,
                     "residual_activity": "none",
+                    "residual_basis": ResidualBasis.NOT_LAUNCHED.value,
                     "observed_tool_version": None,
                     # P4-04. CLI 를 부르지 않았다 — 소비가 아니다.
                     "not_started_reason": NotStartedReason.NO_EXECUTION_PATH.value,
@@ -282,6 +379,7 @@ class RunnerAgent:
                         "generation": generation,
                         "outcome": RunOutcome.FAILED.value,
                         "residual_activity": "none",
+                        "residual_basis": ResidualBasis.NOT_LAUNCHED.value,
                         "observed_tool_version": None,
                         # P4-04. CLI 를 부르지 않았다 — 소비가 아니다.
                         "not_started_reason": NotStartedReason.WORKSPACE_BUSY.value,
@@ -307,7 +405,8 @@ class RunnerAgent:
         if self.ledger.read(run_id) is None:
             instruction, instruction_status = self._load_instruction(assignment)
             context = self.load_context(assignment)
-            self.client.send_context_receipt(
+            answer = self._send(
+                self.client.send_context_receipt,
                 run_id,
                 self.config.runner_id,
                 generation,
@@ -320,6 +419,14 @@ class RunnerAgent:
                     ),
                 ],
             )
+            # UI-02. 영수증 응답이 **CLI 호출 직전의 마지막 확인**이다. 배정 뒤에 중단이
+            # 요청됐으면 여기서 멈춘다 — CLI 를 부르지 않는다.
+            if (isinstance(answer, dict) and answer.get("stop_requested")) or self._stop_wanted(
+                run_id, assignment
+            ):
+                return self._refuse_not_started(
+                    assignment, NotStartedReason.STOP_REQUESTED, "refused_stop_requested"
+                )
             blocking = ctxmod.core_unreadable(
                 [{"seq": 0, "status": instruction_status}]
                 + [
@@ -332,63 +439,32 @@ class RunnerAgent:
                 refusal = {
                     "outcome": RunOutcome.FAILED.value,
                     "residual_activity": "none",
+                    "residual_basis": ResidualBasis.NOT_LAUNCHED.value,
                     "observed_tool_version": None,
                     "not_started_reason": NotStartedReason.REQUIRED_CONTEXT_UNAVAILABLE.value,
                 }
                 # 원장에 확정한다. 재배정이 와도 다시 판단하지 않고 같은 결과를 보낸다.
-                self.ledger.claim(run_id, generation)
+                self.ledger.claim(run_id, generation, self._process)
                 self.ledger.finish(run_id, refusal)
                 send_payload = dict(refusal)
                 send_payload["runner_id"] = self.config.runner_id
                 send_payload["generation"] = generation
-                self.client.send_result(run_id, send_payload)
+                self._send(self.client.send_result, run_id, send_payload)
                 return {
                     "run_id": run_id,
                     "action": "refused_context_unavailable",
                     "unreadable": blocking,
                 }
 
-        should_execute, existing = self.ledger.claim(run_id, generation)
+        should_execute, existing = self.ledger.claim(run_id, generation, self._process)
 
         if not should_execute:
             # 이미 이 run_id 를 맡은 적이 있다. 다시 실행하지 않는다.
             if existing and existing.get("state") == STATE_FINISHED:
-                payload = dict(existing["result"])
-                payload["generation"] = generation
-                payload["runner_id"] = self.config.runner_id
-                self.client.send_result(run_id, payload)
-                return {"run_id": run_id, "action": "replayed_stored_result"}
-            # 착수는 했는데 결과가 없다. 결과를 모르는 상태이며 성공으로 바꾸지 않는다.
-            #
-            # P4-04. **CLI 가 남긴 원시 출력에서 되찾을 수 있는 것은 되찾는다** — 사용량·
-            # 세션 식별자·이벤트. 결과는 여전히 `unknown` 이다: 산출물 생성·작업공간
-            # 관측·결과 보고가 끊겼고, 원시 출력이 끝까지 쓰였는지도 모른다.
-            recovered = self._recover_from_raw_log(assignment)
-            payload: dict[str, Any] = {
-                "outcome": RunOutcome.UNKNOWN.value,
-                "residual_activity": "unknown",
-                "observed_tool_version": (
-                    f"{TOOL_ID}/{TOOL_VERSION}" if assignment["tool_id"] == TOOL_ID else None
-                ),
-                "usage": recovered["usage"],
-                "session_ref": recovered["session_ref"],
-            }
-            if recovered["events"]:
-                self.client.send_events(
-                    run_id, self.config.runner_id, generation, recovered["events"]
-                )
-            # 되찾은 결과를 원장에 확정한다. 다음 재배정에도 같은 값을 보낸다 —
-            # 그 사이 원시 출력이 지워져도 한 번 보고한 사용량이 사라지지 않는다.
-            self.ledger.finish(run_id, payload)
-            send_payload = dict(payload)
-            send_payload["runner_id"] = self.config.runner_id
-            send_payload["generation"] = generation
-            self.client.send_result(run_id, send_payload)
-            return {
-                "run_id": run_id,
-                "action": "reported_unknown_without_reexecution",
-                "recovered": recovered["summary"],
-            }
+                return self._replay_finished(assignment, existing)
+            # 착수는 했는데 결과가 없다. 재시작 대조와 같은 판단이다(UI-02) — 시작 기록이
+            # 없으면 시작하지 않은 실행, 있으면 결과 불명 + 원시 출력 복구 + 잔류 확인.
+            return self._report_interrupted(assignment, existing or {}, ResidualSource.RESULT)
 
         # 여기까지 오면 위에서 지시를 읽고 해시를 확인했다(원장에 없던 실행만 실행한다).
         if instruction is None:
@@ -396,16 +472,46 @@ class RunnerAgent:
 
         if assignment["tool_id"] == TOOL_ID:
             # P2-01 골격 실행기. 코딩 CLI가 아니며 목적별 산출물을 만들지 않는다.
+            # UI-02. Runner 프로세스 안에서 돈다 — 시작 기록은 `in_process` 다.
+            try:
+                self._on_launch(run_id, {"in_process": True})
+            except StopBeforeLaunch:
+                return self._refuse_not_started(
+                    assignment,
+                    NotStartedReason.STOP_REQUESTED,
+                    "refused_stop_requested",
+                    claimed=True,
+                )
             output = self.executor.execute(run_id, case_id, instruction)
             produced: dict[str, Any] = {"purpose": purpose, "produced": "none"}
         else:
-            output, produced = self._execute_with_cli(
-                assignment, instruction, purpose, context=context
-            )
+            try:
+                output, produced = self._execute_with_cli(
+                    assignment, instruction, purpose, context=context
+                )
+            except StopBeforeLaunch:
+                # UI-02. 원장 착수 뒤, CLI 재개 전에 중단이 왔다. CLI 는 돌지 않았다.
+                return self._refuse_not_started(
+                    assignment,
+                    NotStartedReason.STOP_REQUESTED,
+                    "refused_stop_requested",
+                    claimed=True,
+                )
+            except process_tree.TreeControlUnavailable as exc:
+                # UI-02. **멈출 수 없는 CLI 를 실행하지 않았다.** 시작 기록 전이므로 CLI 는
+                # 돌지 않았다 — 시작하지 않은 실행이다.
+                print(f"[runner] {run_id}: process tree control unavailable: {exc}", flush=True)
+                return self._refuse_not_started(
+                    assignment,
+                    NotStartedReason.PROCESS_CONTROL_UNAVAILABLE,
+                    "refused_process_control_unavailable",
+                    claimed=True,
+                )
 
         output_artifact_id = ids.new_artifact_id()
         stored = self.store.put(output_artifact_id, 1, output.output_body)
-        self.client.register_artifact(
+        self._send(
+            self.client.register_artifact,
             {
                 "runner_id": self.config.runner_id,
                 "case_id": case_id,
@@ -415,17 +521,23 @@ class RunnerAgent:
                 "content_hash": stored.content_hash,
                 "byte_size": stored.byte_size,
                 "summary": f"run output for {run_id}",
-            }
+            },
         )
 
-        self.client.send_events(run_id, self.config.runner_id, generation, output.events)
+        self._send(
+            self.client.send_events, run_id, self.config.runner_id, generation, output.events
+        )
 
         # **명령 기록은 결과보다 먼저 올린다.** 검증 실행의 완료 판정이 이 기록의
         # 존재를 보기 때문이고, 결과가 먼저 들어가면 "명령 없는 완료"가 잠깐이라도
         # 보이게 된다(P3-03).
         if produced.get("commands"):
-            self.client.send_commands(
-                run_id, self.config.runner_id, generation, produced["commands"]
+            self._send(
+                self.client.send_commands,
+                run_id,
+                self.config.runner_id,
+                generation,
+                produced["commands"],
             )
 
         result_payload = {
@@ -443,6 +555,10 @@ class RunnerAgent:
             "observed_tool_version": getattr(output, "observed_tool_version", None)
             or f"{TOOL_ID}/{TOOL_VERSION}",
         }
+        # UI-02. 잔류 값의 근거와 종료한 수. 근거를 모르는 실행기는 보내지 않는다.
+        if getattr(output, "residual_basis", None):
+            result_payload["residual_basis"] = output.residual_basis
+            result_payload["residual_terminated"] = getattr(output, "residual_terminated", None)
         # 결과를 **보고하기 전에** 원장에 확정한다. 보고가 유실돼도
         # 같은 run_id 가 다시 오면 재실행하지 않고 이 결과를 다시 보낸다.
         self.ledger.finish(run_id, result_payload)
@@ -450,19 +566,20 @@ class RunnerAgent:
         send_payload = dict(result_payload)
         send_payload["runner_id"] = self.config.runner_id
         send_payload["generation"] = generation
-        self.client.send_result(run_id, send_payload)
+        self._send(self.client.send_result, run_id, send_payload)
 
         # 게이트 검토 결과는 결과 보고 **뒤에** 올린다. 제어부가 "작성 세션과 검토
         # 세션이 달랐는가"를 판단하려면 이 실행의 session_ref 가 먼저 기록돼 있어야
         # 한다(FR-29 별도 세션 요구).
         if produced.get("gate_findings") is not None:
-            self.client.send_gate_review(
+            self._send(
+                self.client.send_gate_review,
                 {
                     "runner_id": self.config.runner_id,
                     "run_id": run_id,
                     "intent_version_id": produced["intent_version_id"],
                     "findings": produced["gate_findings"],
-                }
+                },
             )
             produced["gate_review_sent"] = True
 
@@ -526,10 +643,19 @@ class RunnerAgent:
             if repo_dir is not None:
                 # 원래 저장소도 본다. 경계 밖 변경은 **막지 못하고 감지만 한다**(D-44).
                 repo_before = workspace.observe(repo_dir)
+            # UI-02. 실행 전 관측을 원장에 남긴다. 결과 보고 전에 Runner 가 죽으면 재시작
+            # 대조가 이것과 그때의 트리를 대조해 **남은 변경**을 드러낸다.
+            self.ledger.record_workspace_before(
+                assignment["run_id"],
+                {"head": before.head, "entries": list(before.entries), "digest": before.digest},
+            )
 
+        run_id = assignment["run_id"]
+        with self._inflight_lock:
+            entry = self._inflight.get(run_id)
         try:
             output = self.cli_executor.execute(
-                run_id=assignment["run_id"],
+                run_id=run_id,
                 case_id=assignment["case_id"],
                 prompt=prompt,
                 tool_id=assignment["tool_id"],
@@ -537,6 +663,12 @@ class RunnerAgent:
                 permission=permission,
                 workspace=work_dir,
                 raw_dir=self.config.raw_dir,
+                # UI-02. 재개 **전에** 시작 기록을 원장에 남긴다. 실행 중 표시도 그때 켠다.
+                on_launch=lambda launch: self._on_launch(run_id, launch),
+                stop_event=entry.stop if entry is not None else None,
+                job_name=process_tree.job_name_for(
+                    self.config.runner_id, run_id, assignment["assignment_generation"]
+                ),
             )
         finally:
             if lock is not None:
@@ -1083,17 +1215,379 @@ class RunnerAgent:
             )
         return results
 
-    # -------------------------------------------------------------- 루프 한 회
+    # ------------------------------------------------------- UI-02 보고·판단 도우미
 
-    def poll_once(self) -> dict[str, Any]:
-        self.client.heartbeat(self.config.runner_id)
+    #: 전송 오류가 나면 다시 보내는 간격의 상한(초).
+    RETRY_MAX_DELAY = 10.0
+
+    def _send(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """제어부에 보고한다. 작업자 흐름에서는 **전송 오류면 다시 보낸다**(UI-02).
+
+        다시 보내는 것은 연결 실패와 5xx 뿐이다. 409(옛 세대·다른 결과)는 제어부가 이
+        보고를 받지 않겠다는 답이므로 그대로 올린다. `poll_once` 경로는 재시도하지 않는다 —
+        보고 유실을 주입하는 시험이 원장 재전송 경로를 보기 때문이다.
+        """
+        if not self._retry_reports:
+            return fn(*args, **kwargs)
+        delay = 0.5
+        while True:
+            try:
+                return fn(*args, **kwargs)
+            except httpx.HTTPStatusError as exc:
+                if exc.response is None or exc.response.status_code < 500:
+                    raise
+                error: Exception = exc
+            except httpx.TransportError as exc:
+                error = exc
+            if self._shutdown.is_set():
+                raise error
+            print(f"[runner] report failed, retrying in {delay:.1f}s: {error!r}", flush=True)
+            self._shutdown.wait(delay)
+            delay = min(delay * 2, self.RETRY_MAX_DELAY)
+
+    def _http(self) -> ControllerClient:
+        """이 스레드의 클라이언트. 제어 루프는 `control_client`, 그 밖은 `client` 다."""
+        return getattr(self._local, "client", None) or self.client
+
+    def _mark_executing(self, run_id: str) -> None:
+        with self._inflight_lock:
+            entry = self._inflight.get(run_id)
+            if entry is not None:
+                entry.state = "executing"
+
+    def _on_launch(self, run_id: str, launch: dict[str, Any]) -> None:
+        """CLI 를 재개하기 **전에** 부른다. 원장 기록이 실패하면 CLI 는 재개되지 않는다.
+
+        그 사이 중단 신호가 왔으면 **재개하지 않는다**(`StopBeforeLaunch`) — 원장 착수와 CLI
+        재개 사이에 온 중단이 CLI 를 한 번 돌게 만들지 않는다.
+        """
+        with self._inflight_lock:
+            entry = self._inflight.get(run_id)
+        if entry is not None and entry.stop.is_set():
+            raise StopBeforeLaunch(run_id)
+        self.ledger.record_launch(run_id, launch)
+        self._mark_executing(run_id)
+
+    def _result_payload(self, generation: int, payload: dict[str, Any]) -> dict[str, Any]:
+        send = dict(payload)
+        send["runner_id"] = self.config.runner_id
+        send["generation"] = generation
+        return send
+
+    def _refuse_not_started(
+        self,
+        assignment: dict[str, Any],
+        reason: NotStartedReason,
+        action: str,
+        *,
+        claimed: bool = False,
+    ) -> dict[str, Any]:
+        """**CLI 를 부르지 않은** 실행을 보고한다. 소비 0 이다(P4-04).
+
+        원장에 확정해 재배정이 와도 같은 답을 보낸다. 중단 때문이면 `cancelled`, 그 밖은
+        `failed` 다. 잔류는 `none`(근거 `not_launched`) — CLI 가 재개되지 않았다.
+        """
+        run_id = assignment["run_id"]
+        generation = assignment["assignment_generation"]
+        refusal = {
+            "outcome": (
+                RunOutcome.CANCELLED.value
+                if reason is NotStartedReason.STOP_REQUESTED
+                else RunOutcome.FAILED.value
+            ),
+            "residual_activity": "none",
+            "residual_basis": ResidualBasis.NOT_LAUNCHED.value,
+            "observed_tool_version": None,
+            "not_started_reason": reason.value,
+        }
+        if not claimed:
+            self.ledger.claim(run_id, generation, self._process)
+        self.ledger.finish(run_id, refusal)
+        self._send(self._http().send_result, run_id, self._result_payload(generation, refusal))
+        return {"run_id": run_id, "action": action}
+
+    def _replay_finished(self, assignment: dict[str, Any], record: dict[str, Any]) -> dict[str, Any]:
+        """원장에 결과가 있다. **다시 실행하지 않고** 그 결과를 이 세대로 보낸다."""
+        run_id = assignment["run_id"]
+        self._send(
+            self._http().send_result,
+            run_id,
+            self._result_payload(assignment["assignment_generation"], record["result"]),
+        )
+        return {"run_id": run_id, "action": "replayed_stored_result"}
+
+    def _owner_alive(self, record: dict[str, Any]) -> bool:
+        """그 실행을 맡았던 **다른** Runner 프로세스가 아직 살아 있는가.
+
+        살아 있으면 그 실행은 아직 그 프로세스의 것이다 — 여기서 결과를 보고하거나 트리를
+        끝내면 남의 실행을 끊는다(같은 Runner 식별자를 두 프로세스가 쓰는 잘못된 구성).
+        """
+        owner = record.get("runner_process") or {}
+        if not owner.get("pid") or owner.get("pid") == os.getpid():
+            return False
+        return bool(process_tree.process_alive(owner.get("pid"), owner.get("created")))
+
+    def _residual_for_record(self, record: dict[str, Any]) -> process_tree.ResidualObservation:
+        """원장 기록으로 **끝난 Runner 프로세스가 남긴** 실행의 잔류를 확인한다."""
+        if self._owner_alive(record):
+            return process_tree.ResidualObservation(
+                "unknown", ResidualBasis.OWNER_RUNNER_ALIVE.value
+            )
+        return process_tree.check_residual(record.get("launch"), record.get("started_at"))
+
+    def _workspace_effect_since(
+        self, assignment: dict[str, Any], record: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """실행 전 관측과 **지금** 트리의 대조(재시작 대조). 관측이 없으면 `None`(=모른다)."""
+        before = record.get("workspace_before")
+        space = assignment.get("workspace")
+        if not before or not space:
+            return None
+        work_dir = Path(assignment.get("workspace_path") or space["worktree_path"])
+        try:
+            after = workspace.observe(work_dir)
+            effect = workspace.compose_effect(
+                before=workspace.TreeState(
+                    head=before["head"],
+                    entries=tuple(before.get("entries") or ()),
+                    digest=before.get("digest", ""),
+                ),
+                after=after,
+                base_commit=space["base_commit"],
+                numbers=workspace.diff_numbers(work_dir, space["base_commit"]),
+            )
+        except (workspace.WorkspaceError, OSError, subprocess.SubprocessError, KeyError):
+            return None
+        # 결과 보고 때가 아니라 **재시작 대조 때** 본 트리다. 그 사이의 변화가 이 실행만의
+        # 것이라는 근거는 쓰기 자리·권고 잠금뿐이다.
+        effect["observed_at_reconcile"] = True
+        return effect
+
+    def _release_stale_lock(self, assignment: dict[str, Any]) -> bool:
+        """그 실행이 잡고 있던 worktree 권고 잠금을 푼다 — **잔류가 확인된 뒤에만** 부른다."""
+        space = assignment.get("workspace")
+        if not space:
+            return False
+        work_dir = Path(assignment.get("workspace_path") or space["worktree_path"])
+        path = workspace.lock_path_for(work_dir)
+        holder = workspace.lock_holder(path)
+        owner = f"{self.config.runner_id}:{assignment['run_id']}"
+        if holder is None or not holder.split("\t", 1)[0] == owner:
+            return False
+        try:
+            path.unlink()
+        except OSError:
+            return False
+        return True
+
+    def _report_interrupted(
+        self,
+        assignment: dict[str, Any],
+        record: dict[str, Any],
+        source: ResidualSource,
+    ) -> dict[str, Any]:
+        """착수했는데 결과가 없는 실행을 보고한다. **CLI 를 다시 부르지 않는다.**
+
+        v2 원장에 시작 기록이 없으면 CLI 는 재개되지 않았다 — 시작하지 않은 실행이다.
+        시작 기록이 있으면(또는 v1 이면) 결과는 `unknown` 이고, 원시 출력에서 사용량·세션·
+        이벤트를 되찾으며(P4-04), 잔류를 시작 기록으로 확인한다(UI-02).
+        """
+        run_id = assignment["run_id"]
+        generation = assignment["assignment_generation"]
+        if record.get("ledger_version", 1) >= LEDGER_VERSION and not record.get("launch"):
+            return self._refuse_not_started(
+                assignment,
+                NotStartedReason.STOP_REQUESTED
+                if assignment.get("stop_requested")
+                else NotStartedReason.NOT_LAUNCHED,
+                "reported_not_launched",
+                claimed=True,
+            )
+        if self._owner_alive(record):
+            # 남의 실행이다. 아무 것도 보고하지 않는다 — 그 프로세스가 끝나면 보고한다.
+            return {"run_id": run_id, "action": "skipped_owner_runner_alive"}
+        recovered = self._recover_from_raw_log(assignment)
+        observation = self._residual_for_record(record)
+        payload: dict[str, Any] = {
+            "outcome": RunOutcome.UNKNOWN.value,
+            "residual_activity": observation.residual,
+            "residual_basis": observation.basis,
+            "residual_terminated": observation.terminated,
+            "residual_source": source.value,
+            "observed_tool_version": (
+                f"{TOOL_ID}/{TOOL_VERSION}" if assignment["tool_id"] == TOOL_ID else None
+            ),
+            "usage": recovered["usage"],
+            "session_ref": recovered["session_ref"],
+        }
+        effect = self._workspace_effect_since(assignment, record)
+        if effect is not None:
+            payload["workspace_effect"] = effect
+        if recovered["events"]:
+            self._send(
+                self._http().send_events,
+                run_id,
+                self.config.runner_id,
+                generation,
+                recovered["events"],
+            )
+        # 되찾은 결과를 원장에 확정한다. 다음 재배정에도 같은 값을 보낸다 —
+        # 그 사이 원시 출력이 지워져도 한 번 보고한 사용량이 사라지지 않는다.
+        self.ledger.finish(run_id, payload)
+        self._send(self._http().send_result, run_id, self._result_payload(generation, payload))
+        released = observation.residual == "none" and self._release_stale_lock(assignment)
+        return {
+            "run_id": run_id,
+            "action": "reported_unknown_without_reexecution",
+            "recovered": recovered["summary"],
+            "residual": observation.to_dict(),
+            "released_workspace_lock": released,
+        }
+
+    # ------------------------------------------------------------ 재시작 대조
+
+    def reconcile_assignment(self, assignment: dict[str, Any]) -> dict[str, Any]:
+        """**이전 프로세스가 맡은** 끝나지 않은 실행을 원장으로 대조한다(UI-02).
+
+        세대를 올리지 않고 CLI 를 다시 부르지 않는다. 원장이 없으면 이 Runner 는 CLI 를
+        부르지 않았다 — 시작하지 않은 실행으로 보고한다(그 뒤 다시 할지는 처리하는 쪽이 정한다).
+        """
+        record = self.ledger.read(assignment["run_id"])
+        if record is None:
+            return self._refuse_not_started(
+                assignment,
+                NotStartedReason.STOP_REQUESTED
+                if assignment.get("stop_requested")
+                else NotStartedReason.NOT_LAUNCHED,
+                "reported_not_launched",
+            )
+        if record.get("state") == STATE_FINISHED:
+            return self._replay_finished(assignment, record)
+        return self._report_interrupted(assignment, record, ResidualSource.RECONCILE)
+
+    def reconcile_unfinished(self) -> list[dict[str, Any]]:
+        """제어부가 이 Runner 에 배정돼 끝나지 않았다고 보는 실행 중 **이 프로세스가 맡지
+        않은 것**을 대조한다. 기동할 때와 제어부 연결이 돌아왔을 때 부른다."""
+        with self._inflight_lock:
+            assignments = self.control_client.reconcile(self.config.runner_id)
+            pending = [a for a in assignments if a["run_id"] not in self._inflight]
+        actions = []
+        for assignment in pending:
+            try:
+                actions.append(self.reconcile_assignment(assignment))
+            except Exception as exc:  # noqa: BLE001 - 한 실행이 다른 대조를 막지 않는다
+                actions.append(
+                    {
+                        "run_id": assignment.get("run_id"),
+                        "action": "reconcile_failed",
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+        return actions
+
+    # ------------------------------------------------------------ 제어 수신
+
+    def check_residual(self, run_id: str) -> dict[str, Any]:
+        """끝난 실행의 잔류를 **다시 확인하고** 보고한다(UI-02)."""
+        record = self.ledger.read(run_id)
+        if record is None:
+            observation = process_tree.ResidualObservation(
+                "unknown", ResidualBasis.NOT_OBSERVABLE.value
+            )
+        else:
+            observation = self._residual_for_record(record)
+        self.control_client.send_residual(
+            run_id,
+            self.config.runner_id,
+            observation.residual,
+            observation.basis,
+            observation.terminated,
+        )
+        return {"run_id": run_id, "residual": observation.to_dict()}
+
+    def handle_controls(self, controls: dict[str, Any] | None) -> dict[str, Any]:
+        """heartbeat 응답의 할 일을 처리한다: **중단 전달**과 **잔류 재확인**."""
+        controls = controls or {}
+        delivered: list[str] = []
+        for stop in controls.get("stop") or []:
+            with self._inflight_lock:
+                entry = self._inflight.get(stop["run_id"])
+                if entry is None or entry.generation != stop["generation"]:
+                    # 이 프로세스가 맡은 실행이 아니다. 이전 프로세스의 실행은 재시작
+                    # 대조가, 끝난 실행은 결과가 말한다.
+                    continue
+                entry.stop.set()
+                should_ack = not entry.acked
+                entry.acked = True
+            if should_ack:
+                self.control_client.stop_ack(
+                    stop["run_id"], self.config.runner_id, stop["generation"]
+                )
+            delivered.append(stop["run_id"])
+        checked: list[dict[str, Any]] = []
+        for check in controls.get("residual_checks") or []:
+            with self._inflight_lock:
+                busy = check["run_id"] in self._inflight
+            if busy:
+                continue
+            try:
+                checked.append(self.check_residual(check["run_id"]))
+            except Exception as exc:  # noqa: BLE001
+                checked.append({"run_id": check["run_id"], "error": f"{exc!r}"})
+        return {"stop_delivered": delivered, "residual_checked": checked}
+
+    # -------------------------------------------------------------- 두 흐름
+
+    def control_tick(self) -> dict[str, Any]:
+        """제어 루프 한 회: 생존·실행 중 보고 → 원문 저장 → 열람 → 제어 수신.
+
+        **CLI 실행과 무관하게 돈다**(UI-02). 제어부 연결이 끊겼다가 돌아오면 원장과 대조해
+        보고되지 않은 결과를 보낸다.
+        """
+        self._local.client = self.control_client
+        with self._inflight_lock:
+            executing = [
+                {"run_id": e.run_id, "generation": e.generation}
+                for e in self._inflight.values()
+                if e.state == "executing"
+            ]
+        try:
+            answer = self.control_client.heartbeat(self.config.runner_id, executing)
+        except (httpx.TransportError, httpx.HTTPStatusError):
+            self._controller_reachable = False
+            raise
+        reconnected = self._controller_reachable is False
+        self._controller_reachable = True
+        reconciled: list[dict[str, Any]] = []
+        if reconnected and self._retry_reports:
+            reconciled = self.reconcile_unfinished()
         stored = self.persist_pending_intakes()
         served = self.serve_read_requests()
+        controls = self.handle_controls(
+            answer.get("controls") if isinstance(answer, dict) else None
+        )
+        return {
+            "stored_intakes": stored,
+            "served_reads": served,
+            "controls": controls,
+            "reconciled": reconciled,
+        }
+
+    def execution_tick(self) -> dict[str, Any]:
+        """실행 작업자 한 회: 작업공간 준비 → 배정 수신 → 실행(한 번에 하나).
+
+        배정 수신과 실행 중 표 등록은 **같은 잠금 안이다** — 재연결 대조가 막 받은 실행을
+        이전 프로세스의 실행으로 오인하지 않게 한다.
+        """
         # **배정보다 먼저 작업공간을 준비한다.** 같은 회차에 준비되면 그 다음
         # 회차의 쓰기 배정이 곧바로 열린다. 반대 순서면 항상 한 회차씩 늦는다.
         workspaces = self.prepare_workspaces()
+        with self._inflight_lock:
+            assignments = self.client.claim_assignments(self.config.runner_id)
+            for assignment in assignments:
+                self._track(assignment["run_id"], assignment["assignment_generation"])
         actions = []
-        for assignment in self.client.claim_assignments(self.config.runner_id):
+        for assignment in assignments:
             # **한 배정의 실패가 다른 배정을 건너뛰게 만들지 않는다.** 이 루프가
             # 통째로 죽으면 이미 맡은 다른 실행의 결과 보고까지 멈춘다.
             try:
@@ -1110,29 +1604,71 @@ class RunnerAgent:
                     f"[runner] assignment {assignment.get('run_id')} failed: {exc!r}",
                     flush=True,
                 )
+        return {"workspaces": workspaces, "assignments": actions}
+
+    def poll_once(self) -> dict[str, Any]:
+        """두 흐름을 **한 스레드에서 한 번씩** 돈다. 시험·하네스의 동기 경로다."""
+        control = self.control_tick()
+        execution = self.execution_tick()
         return {
-            "stored_intakes": stored,
-            "served_reads": served,
-            "workspaces": workspaces,
-            "assignments": actions,
+            "stored_intakes": control["stored_intakes"],
+            "served_reads": control["served_reads"],
+            "controls": control["controls"],
+            "workspaces": execution["workspaces"],
+            "assignments": execution["assignments"],
         }
 
-    def run_forever(self, interval: float = 1.0) -> None:
-        self.register()
-        while True:
+    def shutdown(self) -> None:
+        """`run_forever` 의 두 흐름을 멈춘다. 실행 중인 CLI 는 끝까지 기다린다."""
+        self._shutdown.set()
+
+    def _worker_loop(self, interval: float) -> None:
+        while not self._shutdown.is_set():
             try:
-                self.poll_once()
+                self.execution_tick()
+            except Exception as exc:  # noqa: BLE001 - 작업자를 죽이지 않는다
+                print(f"[runner] execution tick failed: {exc!r}", flush=True)
+            self._shutdown.wait(interval)
+
+    def run_forever(self, interval: float = 1.0) -> None:
+        """등록 → **재시작 대조** → 작업자 시작 → 제어 루프(UI-02).
+
+        대조는 작업자를 띄우기 **전에** 한다 — 이전 프로세스의 실행을 정리하는 동안 새
+        배정을 받지 않는다.
+        """
+        self.register()
+        self._retry_reports = True
+        while not self._shutdown.is_set():
+            try:
+                actions = self.reconcile_unfinished()
+                if actions:
+                    print(f"[runner] reconciled on start: {actions}", flush=True)
+                self._controller_reachable = True
+                break
+            except Exception as exc:  # noqa: BLE001
+                print(f"[runner] reconcile failed, retrying: {exc!r}", flush=True)
+                self._shutdown.wait(interval)
+        worker = threading.Thread(
+            target=self._worker_loop, args=(interval,), name="runner-worker", daemon=True
+        )
+        worker.start()
+        while not self._shutdown.is_set():
+            try:
+                self.control_tick()
             except Exception as exc:  # noqa: BLE001 - 루프를 죽이지 않는다
-                print(f"[runner] poll failed: {exc!r}", flush=True)
-            time.sleep(interval)
+                print(f"[runner] control tick failed: {exc!r}", flush=True)
+            self._shutdown.wait(interval)
+        worker.join(timeout=5)
 
 
 def main() -> None:
     from runner.config import load_config
 
     config = load_config()
+    # 두 흐름이 HTTP 클라이언트를 나눠 쓰지 않게 따로 만든다(UI-02).
     client = ControllerClient(config.controller_url)
-    agent = RunnerAgent(config, client)
+    control_client = ControllerClient(config.controller_url)
+    agent = RunnerAgent(config, client, control_client=control_client)
     print(
         f"[runner] id={config.runner_id} controller={config.controller_url}"
         f" data={config.data_root}",

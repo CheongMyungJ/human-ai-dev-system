@@ -1,0 +1,314 @@
+{
+  "tag": "195435011",
+  "root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011",
+  "error": null,
+  "product_rules": [
+    {
+      "rule": "A 카드 답변 접수 대기(202)",
+      "ok": true,
+      "detail": 202
+    },
+    {
+      "rule": "A 실행 중 다른 대화 메시지 저장",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "A 같은 Case 일반 전송은 409 request_in_progress",
+      "ok": true,
+      "detail": [
+        "request_in_progress"
+      ]
+    },
+    {
+      "rule": "A 입력 저장 동안 실행이 끝나지 않음",
+      "ok": true,
+      "detail": "assigned"
+    },
+    {
+      "rule": "A 실행 중 보고",
+      "ok": true,
+      "detail": "executing"
+    },
+    {
+      "rule": "B 중단 요청 직후는 중단 요청 중(처리 중)",
+      "ok": true,
+      "detail": "processing"
+    },
+    {
+      "rule": "B 요청 interrupted(stopped_by_request)",
+      "ok": true,
+      "detail": [
+        "interrupted",
+        "stopped_by_request"
+      ]
+    },
+    {
+      "rule": "B 실행 cancelled + 잔류 none",
+      "ok": true,
+      "detail": [
+        "cancelled",
+        "none"
+      ]
+    },
+    {
+      "rule": "B 근거 job_terminated",
+      "ok": true,
+      "detail": [
+        {
+          "id": "resid-bd9e5fc6b4e5b4a1",
+          "run_id": "run-ui02-a-195435011",
+          "generation": 1,
+          "seq": 1,
+          "source": "result",
+          "residual": "none",
+          "basis": "job_terminated",
+          "terminated": 10,
+          "runner_id": "runner-ui-02-live",
+          "observed_at": "2026-09-23T10:54:52.847378+00:00"
+        }
+      ]
+    },
+    {
+      "rule": "B OS 에 그 트리(pwsh 대기·codex)가 남지 않음",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "rule": "B 중단 확인 뒤 전송 열림(202)",
+      "ok": true,
+      "detail": 202
+    },
+    {
+      "rule": "C 원장 v2·시작 기록(KILL_ON_JOB_CLOSE)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "C Runner 만 죽여도 CLI 트리가 끝남(OS)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "C PC 미연결 전송 409 runner_disconnected",
+      "ok": true,
+      "detail": [
+        409,
+        [
+          "runner_disconnected"
+        ]
+      ]
+    },
+    {
+      "rule": "C 끊긴 동안 실행은 끝나지 않은 채",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "C 결과 unknown + 잔류 none",
+      "ok": true,
+      "detail": [
+        "unknown",
+        "none"
+      ]
+    },
+    {
+      "rule": "C 근거 reconcile/job_closed_kill_on_close",
+      "ok": true,
+      "detail": [
+        {
+          "id": "resid-f2c8266f3c84e4f8",
+          "run_id": "run-ui02-c-195435011",
+          "generation": 1,
+          "seq": 1,
+          "source": "reconcile",
+          "residual": "none",
+          "basis": "job_closed_kill_on_close",
+          "terminated": null,
+          "runner_id": "runner-ui-02-live",
+          "observed_at": "2026-09-23T10:55:09.744544+00:00"
+        }
+      ]
+    },
+    {
+      "rule": "C 세대를 올리지 않음",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "C CLI 를 다시 부르지 않음(부수효과 1회)",
+      "ok": true,
+      "detail": [
+        1,
+        2
+      ]
+    },
+    {
+      "rule": "C 원시 출력에서 세션을 되찾음",
+      "ok": true,
+      "detail": "01a0cde7-8505-7a30-b552-447e5bd09506"
+    },
+    {
+      "rule": "C 요청 interrupted(execution_ended_result_unknown)",
+      "ok": true,
+      "detail": [
+        "interrupted",
+        "execution_ended_result_unknown"
+      ]
+    },
+    {
+      "rule": "C 재연결 뒤 자동으로 보내진 것 없음",
+      "ok": true,
+      "detail": [
+        "c-side-195435011"
+      ]
+    },
+    {
+      "rule": "C 사람이 다시 보내면 받음(202)",
+      "ok": true,
+      "detail": 202
+    }
+  ],
+  "observations": [],
+  "facts": {
+    "codex_version": "codex-cli 0.154.0",
+    "codex_installed": {
+      "tool_id": "codex",
+      "mode": "exec",
+      "capability": "installed",
+      "state": "verified",
+      "source": "P2-03 Runner 기동 시 확인: codex-cli 0.154.0",
+      "observed_at": "2026-09-23T10:54:37.625433+00:00"
+    },
+    "process_tree_control": {
+      "tool_id": "codex",
+      "mode": "exec",
+      "capability": "process_tree_control",
+      "state": "verified",
+      "source": "UI-02: Windows job object(KILL_ON_JOB_CLOSE, 이탈 불허) 트리 종료·활성 0 확인 — tests/test_process_control.py",
+      "observed_at": "2026-09-23T10:54:37.625433+00:00"
+    },
+    "A_seconds_until_sleep": 11.4,
+    "A_tree_before_stop": [
+      {
+        "pid": 13064,
+        "ppid": 1480,
+        "name": "cmd.exe",
+        "cmd": "C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\USER\\AppData\\Roaming\\npm\\codex.CMD exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 16700,
+        "ppid": 13064,
+        "name": "node.exe",
+        "cmd": "\"node\"   \"C:\\Users\\USER\\AppData\\Roaming\\npm\\\\node_modules\\@openai\\codex\\bin\\codex.js\" exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 24860,
+        "ppid": 16700,
+        "name": "codex.exe",
+        "cmd": "C:\\Users\\USER\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 6612,
+        "ppid": 34384,
+        "name": "pwsh.exe",
+        "cmd": "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\nStart-Sleep -Seconds 91\""
+      }
+    ],
+    "A_card_stored_seconds": 0.3,
+    "A_side_stored_seconds": 0.91,
+    "A_sleep_still_running_after_inputs": true,
+    "A_runner_last_heartbeat": "2026-09-23T10:54:51.804947+00:00",
+    "B_stop_to_settled_seconds": 0.52,
+    "B_run": {
+      "outcome": "cancelled",
+      "residual_activity": "none",
+      "stop_requested_at": "2026-09-23T10:54:52.458599+00:00",
+      "stop_delivered_at": "2026-09-23T10:54:52.815544+00:00",
+      "session_ref": "01a0cde7-4585-7f11-aacd-a30224474d26",
+      "exit_code": 1,
+      "observed_tool_version": "codex-cli 0.154.0"
+    },
+    "B_observations": [
+      {
+        "id": "resid-bd9e5fc6b4e5b4a1",
+        "run_id": "run-ui02-a-195435011",
+        "generation": 1,
+        "seq": 1,
+        "source": "result",
+        "residual": "none",
+        "basis": "job_terminated",
+        "terminated": 10,
+        "runner_id": "runner-ui-02-live",
+        "observed_at": "2026-09-23T10:54:52.847378+00:00"
+      }
+    ],
+    "B_tree_after_stop": [],
+    "C_tree_before_kill": [
+      {
+        "pid": 2688,
+        "ppid": 1480,
+        "name": "cmd.exe",
+        "cmd": "C:\\WINDOWS\\system32\\cmd.exe /c C:\\Users\\USER\\AppData\\Roaming\\npm\\codex.CMD exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 34376,
+        "ppid": 2688,
+        "name": "node.exe",
+        "cmd": "\"node\"   \"C:\\Users\\USER\\AppData\\Roaming\\npm\\\\node_modules\\@openai\\codex\\bin\\codex.js\" exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 15316,
+        "ppid": 34376,
+        "name": "codex.exe",
+        "cmd": "C:\\Users\\USER\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe exec --json --skip-git-repo-check -C C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-02-live\\195435011\\workspace --sandbox read-only"
+      },
+      {
+        "pid": 14412,
+        "ppid": 19800,
+        "name": "pwsh.exe",
+        "cmd": "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoProfile -Command \"try { [Console]::OutputEncoding=[System.Text.Encoding]::UTF8 } catch {}\nStart-Sleep -Seconds 92\""
+      }
+    ],
+    "C_ledger": {
+      "ledger_version": 2,
+      "state": "started",
+      "launch": {
+        "job_name": "Local\\hads-run-runner-ui-02-live-run-ui02-c-195435011-1",
+        "kill_on_close": true,
+        "pid": 2688,
+        "pid_created": 134346344970573531,
+        "launched_at": "2026-09-23T10:54:57.050846+00:00",
+        "recorded_at": "2026-09-23T10:54:57.050846+00:00"
+      },
+      "runner_process": {
+        "pid": 1480,
+        "created": 134346344769167190
+      }
+    },
+    "C_tree_gone_seconds": 0.45,
+    "C_reported": {
+      "outcome": "unknown",
+      "residual_activity": "none",
+      "assignment_generation": 1,
+      "session_ref": "01a0cde7-8505-7a30-b552-447e5bd09506",
+      "usage": "not_reported"
+    },
+    "C_observations": [
+      {
+        "id": "resid-f2c8266f3c84e4f8",
+        "run_id": "run-ui02-c-195435011",
+        "generation": 1,
+        "seq": 1,
+        "source": "reconcile",
+        "residual": "none",
+        "basis": "job_closed_kill_on_close",
+        "terminated": null,
+        "runner_id": "runner-ui-02-live",
+        "observed_at": "2026-09-23T10:55:09.744544+00:00"
+      }
+    ],
+    "repo_unchanged": "",
+    "leftovers_after_shutdown": []
+  }
+}

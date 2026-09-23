@@ -4,6 +4,8 @@
 
 옮긴 기준은 "끝난 작업을 설명하거나 당시의 다음 행동을 안내하던 것"이다 — 완료 작업의 설명 문단, 완료된 작업의 시작점, 끝난 단계(P3)의 남은 작업 표와 plan 행, 해소된 한계 행, S-020 이전 인계. 지금도 효력이 있는 결정·열린 한계·최근 인계(S-021·S-020)는 DEVELOPMENT.md에 남겼다. 옮긴 글 안의 "이 문서"·"N절"은 **당시 DEVELOPMENT.md**를 가리킨다.
 
+**S-022(UI-02 완료) 정리 때 이어서 옮긴 것:** 당시 1.4절(UI-02 의 경계와 시작점)과 S-020 인계. 같은 규칙으로 글자 그대로 옮겼다.
+
 ## 1. 완료 작업의 설명 문단 (당시 1절)
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
@@ -42,7 +44,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -71,6 +73,15 @@ P4-04의 고정 입력·새 세션·usage 복원은 이 설계와 연결되지�
 - 코드 대조 시작점: `controller/repository.py`의 `compose_context_refs`(대화 문맥 포함)·`_planned_reservation_for`·`list_context_refs`, `runner/agent.py`의 `load_context`·`_execute_with_cli`, `runner/prompts.py`의 `build_context_block`·`CONTEXT_LABEL`, `domain/budget.py`의 `context_bytes`.
 
 **→ [P4-PLAN-04](plans/P4-PLAN-04.md) AC-1~20으로 구현·검증했다.** 분할 검토·체크포인트·단계적 조회는 넣지 않았고 그 이유와 배정은 plan 3.9절·9절 표에 있다.
+
+### 1.4 UI-02의 경계와 시작점 (완료 — 당시 인계로 보존, S-022 에 옮김)
+
+**목표:** 긴 CLI 실행 중에도 입력 저장·질문/확인 카드 답변·중단 요청을 받고, 실제 종료·잔류 활동과 상태 불명을 구분하며, 재시작·중복 방지·소비 보존을 검증한 뒤 중단을 연결한다(1.1절 2행, D-70·D-75·D-76, 9절의 요청 `unknown`·PC 단절 행).
+
+- **지금 Runner는 한 루프에서 동기로 일한다.** `poll_once`가 heartbeat·원문 저장·열람 중계·작업공간 준비·배정 실행을 차례로 하고, 배정 실행은 CLI가 끝날 때까지(`CliExecutor.execute`의 `proc.wait`) 루프를 붙잡는다. 그동안 heartbeat·원문 저장(카드 답변 포함)·열람이 멈춘다. 수신/저장/heartbeat와 실행을 나누는 것이 UI-02의 첫 과제다.
+- **P4-04가 넘긴 것:** 영수증은 원장을 잡기 **전에**, CLI 호출 전에 보낸다(유실되면 아무 것도 잡지 않는다). 시작하지 않은 실행은 `not_started_reason`으로 소비 0이다. 착수만 기록된 실행은 재배정 때 원시 출력에서 사용량·세션·이벤트를 되찾아 `unknown`으로 보고한다 — **결과는 여전히 불명이고 요청은 `unknown`으로 잠긴다.** 그 해제(실제 종료·잔류 확인)가 UI-02다. 재배정은 P3-R3 규칙대로 새 세대 예약을 잡으므로 원장이 재실행을 막은 경우에도 한 번 더 잡힌다(과대 쪽, 9절).
+- **실측 근거:** P1-03의 `safe_stop_next_call`(조건부)·`cancel_confirmed = unknown`·Windows 자식 프로세스 잔류 관측과, P4-04 라이브 D(실행 중 Runner 트리 강제 종료 → 재시작 → 원시 출력 복구)의 원시 출력 모양(`p4/evidence/P4-04-live-D-raw.stdout.jsonl`).
+- 코드 대조 시작점: `runner/agent.py`의 `poll_once`·`handle_assignment`·`run_forever`, `runner/cli_adapter.py`의 `CliExecutor.execute`, `controller/repository.py`의 `settle_request`·`request_admission_state`·`bump_generation`·`heartbeat`, `domain/conversation.py`의 요청 종료 규칙, `web/src/ConversationPanel.tsx`.
 
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
@@ -109,6 +120,26 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-020 / 2026-09-23 / UI-01 대화·요청 기반 (**완료**)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan 검증 인계 절차를 지켜줘." 다음 단계는 D-90·1.2절의 **UI-01** 이었다.
+- **수행:** 시작 상태(`main`/`a8ee278`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → pytest **481** + unittest **18**)을 직접 확인한 뒤 [UI-PLAN-01](plans/UI-PLAN-01.md)을 **구현 전에 기록·공유**하고 구현·검증했다. 상세 근거는 [UI-01 결과](ui/evidence/UI-01-results.md)다. 새 제품 판단은 없었고 사람에게 질문하지 않았다.
+- **모델:** 준비 단계 Case(`stage = discussion`, `kind = undecided`, Profile NULL), `conversation_message`(순번·원문 참조·정정·카드 답변·AI 응답), `conversation_request`(processing/completed/failed/unknown)와 `run.request_id`, `case_work_start`, `case_visibility_event`. 스키마 **v16**. 기존 Case 는 `stage` NULL → 업무 단계로 **도출**(이행이 데이터를 쓰지 않는다).
+- **잠금:** 요청이 `processing`·`unknown` 이면 같은 Case 의 일반·정정 메시지·피드백·사람 의도 초안이 409. DB 부분 유일 색인이 활성 요청을 Case당 하나로 막는다. Run 이 끝나도 요청 종료는 명시 기록이며 미종료 Run 이 있으면 거부, 불명 Run 이면 `unknown` 으로 잠금 유지. Run 을 요청에 붙일 때 생성 트랜잭션 안에서 처리 중을 다시 확인한다.
+- **접수:** 202 는 접수 대기, `stored` 만 접수 완료. `client_message_id` 재전송 200·다른 내용 409·대조 조회 404. 새 경로는 중계 본문을 기록 전에 넣는다. 여는 메시지 유실 → 요청 실패(시스템), 답변 유실 → 질문 재개(기존 경로 포함).
+- **실행·업무화:** `discussion_reply`(읽기 전용·요청 필수·지시 = 여는 메시지·준비 단계의 유일한 목적·같은 Case 예산). `work-start` 는 준비 Case 만, 처리 중 요청의 저장된 사용자 메시지로 Profile v2 를 배정하고 그 메시지 하나를 `original_request` 위임 근거로 남긴다. 대화는 역할을 나눈 고정 참조로 논의 응답·의도 작성·QG-01 검토에 들어가고, 업무화 Case 의 QG-01 요청 원문은 업무 요청 메시지다.
+- **기존 시험의 의미 검토:** `test_a_v14_database_keeps_its_criteria_and_invents_no_obligation` 이 `SCHEMA_VERSION == 15` 를 고정했다. 뜻은 "현재 판으로 이행"이므로 `>= 15` 로 바꾸고 v16 고정은 새 이행 시험이 맡는다. 검사를 지우지 않았다.
+- **자기 검토에서 고친 것:** 관리 화면·라이브 하네스가 메시지 **본문 앞부분을 요약으로** 보내고 있었다(제어부에 남는 값이라 원문 일부가 서버에 복제된다). 본문이 아닌 표시로 바꾸고 API 모델에 규칙을 적었다. 준비 Case 의 Profile 조회가 "R1 이전 Case"로 보이던 것을 `not_yet_decided` 로 나눴다.
+- **검증:** UI-01 집중 **30**, v15→v16 이행 1, 실제 uvicorn 강제 종료 재시작 1을 더해 전체 **pytest 513 + P1 계약 unittest 18 통과**, `npm run build` 성공. 알려진 deprecation warning 2건 외 실패 없음.
+- **실제 CLI:** **수행.** 새 지시문(논의 응답)·새 문맥 역할이므로 `ui/live/ui01_conversation.py` 로 실제 `codex-cli 0.154.0` 논의 응답 2회·업무화 뒤 의도 작성 1회를 **두 번** 돌렸다(1회차 하네스는 본문 요약 문제로 증거에서 제외). 제품 규칙 20건 통과, 지시와 다른 관찰 없음 — 저장소 무변경, 작업 주장 없음, 앞선 금지를 문맥으로 정확히 회상, 논의의 "문서 만들지 말 것"이 초안 `exclusions` 에 `user_requirement` 로 옮겨짐. 자동 판정 밖 관찰: 초안 `constraints` 의 Profile 유래 문장이 `user_requirement` 로 적힘(9절). 표본은 대화 하나다.
+- **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 브라우저 초안(UI-03), PC 단절 전송 거부·Runner 수신/실행 분리·중단·`unknown` 해제(UI-02), 활성 Profile 이행(D-86), 종료 후 설명(D-87), 자연어 자동 분류(UI-03), 문맥 크기(P4-04)는 구현하지 않았다.
+- **다음 행동:** **P4-04(문맥·재개)** 를 새 plan 으로 시작한다(1.3절). 완료된 UI-PLAN-01·P4-PLAN-01~03 을 다시 열지 않고 UI-02·UI-03 으로 자동 확대하지 않는다.
+- **사람에게 물어야 할 것:** 없다. P4-04 는 문서에 확정된 범위로 plan 을 쓸 수 있다.
+- **사용자 지시로 한 일:** 작업을 마친 뒤 사용자 지시("커밋푸시해줘")로 UI-01 변경을 **`a509063` 으로 커밋해 `origin/main` 에 push** 했다(`a8ee278..a509063`, push 전에 원격을 fetch 해 앞서 간 커밋이 없음을 확인). 이 인계 기록을 이어서 커밋·push 했다. 커밋 뒤 `tests/test_migration.py` 를 다시 돌려 `_v15_schema()` 가 커밋 이력에서 `bf86590` 의 v15 스키마를 찾는 것을 확인했다(11건 통과, 건너뜀 없음). 허용은 이 변경에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`a8ee278`, clean·로컬 `origin/main` 과 같음. 이 세션이 그 위에 UI-01 커밋 `a509063` 과 인계 기록 커밋을 올렸다 — 새 파일 `domain/conversation.py`, `tests/test_conversation.py`, `plans/UI-PLAN-01.md`, `ui/evidence/UI-01-*`, `ui/live/ui01_conversation.py`, `web/src/ConversationPanel.tsx` 와 수정 파일 `controller/{admission,api,db,repository,schema.sql}`, `domain/models.py`, `runner/prompts.py`, `tests/{conftest,test_migration,test_restart_recovery}.py`, `web/src/{App.tsx,api.ts}`, 문서 `DEVELOPMENT.md`·`README.md`·`ui-conversation-design.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 커밋은 `git log --oneline a8ee278..HEAD`, 원격 반영은 로컬/원격 ref 로, 작업 트리는 `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner 프로세스는 스크립트가 `finally` 에서 내렸다. 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-ui-01-live\{154349674,154607866}` 에 남아 있고(두 회차) 저장소 `var\` 는 건드리지 않았다. 증거 사본은 2회차의 `ui/evidence/UI-01-live*` 다.
+- **다음 세션이 이어서 할 때:** `tests/test_migration.py` 의 `_v15_schema()` 는 `스키마 v16` 표식이 **없는** 가장 최근 커밋 스키마를 찾는다 — UI-01 을 커밋하기 전에도 뒤에도 `bf86590` 의 스키마를 고른다. 대화 도우미는 `tests/conftest.py` 의 `create_conversation`·`send_message`(접수까지)·`post_message`(응답만)·`discussion_reply`·`settle`·`start_work`·`intake_count` 다. `post_message` 의 기본 요약은 본문이 아닌 표시다 — 시험도 본문을 요약으로 넣지 않는다.
 
 ### 이전 설계 인계 — 2026-09-23 / UI 개편 2차 문서 반영·개발 인계
 

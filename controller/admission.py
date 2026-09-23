@@ -795,7 +795,8 @@ def _check_conversation(request: AdmissionRequest, refuse: Callable[..., None]) 
     2. **논의 응답은 요청에 묶인다.** 어떤 메시지에 대한 응답인지 없으면 대화의 어느
        자리에도 붙을 수 없다.
     3. **요청에 묶인 실행은 그 요청이 처리 중일 때만 연다.** 끝난 요청에 실행을 붙이면
-       잠금이 풀린 채 실행이 돈다. 요청을 모르면 처리 중으로 읽지 않는다.
+       잠금이 풀린 채 실행이 돈다. 요청을 모르면 처리 중으로 읽지 않는다. 처리 중이어도
+       **중단이 요청됐으면 열지 않는다**(UI-02·D-76).
     4. **그 요청을 연 메시지가 PC 에 저장돼야 한다.** 받지 않은 말을 처리하지 않는다.
     5. **논의 응답의 지시는 그 메시지 원문이다.** 다른 지시를 주면 응답이 받은 말이
        아닌 것에 대한 것이 된다.
@@ -823,6 +824,15 @@ def _check_conversation(request: AdmissionRequest, refuse: Callable[..., None]) 
             f"요청 {request.request_id} 은 처리 중이 아니다"
             f"({state.get('state') or '이 업무의 요청이 아님'}). 끝난 요청에 실행을"
             " 붙이지 않는다",
+        )
+        return
+    if state.get("stop_requested_at"):
+        # UI-02. 중단 요청은 **후속 실행 시작을 막는다**(D-76). 처리 중이라는 사실만 보면
+        # 중단 요청 뒤에 새 실행이 시작된다.
+        refuse(
+            AdmissionRefusal.REQUEST_STOP_REQUESTED,
+            f"요청 {request.request_id} 에 중단이 요청됐다({state['stop_requested_at']})."
+            " 관련 실행의 실제 종료를 확인하는 동안 새 실행을 시작하지 않는다",
         )
         return
     if state.get("opening_receipt") != MessageReceipt.STORED.value:
