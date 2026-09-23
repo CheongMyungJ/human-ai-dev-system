@@ -195,6 +195,8 @@ class RunnerAgent:
             # 원문 안에 남고 영향·짧은 판단 한 줄만 올라간다.
             # `None` 이면 "판단하지 않음"이며 제어부가 수준을 만들지 않는다.
             "sizing": structure["sizing"],
+            # 요청이 명시한 목적 의무(P4-03, v5). 열거값 목록이며 `None` 은 선언 없음이다.
+            "objectives": structure.get("objectives"),
         }
         return self.client.send_intent_structure(payload)
 
@@ -651,7 +653,7 @@ class RunnerAgent:
         메모리를 지나 이 Runner로 왔다. 여기서는 초안이 이 Runner에서 태어나므로
         제어부에는 참조와 구조만 올라간다 — **본문은 올라가지 않는다.**
         """
-        fields, questions, criteria, sizing = prompts.parse_intent_draft(
+        fields, questions, criteria, sizing, objectives = prompts.parse_intent_draft(
             output.final_message,
             profile=assignment.get("case_profile"),
             profile_version=assignment.get("case_profile_version"),
@@ -671,6 +673,8 @@ class RunnerAgent:
             # 현재 정의를 고르지 않는다 — 제어부가 기록한 Case 의 버전이 정본이다.
             profile=assignment.get("case_profile"),
             profile_version=assignment.get("case_profile_version"),
+            # P4-03. 완료 계약이 있는 Profile 에서만 파서가 읽어 온다.
+            objectives=objectives,
         )
         artifact_id = ids.new_artifact_id()
         stored = self.store.put(artifact_id, 1, body)

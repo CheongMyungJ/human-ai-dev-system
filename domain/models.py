@@ -743,6 +743,15 @@ class AcceptanceRefusal(str, Enum):
     #: 미확인 누적 변경이 남은 채로 종료하지 않는다(D-60).
     MATERIAL_DELTA_UNCONFIRMED = "material_delta_unconfirmed"
 
+    # --- P4-03 목적별 완료 의미 -------------------------------------------
+    #
+    #: 요구된 목적 의무에 **기준이 하나도 없다.** 기준이 아니므로 예외 수용 대상도
+    #: 아니다 — 목적을 빼려면 의도·기준을 바꾸는 경로(material delta)를 탄다.
+    OBJECTIVE_WITHOUT_CRITERIA = "objective_without_criteria"
+    #: 정리되지 않은 실험의 임시 변경이 제품 결과에 섞여 있을 수 있다. **자동 완료만**
+    #: 막는다 — 사람은 후보에 드러난 잔여를 보고 판단할 수 있다(미정리 실행과 같은 모양).
+    EXPERIMENT_RESIDUE_UNRESOLVED = "experiment_residue_unresolved"
+
 
 class CaseRelationKind(str, Enum):
     """Case 사이의 연결. 완료 후 수정은 재개가 아니라 연결된 새 Case 다(D-33)."""
@@ -1209,6 +1218,107 @@ class Satisfaction(str, Enum):
     CHANGED_AND_VERIFIED = "changed_and_verified"
     ALREADY_SATISFIED = "already_satisfied"
     NOT_REPRODUCED = "not_reproduced"
+    #: P4-03. 조사·실험의 근거로 **질문에 답했다**. 코드 산출물이 없는 충족이며
+    #: `cause`·`answer` 의무에만 붙는다. 결론(`Conclusion`)이 함께 있어야 한다.
+    INVESTIGATED = "investigated"
+    #: P4-03. 보존 계약·조건이 **그대로임을 검증했다**. "바꾸고 확인했다"와 다르다 —
+    #: 보존은 바꾸지 않은 것을 확인하는 일이며 개선 기준의 통과로 대신하지 않는다.
+    PRESERVED = "preserved"
+
+
+# --------------------------------------------------------------------- P4-03
+#
+# 여섯 Profile 의 **완료 의미**. P3-R1 이 의도 항목을, P3-R4 가 충족 방식 세 값을
+# 만들었지만 완료 판정은 Profile 을 보지 않았다 — 여섯 Profile 모두 "기준이 전부
+# met" 하나였다. 여기서부터 기준이 **무엇을 입증하는가**(목적 의무)와 **어떤 결론을
+# 허용하는가**(결론 요구)가 값이 된다.
+
+
+class CriterionObligation(str, Enum):
+    """성공 기준이 입증하는 **목적 의무**(case-profiles 4절).
+
+    `BEHAVIOR`      합의한 동작·결과(feature)
+    `RESTORATION`   근거 있는 기대 동작의 복원(defect-fix)
+    `CAUSE`         원인 질문에 요구한 수준으로 답함(root-cause-analysis)
+    `ANSWER`        조사 질문에 종료조건대로 답함(research)
+    `IMPROVEMENT`   구조·품질 개선(refactoring)
+    `PRESERVATION`  보존할 외부 동작·계약·운영 조건의 유지(refactoring·maintenance)
+    `TARGET_STATE`  유지 대상의 목표 상태(maintenance)
+
+    Profile 이 아니라 **기준**에 붙는다. 혼합 목적("원인 확정과 수정")은 한 Case 에
+    두 의무의 기준이 함께 있는 모습이다(case-profiles 5절 "대표 Profile 이 다른 명시
+    목적을 지우지 않는다").
+    """
+
+    BEHAVIOR = "behavior"
+    RESTORATION = "restoration"
+    CAUSE = "cause"
+    ANSWER = "answer"
+    IMPROVEMENT = "improvement"
+    PRESERVATION = "preservation"
+    TARGET_STATE = "target_state"
+
+
+class ObligationSource(str, Enum):
+    """기준의 의무가 **어디서 왔는가.**
+
+    `REPORTED`            의도 원문이 명시했다
+    `DERIVED_FROM_FIELD`  원문이 적지 않아 연결 항목(`relates_to`)에 Profile 정의의
+                          대응표를 적용했다. 본문을 읽은 것이 아니라 공개된 정의를
+                          적용한 것이며, 그 사실을 값으로 남긴다
+    """
+
+    REPORTED = "reported"
+    DERIVED_FROM_FIELD = "derived_from_field"
+
+
+class ConclusionRule(str, Enum):
+    """`cause`·`answer` 기준이 **어떤 결론을 요구하는가**(case-profiles 4절).
+
+    `DEFINITIVE_REQUIRED`     확정 결론이 필수다. 판단 불가는 충족이 아니다
+    `BOUNDED_REPORT_ALLOWED`  합의한 조사를 마치고 근거·한계를 보고하면 판단 불가도
+                              정상 결과다
+
+    기록되지 않으면(NULL) **확정 필수로 취급한다.** 모르는 것을 느슨한 쪽으로 읽으면
+    원인을 확정하지 못한 분석이 조용히 완료된다.
+    """
+
+    DEFINITIVE_REQUIRED = "definitive_required"
+    BOUNDED_REPORT_ALLOWED = "bounded_report_allowed"
+
+
+class Conclusion(str, Enum):
+    """`cause`·`answer` 기준의 결과가 **확정했는가.**
+
+    결론의 확실성과 요청 충족은 다른 값이다(case-profiles 4절 "결론의 확실성, 요청
+    범위 충족 여부, Case 종료 상태는 별개다"). 판단 불가가 충족인지는 기준의
+    `ConclusionRule` 이 정한다.
+    """
+
+    DETERMINED = "determined"
+    INCONCLUSIVE = "inconclusive"
+
+
+class ExperimentCleanup(str, Enum):
+    """로컬 실험이 작업공간에 **임시 변경을 남겼는가** — 관측에서 도출한다(D-66).
+
+    `RESTORED_IN_RUN`     실행 전후 트리 지문·HEAD 가 같다
+    `RESTORED_LATER`      같은 저장소의 뒤 실행이 실험 전 지문을 관측했다
+    `LEFT_CHANGES`        실험 전 상태로 돌아온 관측이 없다
+    `UNOBSERVED`          쓰기 실행인데 관측이 없다. **모른다**이며 정리됨이 아니다
+    `NO_WRITE_PERMISSION` 읽기 권한 실행이다
+    `NOT_FINISHED`        아직 끝나지 않았다
+
+    **관측은 격리가 아니다**(D-44). `RESTORED_*` 는 "관측한 트리가 같다"이지 실험이
+    작업공간 밖을 건드리지 않았다는 증명이 아니다.
+    """
+
+    RESTORED_IN_RUN = "restored_in_run"
+    RESTORED_LATER = "restored_later"
+    LEFT_CHANGES = "left_changes"
+    UNOBSERVED = "unobserved"
+    NO_WRITE_PERMISSION = "no_write_permission"
+    NOT_FINISHED = "not_finished"
 
 
 class PolicyState(str, Enum):

@@ -1,0 +1,166 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 5,
+  "case_id": "case-66caa157cd755287",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-p4-03-C-130017994",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "refactoring",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "improvement_target",
+    "improvement_reason",
+    "target_boundary",
+    "preserved_contracts",
+    "improvement_criteria"
+  ],
+  "fields": {
+    "goal": {
+      "text": "store.py의 save()와 list_items()에 중복된 파일 읽기 코드를 한 곳으로 모아 구조를 개선한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "두 함수가 공통 파일 읽기 구현을 사용하며, 기존 외부 동작과 공개 인터페이스를 보존하여 기존 호출부를 수정할 필요가 없다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "store.py의 save()와 list_items()에 중복된 파일 읽기 코드의 공통화와 두 함수에서 이를 사용하기 위한 내부 변경.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "공개 함수 이름 변경, 반환 형식 변경, 기존 호출부 수정.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "외부 동작을 보존하면서 구조를 개선한다. 구체적인 해결 구조는 설계 단계에서 결정한다. 개선과 보존 조건을 각각 충족해야 하며, 테스트 통과만으로 모든 보존을 입증했다고 판단하지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "improvement_target": {
+      "text": "save()와 list_items()에 중복된 파일 읽기 구현.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "improvement_reason": {
+      "text": "파일 읽기 코드가 두 함수에 중복되어 있다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "target_boundary": {
+      "text": "store.py의 save()와 list_items()가 수행하는 중복 파일 읽기 부분과 공통 구현을 사용하기 위한 연결 부분.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "preserved_contracts": {
+      "text": "공개 함수 이름과 반환 형식, 기존 호출부를 수정하지 않아도 되는 호출 호환성, 리팩터링 전의 외부 동작을 보존한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "improvement_criteria": {
+      "text": "중복된 파일 읽기 구현이 한 곳으로 모이고, save()와 list_items()가 모두 그 구현을 사용한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "improvement_criteria",
+      "text": "save()와 list_items()에 중복되어 있던 파일 읽기 코드가 하나의 공통 구현으로 모이고 두 함수가 이를 사용한다.",
+      "method": "변경 전후 소스와 호출 흐름을 비교하여 중복되었던 읽기 단계가 공통 구현으로 이동했는지, 두 함수에 같은 구현이 별도로 남아 있지 않은지 확인한다.",
+      "summary": "파일 읽기 구현의 중복 제거",
+      "method_summary": "소스 차이와 공통 구현 사용 경로 검토",
+      "obligation": "improvement"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "preserved_contracts",
+      "text": "공개 함수 이름과 반환 형식이 변경 전과 동일하다.",
+      "method": "변경 전후 공개 함수 정의와 각 반환 경로를 대조한다. 현재 구현에서 확인한 반환 사례를 같은 입력 조건으로 실행하여 반환값의 자료형과 구조를 비교한다.",
+      "summary": "공개 이름과 반환 형식 유지",
+      "method_summary": "함수 정의·반환 경로 검토 및 전후 결과 비교",
+      "obligation": "preservation"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "preserved_contracts",
+      "text": "기존 호출부를 수정하지 않아도 두 함수를 사용할 수 있고, 파일 읽기 공통화로 기존 외부 동작이 달라지지 않는다.",
+      "method": "변경 내역에서 기존 호출부가 수정되지 않았는지 확인하고 호출 방식의 호환성을 검토한다. 현재 구현에서 확인되는 정상·경계·오류 상황을 기준으로 동일한 초기 파일 상태와 입력에서 변경 전후 반환값, 예외 및 파일 상태 변화를 비교한다. 테스트 결과와 별도로 읽기 순서 및 오류 처리 경로의 차이를 검토한다.",
+      "summary": "호출부 호환성과 외부 동작 보존",
+      "method_summary": "호출부·처리 경로 검토 및 동일 조건 비교 실행",
+      "obligation": "preservation"
+    }
+  ],
+  "objectives": [],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "low",
+        "evidence": "요청이 대상 파일과 두 함수, 중복 제거 목적, 공개 이름·반환 형식 보존 및 호출부 수정 금지를 명시한다.",
+        "judgement": "의도와 핵심 성공 조건이 명확하다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "change_scope",
+        "weight": "insufficient_evidence",
+        "evidence": "요청 범위는 한 파일의 두 함수지만 실제 구현과 의존 관계는 확인하지 않았다.",
+        "judgement": "명시된 대상은 좁으나 실제 변경 범위와 의존 영향은 판단할 근거가 부족하다.",
+        "unconfirmed": "중복 코드의 정확한 범위, 두 함수의 내부 의존 관계와 호출 위치."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "medium",
+        "evidence": "공개 함수 이름과 반환 형식을 유지하고 기존 호출부를 수정하지 않아야 한다는 호환성 조건이 명시되어 있다.",
+        "judgement": "호환성 보존을 독립적으로 검증해야 하며 데이터 계약의 세부 내용은 추가 확인이 필요하다.",
+        "unconfirmed": "실제 반환 형식, 파일 형식, 읽기 실패 시 동작 및 save()의 데이터 처리 방식."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "요청에는 파일 접근 권한이나 민감 데이터 처리에 관한 정보가 없다.",
+        "judgement": "권한 및 보안 영향의 유무를 판단할 수 없다.",
+        "unconfirmed": "대상 파일의 접근 권한 처리와 민감 데이터 포함 여부."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "insufficient_evidence",
+        "evidence": "코드 변경의 복구 절차와 실행 시 데이터에 미치는 영향은 확인하지 않았다.",
+        "judgement": "가역성과 실패 비용을 확정할 근거가 부족하다.",
+        "unconfirmed": "save()의 파일 변경 부수효과와 변경 실패 시 코드·데이터 복구 방법."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "insufficient_evidence",
+        "evidence": "공통화 목적은 명확하지만 실제 중복 구현과 실행 환경은 확인하지 않았다.",
+        "judgement": "공통화 과정에서 고려할 구현 차이와 환경 제약을 아직 판단할 수 없다.",
+        "unconfirmed": "두 함수의 읽기 절차 차이, 공통화 가능한 경계 및 실행 환경."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "insufficient_evidence",
+        "evidence": "보존할 조건은 명시되어 있으나 기존 테스트와 비교 실행 환경은 확인하지 않았다.",
+        "judgement": "검증 방향은 정할 수 있지만 필요한 검증 범위와 난도는 미정이다.",
+        "unconfirmed": "기존 테스트 범위, 호출부 조사 가능 범위 및 파일 상태를 재현할 수 있는 검증 환경."
+      }
+    ]
+  }
+}

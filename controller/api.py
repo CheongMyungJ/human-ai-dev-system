@@ -43,9 +43,12 @@ from domain.models import (
     CaseKind,
     CaseProfile,
     CompletionMode,
+    Conclusion,
+    ConclusionRule,
     ControlledCheckpoint,
     ConfirmationState,
     ContentOrigin,
+    CriterionObligation,
     CriterionVerdict,
     DecideAt,
     DecisionKind,
@@ -739,6 +742,12 @@ class IntentCriterionIn(BaseModel):
     method: str = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=200)
     method_summary: str = Field(min_length=1, max_length=200)
+    #: **P4-03: 이 기준이 무엇을 입증하는가.** 비워 두면 제어부가 연결 항목에서
+    #: Profile 정의의 대응표로 도출하고 그 출처를 남긴다. 완료 계약이 없는 Case(v1)에
+    #: 주면 거부된다.
+    obligation: CriterionObligation | None = None
+    #: 원인·조사 기준만. 비워 두면 확정 결론 필수로 취급한다.
+    conclusion_rule: ConclusionRule | None = None
 
 
 class SizingAxisIn(BaseModel):
@@ -783,6 +792,9 @@ class IntentDraftIn(BaseModel):
     criteria: list[IntentCriterionIn] = Field(default_factory=list)
     #: 작업 수준 판단. 비워 두면 수준 미결정으로 남는다(P3-01).
     sizing: SizingIn | None = None
+    #: 요청이 명시한 목적 의무(P4-03). 비워 두면 대표 목적만이다. 완료 계약이 없는
+    #: Case 에 주면 거부된다.
+    objectives: list[CriterionObligation] | None = None
     #: 이 버전이 반영한 피드백. 반영/미반영을 이유와 함께 닫는다.
     reflects_feedback: list[str] = Field(default_factory=list)
     not_reflected: dict[str, str] = Field(default_factory=dict)
@@ -844,6 +856,8 @@ class IntentStructureIn(BaseModel):
     # 있고 여기에는 영향·짧은 판단 한 줄만 온다.
     # `None` 은 "판단하지 않음"이며 `{"axes": []}` 와 같은 뜻이 아니다.
     sizing: dict[str, Any] | None = None
+    # 요청이 명시한 목적 의무(P4-03). 열거값 목록뿐이다. `None` 은 선언 없음이다.
+    objectives: list[str] | None = Field(default=None, max_length=16)
 
 
 def _refuse(reason: AgreementRefusal, detail: str) -> HTTPException:
@@ -880,10 +894,17 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
             questions=[q.model_dump() for q in payload.questions],
             case_id=case_id,
             authored_by=payload.authored_by,
-            criteria=[c.model_dump(mode="json") for c in payload.criteria],
+            criteria=[
+                c.model_dump(mode="json", exclude_none=True) for c in payload.criteria
+            ],
             sizing=(payload.sizing.model_dump(mode="json") if payload.sizing else None),
             profile=case.get("profile"),
             profile_version=case.get("profile_version"),
+            objectives=(
+                [o.value for o in payload.objectives]
+                if payload.objectives is not None
+                else None
+            ),
         )
     except NotFoundError as exc:
         raise _handle(exc)
@@ -1251,6 +1272,7 @@ def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dic
             payload.questions,
             payload.criteria,
             payload.sizing,
+            payload.objectives,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -1688,6 +1710,9 @@ class CriterionResultIn(BaseModel):
     #: **어떻게 충족했는가**(P3-R4). `not_reproduced` 는 `met` 이 될 수 없고,
     #: `already_satisfied` 는 검증 실행의 증거를 요구한다(case-profiles 4절).
     satisfaction: Satisfaction | None = None
+    #: **P4-03: 결론.** 원인·조사 기준에만 붙는다. `met` 이면 필수이고, 판단 불가로
+    #: `met` 을 적으려면 그 기준의 결론 요구가 판단 불가를 허용해야 한다.
+    conclusion: Conclusion | None = None
 
 
 class CompletionPolicyIn(BaseModel):
@@ -1771,6 +1796,7 @@ def record_criterion_result(
             evidence_artifact_rev=payload.evidence_artifact_rev,
             composition_id=payload.composition_id,
             satisfaction=payload.satisfaction,
+            conclusion=payload.conclusion,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

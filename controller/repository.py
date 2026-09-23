@@ -26,12 +26,12 @@ from controller.db import (
     transaction,
     utc_now,
 )
+from domain import completion_meaning as meaningmod
 from domain import ids, prep_doc, profiles, quality
 from domain import progression
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
     NEEDS_CONTROLLED_START,
-    SATISFACTION_ALLOWING_MET,
     SATISFACTION_NEEDING_RUN_EVIDENCE,
     assess_fast_lane,
     classify_change,
@@ -86,11 +86,14 @@ from domain.models import (
     ClosureKind,
     CompletionMode,
     CompositionEntrySource,
+    Conclusion,
+    ConclusionRule,
     ConfirmationState,
     ConformanceMethod,
     ContentOrigin,
     ContextRefRole,
     ControlledCheckpoint,
+    CriterionObligation,
     CriterionState,
     CriterionVerdict,
     DecideAt,
@@ -272,15 +275,30 @@ def _criterion_fingerprint(criterion: Any) -> str:
     **그것이 전부라고 주장하지 않는다** — 요약이 같은데 본문이 달라졌을 수 있고,
     그 경우는 의미 검토가 본다.
     """
-    return _snapshot_hash(
-        "\x00".join(
-            (
-                str(criterion["summary"]),
-                str(criterion["method_summary"]),
-                str(criterion["relates_to"]),
-            )
-        )
-    )
+    parts = [
+        str(criterion["summary"]),
+        str(criterion["method_summary"]),
+        str(criterion["relates_to"]),
+    ]
+    # **P4-03: 목적 의무와 결론 요구도 기준의 내용이다.** 결론 요구를 확정 필수에서
+    # 판단 불가 허용으로 바꾸는 것이 완료를 쉽게 만드는 가장 조용한 변경이며, 지문이
+    # 그것을 보지 않으면 material delta 가 되지 않는다(D-60 "기준 약화도 감지 대상").
+    #
+    # **값이 있을 때만 더한다.** v1 기준(둘 다 NULL)의 지문은 P4-03 이전과 같아야
+    # 한다 — 달라지면 이미 기록된 누적 변경의 해시와 어긋나고 이어 가던 판정이 끊긴다.
+    for name in ("obligation", "conclusion_rule"):
+        value = _row_get(criterion, name)
+        if value is not None:
+            parts.append(f"{name}={value}")
+    return _snapshot_hash("\x00".join(parts))
+
+
+def _row_get(row: Any, name: str) -> Any:
+    """`sqlite3.Row` 와 dict 를 같은 방식으로 읽는다. 컬럼이 없으면 `None`."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
 
 
 def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -1343,6 +1361,7 @@ class Repository:
         questions: Iterable[dict[str, Any]],
         criteria: Iterable[dict[str, Any]] | None = None,
         sizing: dict[str, Any] | None = None,
+        objectives: Iterable[str] | None = None,
     ) -> dict[str, Any]:
         """Runner가 계산한 의도 구조를 반영한다.
 
@@ -1365,9 +1384,33 @@ class Repository:
                 "intent structure must carry exactly the required fields;"
                 f" missing={missing} extra={extra}"
             )
+        # **P4-03: 요청이 명시한 목적 의무.** 완료 계약이 있는 Case 만 받는다 — 계약이
+        # 없는 Case 에 목적을 기록하면 그 Case 의 완료 판정에 없던 조건이 생긴다.
+        # `None` 은 "선언 없음"이며 빈 목록(`[]`, "대표 목적 외에 없음")과 다르다.
+        objectives_json: str | None = None
+        if objectives is not None:
+            if self.completion_contract(intent["case_id"]) is None:
+                raise ConflictError(
+                    "objectives need a profile with a completion contract (definition v2);"
+                    " this case follows definition v1"
+                )
+            declared: list[str] = []
+            for raw in objectives:
+                try:
+                    value = CriterionObligation(str(raw)).value
+                except ValueError as exc:
+                    raise ConflictError(f"unknown objective: {raw}") from exc
+                if value not in declared:
+                    declared.append(value)
+            objectives_json = json.dumps(declared)
 
         now = utc_now()
         with transaction(self.conn):
+            if objectives_json is not None:
+                self.conn.execute(
+                    "UPDATE intent_version SET objectives_json = ? WHERE id = ?",
+                    (objectives_json, intent_version_id),
+                )
             for row in rows:
                 self.conn.execute(
                     "INSERT INTO intent_field"
@@ -4112,18 +4155,59 @@ class Repository:
         """
         intent = self.get_intent_version(intent_version_id)
         rows = list(criteria)
+        contract = self.completion_contract(intent["case_id"])
+        # **P4-03: 기준마다 무엇을 입증하는가.** 계약이 있는 Case 만 정한다. 원문이
+        # 적었으면 그것이고, 아니면 연결 항목에 정의의 대응표를 적용한다 — 본문 해석이
+        # 아니라 공개된 정의의 적용이며, 출처를 따로 남긴다.
+        obligations: list[tuple[str | None, str | None, str | None]] = []
+        for row in rows:
+            reported = row.get("obligation")
+            rule = row.get("conclusion_rule")
+            if contract is None:
+                if reported or rule:
+                    raise ConflictError(
+                        f"criterion {row.get('key')} carries an obligation but this case"
+                        " follows profile definition v1 (no completion contract)"
+                    )
+                obligations.append((None, None, None))
+                continue
+            try:
+                obligation, source = meaningmod.derive_obligation(
+                    contract, str(row["relates_to"]), reported
+                )
+                conclusion_rule = ConclusionRule(rule).value if rule else None
+            except ValueError as exc:
+                raise ConflictError(f"criterion {row.get('key')}: {exc}") from exc
+            if conclusion_rule is not None and (
+                obligation not in meaningmod.CONCLUSION_OBLIGATIONS
+            ):
+                raise ConflictError(
+                    f"criterion {row.get('key')}: conclusion_rule belongs to cause/answer"
+                    f" criteria, not {obligation.value if obligation else 'none'}"
+                )
+            obligations.append(
+                (
+                    obligation.value if obligation else None,
+                    source.value if source else None,
+                    conclusion_rule,
+                )
+            )
         now = utc_now()
         with transaction(self.conn):
-            for row in rows:
+            for row, (obligation_value, source_value, rule_value) in zip(rows, obligations):
                 self.conn.execute(
                     "INSERT INTO success_criterion"
                     " (id, case_id, intent_version_id, criterion_key, summary,"
-                    "  method_summary, relates_to, state, created_at)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    "  method_summary, relates_to, state, created_at,"
+                    "  obligation, obligation_source, conclusion_rule)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
                     " ON CONFLICT(intent_version_id, criterion_key) DO UPDATE SET"
                     "   summary = excluded.summary,"
                     "   method_summary = excluded.method_summary,"
-                    "   relates_to = excluded.relates_to",
+                    "   relates_to = excluded.relates_to,"
+                    "   obligation = excluded.obligation,"
+                    "   obligation_source = excluded.obligation_source,"
+                    "   conclusion_rule = excluded.conclusion_rule",
                     (
                         ids.new_id("crit"),
                         intent["case_id"],
@@ -4139,6 +4223,9 @@ class Repository:
                         _field_name(row["relates_to"]),
                         CriterionState.PROPOSED.value,
                         now,
+                        obligation_value,
+                        source_value,
+                        rule_value,
                     ),
                 )
             # 기준이 생기는 순간 결과는 `unverified` 로 시작한다. 결과 행이 없는 것과
@@ -4240,7 +4327,7 @@ class Repository:
                 "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
                 " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
                 " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?,"
-                " satisfaction = ?, recheck_source = ?"
+                " satisfaction = ?, conclusion = ?, recheck_source = ?"
                 " WHERE criterion_id = ?",
                 (
                     old_result["verdict"],
@@ -4253,6 +4340,9 @@ class Repository:
                     old_result["recorded_at"],
                     old_result["composition_id"],
                     old_result["satisfaction"],
+                    # 결론도 판정의 일부다(P4-03). 지문이 같다는 것은 의무·결론 요구도
+                    # 같다는 뜻이므로 옛 결론이 새 기준에서도 같은 뜻이다.
+                    old_result["conclusion"],
                     f"carried_from:{old_crit['id']}",
                     crit["id"],
                 ),
@@ -4281,7 +4371,9 @@ class Repository:
             "       r.summary AS result_summary, r.recorded_by, r.recorded_at,"
             # **P3-R4: 어떻게 충족했는가와 그 판정이 이어진 것인가.** 화면이 "다시
             # 확인한 판정"과 "이어진 판정"을 구별해야 한다(intent-artifacts 69행).
-            "       r.satisfaction, r.recheck_source"
+            "       r.satisfaction, r.recheck_source,"
+            # **P4-03: 결론.** 원인·조사 기준이 확정했는가 판단 불가인가.
+            "       r.conclusion"
             " FROM success_criterion c"
             " LEFT JOIN criterion_result r ON r.criterion_id = c.id"
             " WHERE c.intent_version_id = ?"
@@ -4319,6 +4411,7 @@ class Repository:
         evidence_artifact_rev: int | None = None,
         composition_id: str | None = None,
         satisfaction: Satisfaction | None = None,
+        conclusion: Conclusion | None = None,
     ) -> dict[str, Any]:
         """기준별 판정을 기록한다.
 
@@ -4348,6 +4441,11 @@ class Repository:
 
         마지막 줄을 화면이 아니라 **여기서** 막는다. 문구로만 구별하면 API 직접
         호출로 우회된다.
+
+        **P4-03: 완료 계약이 있는 기준(Profile 정의 v2)은 목적 의무의 규칙을 더
+        받는다**(`domain/completion_meaning.check_result`). `met` 은 충족 방식이 필수이고
+        — 생략이 미재현 차단의 우회로였다 — 의무마다 허용된 방식·근거 실행이 다르며,
+        원인·조사 기준은 결론(`conclusion`)을 적는다. v1 기준은 이전 규칙 그대로다.
         """
         criterion = self.get_success_criterion(criterion_id)
         self.guard_open_case(criterion["case_id"])
@@ -4395,7 +4493,9 @@ class Repository:
 
             # --- P3-R4: 어떻게 충족했는가 --------------------------------
             if satisfaction is not None:
-                if satisfaction.value not in SATISFACTION_ALLOWING_MET:
+                # 어느 의무에서든 미재현은 `met` 이 아니다. P4-03 의 새 방식
+                # (`investigated`·`preserved`)은 아래 목적 의무 규칙이 받거나 거부한다.
+                if satisfaction is Satisfaction.NOT_REPRODUCED:
                     raise ConflictError(
                         f"cannot record 'met' with satisfaction='{satisfaction.value}':"
                         " not reproducing a defect is not evidence that it is fixed"
@@ -4417,6 +4517,20 @@ class Repository:
                 "satisfaction='changed_and_verified' does not fit a non-met verdict"
             )
 
+        # --- P4-03: 목적 의무의 규칙 ------------------------------------------
+        violations = meaningmod.check_result(
+            contract_applies=self.completion_contract(criterion["case_id"]) is not None,
+            obligation=criterion.get("obligation"),
+            conclusion_rule=criterion.get("conclusion_rule"),
+            verdict=verdict,
+            satisfaction=satisfaction,
+            conclusion=conclusion,
+            evidence_kind=evidence_kind,
+            evidence_run=run,
+        )
+        if violations:
+            raise ConflictError("; ".join(str(v) for v in violations))
+
         if composition_id is not None:
             composition = self.get_code_composition(composition_id)
             if composition["case_id"] != criterion["case_id"]:
@@ -4428,7 +4542,7 @@ class Repository:
                 "UPDATE criterion_result SET verdict = ?, evidence_kind = ?,"
                 " evidence_run_id = ?, evidence_artifact_id = ?, evidence_artifact_rev = ?,"
                 " summary = ?, recorded_by = ?, recorded_at = ?, composition_id = ?,"
-                " satisfaction = ?, recheck_source = NULL"
+                " satisfaction = ?, conclusion = ?, recheck_source = NULL"
                 " WHERE criterion_id = ?",
                 (
                     verdict.value,
@@ -4441,6 +4555,7 @@ class Repository:
                     now,
                     composition_id,
                     satisfaction.value if satisfaction is not None else None,
+                    conclusion.value if conclusion is not None else None,
                     criterion_id,
                 ),
             )
@@ -4567,6 +4682,19 @@ class Repository:
         for item in state["unresolved_feedback"]:
             unresolved.append({"kind": "unresolved_feedback", "id": item["id"], "verdict": "open"})
 
+        # **P4-03: 목적마다 기준이 있는가.** 요구된 목적 의무에 기준이 하나도 없으면
+        # 그 목적은 확인할 수단 없이 끝난다 — "원인 확정과 수정" 중 원인 쪽 기준이
+        # 없으면 수정 기준만으로 완료되던 자리다. 기준이 아니므로 예외 수용 대상도
+        # 아니다.
+        meaning_block: dict[str, Any] | None = None
+        if self.completion_contract(case_id) is not None:
+            meaning = self.completion_meaning(case_id)
+            meaning_block = meaningmod.snapshot_block(meaning)
+            for obligation in meaning["missing"]:
+                unresolved.append(
+                    {"kind": "objective_without_criteria", "id": obligation, "verdict": "missing"}
+                )
+
         met = sum(1 for c in criteria if c["verdict"] == CriterionVerdict.MET.value)
         payload = {
             "case_id": case_id,
@@ -4583,6 +4711,10 @@ class Repository:
             "unresolved": unresolved,
             "unsettled_runs": unsettled,
         }
+        # **계약이 있는 Case 만 넣는다.** v1 Case 의 후보에 이 키가 생기면 해시가 바뀌어
+        # controlled 의 결과 확인이 소급으로 낡는다.
+        if meaning_block is not None:
+            payload["meaning"] = meaning_block
         payload["snapshot_hash"] = _snapshot_hash(
             json.dumps(payload, sort_keys=True, ensure_ascii=False)
         )
@@ -4625,8 +4757,8 @@ class Repository:
                 "INSERT INTO completion_candidate"
                 " (id, case_id, revision, intent_version_id, intent_agreement_state,"
                 "  gate_verdict, criteria_total, criteria_met, unresolved_json,"
-                "  unsettled_runs_json, snapshot_hash, state, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "  unsettled_runs_json, snapshot_hash, state, created_at, meaning_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     candidate_id,
                     case_id,
@@ -4641,6 +4773,11 @@ class Repository:
                     snapshot["snapshot_hash"],
                     CandidateState.OPEN.value,
                     now,
+                    (
+                        json.dumps(snapshot["meaning"], ensure_ascii=False)
+                        if snapshot.get("meaning") is not None
+                        else None
+                    ),
                 ),
             )
             for crit in snapshot["criteria"]:
@@ -4672,6 +4809,9 @@ class Repository:
         candidate = dict(row)
         candidate["unresolved"] = json.loads(candidate.pop("unresolved_json"))
         candidate["unsettled_runs"] = json.loads(candidate.pop("unsettled_runs_json"))
+        # P4-03. 계약이 없는 Case 의 후보는 `None` 이다 — "충족 현황이 비어 있다"가 아니다.
+        meaning_raw = candidate.pop("meaning_json", None)
+        candidate["meaning"] = json.loads(meaning_raw) if meaning_raw else None
         candidate["criteria"] = [
             dict(r)
             for r in self.conn.execute(
@@ -4838,6 +4978,9 @@ class Repository:
             "criterion": AcceptanceRefusal.UNRESOLVED_CRITERIA,
             "open_intent_question": AcceptanceRefusal.OPEN_INTENT_QUESTIONS,
             "unresolved_feedback": AcceptanceRefusal.UNRESOLVED_FEEDBACK,
+            # P4-03. 기준이 없는 목적은 **사람도 인수할 수 없다.** 예외는 기준에만
+            # 붙으므로 여기서 걸러 낼 경로가 없고, 그것이 의도한 모양이다.
+            "objective_without_criteria": AcceptanceRefusal.OBJECTIVE_WITHOUT_CRITERIA,
         }
         for item in candidate["unresolved"]:
             if item["kind"] == "criterion" and item["id"] in excepted:
@@ -4853,6 +4996,12 @@ class Repository:
         # 자동 모드는 예외를 스스로 수용하지 않는다. 예외가 걸린 후보는 사람만 닫는다.
         if mode is AcceptanceMode.AUTO_POLICY and candidate["exceptions"]:
             refusals.append(AcceptanceRefusal.AUTO_POLICY_CANNOT_ACCEPT_EXCEPTION)
+        # P4-03. 정리되지 않은 실험의 임시 변경이 제품 결과에 섞였을 수 있다. 자동
+        # 완료만 막는다 — 사람은 후보에 드러난 잔여를 보고 판단한다(미정리 실행과 같다).
+        if mode is AcceptanceMode.AUTO_POLICY and (candidate.get("meaning") or {}).get(
+            "residue_blocks_auto_completion"
+        ):
+            refusals.append(AcceptanceRefusal.EXPERIMENT_RESIDUE_UNRESOLVED)
 
         # --- P3-R4: controlled 의 확인 순서 --------------------------------
         #
@@ -5044,6 +5193,10 @@ class Repository:
             return None
         snapshot = self._candidate_snapshot(case_id)
         if snapshot["unresolved"] or snapshot["unsettled_runs"]:
+            return None
+        if (snapshot.get("meaning") or {}).get("residue_blocks_auto_completion"):
+            # 실험 잔여가 있으면 후보를 만들지 않는다. 만들면 아직 결과를 확정할 수
+            # 없는 Case 가 `waiting_final_acceptance` 로 보인다.
             return None
         if snapshot["criteria_total"] == 0:
             # 견줄 기준이 없으면 "미해결 0건"이 되어 아무 것도 확인하지 않은 결과가
@@ -6213,6 +6366,15 @@ class Repository:
         """
         self.get_case(case_id)
         mode = self.completion_mode_state(case_id)
+        criteria = self.current_criteria(case_id)
+        for crit in criteria:
+            # **적용되는** 결론 요구. 저장된 값이 NULL 이면 확정 필수로 취급한다는
+            # 사실을 화면이 따로 계산하지 않게 여기서 붙인다(P4-03).
+            crit["conclusion_rule_effective"] = (
+                meaningmod.effective_conclusion_rule(crit.get("conclusion_rule")).value
+                if crit.get("obligation") in {o.value for o in meaningmod.CONCLUSION_OBLIGATIONS}
+                else None
+            )
         return {
             "case_id": case_id,
             "completion_mode": mode["mode"],
@@ -6220,7 +6382,10 @@ class Repository:
             # 도출한 값을 같은 모양으로 보이면 고르지 않은 자동 완료가 사용자의
             # 설정처럼 읽힌다.
             "completion_mode_source": mode["source"],
-            "criteria": self.current_criteria(case_id),
+            "criteria": criteria,
+            # **P4-03: 목적별 완료 의미.** 요구된 목적마다 기준·충족 수, 기준이 없는
+            # 목적, 실험의 정리 상태. 계약이 없는 Case 는 `contract = None` 이다.
+            "completion_meaning": self.completion_meaning(case_id),
             "unsettled_runs": self.unsettled_runs(case_id),
             "candidate": self.current_completion_candidate(case_id),
             "closure": self.get_closure(case_id),
@@ -7710,6 +7875,66 @@ class Repository:
         """그 Case 의 구조 보고가 가져야 하는 항목. 게이트와 구조 검사가 함께 쓴다."""
         case = self.get_case(case_id)
         return profiles.required_fields(case.get("profile"), case.get("profile_version"))
+
+    # ------------------------------------------------ P4-03 완료 의미
+
+    def completion_contract(self, case_id: str) -> profiles.CompletionContract | None:
+        """그 Case 의 완료 계약. **기록된 정의판으로 조회한다.**
+
+        v1 Case 와 Profile 미기록 Case 는 `None` 이다. 현재 정의판으로 대신 답하면
+        기존 Case 에 새 완료 규칙이 조용히 소급된다(D-62).
+        """
+        case = self.get_case(case_id)
+        return profiles.completion_contract(case.get("profile"), case.get("profile_version"))
+
+    def _experiment_run_rows(self, case_id: str) -> list[dict[str, Any]]:
+        """실험 정리 상태를 도출하는 데 필요한 실행 행. **시작 순**이다."""
+        rows = self.conn.execute(
+            "SELECT run_id, status, outcome, permission, is_experiment, repository_id,"
+            " workspace_effect_json FROM run WHERE case_id = ?"
+            " ORDER BY created_at, run_id",
+            (case_id,),
+        ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.pop("workspace_effect_json")
+            item["workspace_effect"] = json.loads(raw) if raw else None
+            result.append(item)
+        return result
+
+    def completion_meaning(self, case_id: str) -> dict[str, Any]:
+        """이 Case 의 **완료 의미의 현재 상태**(P4-03). 저장하지 않고 도출한다.
+
+        요구된 목적 의무마다 어떤 기준이 있고 몇 건이 충족됐는지, 기준이 하나도 없는
+        목적, 실험의 정리 상태를 한 곳에서 계산한다. 조회·후보·완료 검사가 모두 이
+        값을 본다 — 두 벌로 계산하면 한쪽만 고치는 실수가 생긴다.
+
+        조건부 의무(maintenance 의 보존)는 **최신 의도 버전의 항목이 채워졌는가**로
+        정한다. 항목 상태는 구조 보고의 값이며 본문을 읽은 것이 아니다.
+        """
+        case = self.get_case(case_id)
+        contract = profiles.completion_contract(case.get("profile"), case.get("profile_version"))
+        latest = self.latest_intent_version(case_id)
+        declared: list[str] | None = None
+        filled: list[str] = []
+        if latest is not None:
+            if latest.get("objectives_json"):
+                declared = json.loads(latest["objectives_json"])
+            filled = [
+                f["field"]
+                for f in self.list_intent_fields(latest["id"])
+                if f["state"] != ConfirmationState.UNDECIDED.value
+            ]
+        return meaningmod.evaluate(
+            profile=case.get("profile"),
+            version=case.get("profile_version"),
+            contract=contract,
+            declared=declared,
+            filled_fields=filled,
+            criteria=self.current_criteria(case_id),
+            runs=self._experiment_run_rows(case_id),
+        )
 
     # ------------------------------------------------------------ Autonomy
 

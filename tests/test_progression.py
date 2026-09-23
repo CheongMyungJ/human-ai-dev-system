@@ -186,7 +186,15 @@ def test_auto_completion_does_not_fire_while_something_is_unresolved(harness):
     harness.ready_for_acceptance(case["id"], project["id"])
 
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met")
+    # P4-03. v2 기준은 **어떻게** 충족했는지 함께 적어야 기록된다. 응답을 확인하는
+    # 이유는, 거부된 `met` 을 모른 채 지나가면 뒤의 단정이 다른 상황을 시험하게 되기
+    # 때문이다(이 자리에서 실제로 그랬다).
+    assert (
+        harness.record_result(
+            case["id"], criteria[0]["id"], "met", satisfaction="changed_and_verified"
+        ).status_code
+        == 200
+    )
     harness.record_result(case["id"], criteria[1]["id"], "not_met")
 
     view = harness.client.get(f"/api/cases/{case['id']}").json()
@@ -845,7 +853,15 @@ def test_an_unaffected_criterion_keeps_its_verdict(harness):
     harness.ready_for_acceptance(case["id"], project["id"])
 
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met")
+    # P4-03. v2 기준은 **어떻게** 충족했는지 함께 적어야 기록된다. 응답을 확인하는
+    # 이유는, 거부된 `met` 을 모른 채 지나가면 뒤의 단정이 다른 상황을 시험하게 되기
+    # 때문이다(이 자리에서 실제로 그랬다).
+    assert (
+        harness.record_result(
+            case["id"], criteria[0]["id"], "met", satisfaction="changed_and_verified"
+        ).status_code
+        == 200
+    )
 
     # 의도 항목만 바꾸고 기준은 그대로 둔다.
     fields = dict(FIELDS)
@@ -873,7 +889,15 @@ def test_a_changed_criterion_does_not_keep_its_verdict(harness):
     harness.submit_intent_draft(case["id"], FIELDS)
     harness.ready_for_acceptance(case["id"], project["id"])
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met")
+    # P4-03. v2 기준은 **어떻게** 충족했는지 함께 적어야 기록된다. 응답을 확인하는
+    # 이유는, 거부된 `met` 을 모른 채 지나가면 뒤의 단정이 다른 상황을 시험하게 되기
+    # 때문이다(이 자리에서 실제로 그랬다).
+    assert (
+        harness.record_result(
+            case["id"], criteria[0]["id"], "met", satisfaction="changed_and_verified"
+        ).status_code
+        == 200
+    )
 
     changed = [
         {

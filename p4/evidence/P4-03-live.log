@@ -1,0 +1,243 @@
+
+========================================================================
+P4-03 라이브 130017994 — 데이터 C:\Users\USER\AppData\Local\Temp\hads-p4-03-live\130017994
+========================================================================
+제어부 health: {'status': 'ok', 'schema_version': 15, 'relay_buffered': 0}
+제어부 pid=13236 Runner pid=2456
+
+========================================================================
+A. defect_fix — 저장 뒤 목록이 옛 값을 보인다
+========================================================================
+Case case-1911d71a8c11e478 profile=defect_fix version=2
+run run-p4-03-A-130017994 outcome=completed exit=0 version=codex-cli 0.154.0
+--- A 기준 ---
+[
+  {
+    "key": "C-01",
+    "relates_to": "goal",
+    "obligation": "cause",
+    "obligation_source": "reported",
+    "conclusion_rule": "definitive_required",
+    "conclusion_rule_effective": "definitive_required",
+    "summary": "증상 발생 원인의 확정"
+  },
+  {
+    "key": "C-02",
+    "relates_to": "restore_scope",
+    "obligation": "restoration",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "저장 직후 목록 표시 복원"
+  },
+  {
+    "key": "C-03",
+    "relates_to": "observed_behavior",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "새로 고침 후 저장값 유지"
+  }
+]
+--- A 목적별 완료 의미 ---
+[
+  {
+    "obligation": "restoration",
+    "required": true,
+    "required_by": [
+      "profile"
+    ],
+    "criteria": [
+      "C-02"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  },
+  {
+    "obligation": "cause",
+    "required": true,
+    "required_by": [
+      "declared"
+    ],
+    "criteria": [
+      "C-01"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  },
+  {
+    "obligation": "preservation",
+    "required": false,
+    "required_by": [],
+    "criteria": [
+      "C-03"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  }
+]
+  [OK] doc_version_5: doc_version=5
+  [OK] objectives_declared: 기대 ['cause'] ⊆ 문서 ['cause']
+  [OK] obligations_reported: 원문이 의무를 적은 기준 3/3
+  [OK] conclusion_rule_cause: cause 기준의 결론 요구 ['definitive_required'] (기대 definitive_required)
+  [OK] every_required_objective_has_a_criterion: 기준 없는 목적 []
+
+========================================================================
+B. research — JSON 직렬화 후보 비교
+========================================================================
+Case case-c4bf1312780e9cf4 profile=research version=2
+run run-p4-03-B-130017994 outcome=completed exit=0 version=codex-cli 0.154.0
+--- B 기준 ---
+[
+  {
+    "key": "C-01",
+    "relates_to": "research_questions",
+    "obligation": "answer",
+    "obligation_source": "reported",
+    "conclusion_rule": "bounded_report_allowed",
+    "conclusion_rule_effective": "bounded_report_allowed",
+    "summary": "저장 성능 질문에 근거로 답하기"
+  },
+  {
+    "key": "C-02",
+    "relates_to": "evaluation_criteria",
+    "obligation": "answer",
+    "obligation_source": "reported",
+    "conclusion_rule": "bounded_report_allowed",
+    "conclusion_rule_effective": "bounded_report_allowed",
+    "summary": "의존성 부담의 차이 설명"
+  },
+  {
+    "key": "C-03",
+    "relates_to": "expected_outcome",
+    "obligation": "answer",
+    "obligation_source": "reported",
+    "conclusion_rule": "bounded_report_allowed",
+    "conclusion_rule_effective": "bounded_report_allowed",
+    "summary": "종합 판단 또는 판단 불가 보고"
+  },
+  {
+    "key": "C-04",
+    "relates_to": "exclusions",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "제품 코드 상태 보존"
+  }
+]
+--- B 목적별 완료 의미 ---
+[
+  {
+    "obligation": "answer",
+    "required": true,
+    "required_by": [
+      "profile"
+    ],
+    "criteria": [
+      "C-01",
+      "C-02",
+      "C-03"
+    ],
+    "total": 3,
+    "met": 0,
+    "status": "open"
+  },
+  {
+    "obligation": "preservation",
+    "required": false,
+    "required_by": [],
+    "criteria": [
+      "C-04"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  }
+]
+  [OK] doc_version_5: doc_version=5
+  [OK] objectives_declared: 기대 [] ⊆ 문서 []
+  [OK] obligations_reported: 원문이 의무를 적은 기준 4/4
+  [OK] conclusion_rule_answer: answer 기준의 결론 요구 ['bounded_report_allowed'] (기대 bounded_report_allowed)
+  [OK] every_required_objective_has_a_criterion: 기준 없는 목적 []
+
+========================================================================
+C. refactoring — 저장소 모듈 정리
+========================================================================
+Case case-66caa157cd755287 profile=refactoring version=2
+run run-p4-03-C-130017994 outcome=completed exit=0 version=codex-cli 0.154.0
+--- C 기준 ---
+[
+  {
+    "key": "C-01",
+    "relates_to": "improvement_criteria",
+    "obligation": "improvement",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "파일 읽기 구현의 중복 제거"
+  },
+  {
+    "key": "C-02",
+    "relates_to": "preserved_contracts",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "공개 이름과 반환 형식 유지"
+  },
+  {
+    "key": "C-03",
+    "relates_to": "preserved_contracts",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "호출부 호환성과 외부 동작 보존"
+  }
+]
+--- C 목적별 완료 의미 ---
+[
+  {
+    "obligation": "improvement",
+    "required": true,
+    "required_by": [
+      "profile"
+    ],
+    "criteria": [
+      "C-01"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  },
+  {
+    "obligation": "preservation",
+    "required": true,
+    "required_by": [
+      "profile"
+    ],
+    "criteria": [
+      "C-02",
+      "C-03"
+    ],
+    "total": 2,
+    "met": 0,
+    "status": "open"
+  }
+]
+  [OK] doc_version_5: doc_version=5
+  [OK] objectives_declared: 기대 [] ⊆ 문서 []
+  [OK] obligations_reported: 원문이 의무를 적은 기준 3/3
+  [OK] every_required_objective_has_a_criterion: 기준 없는 목적 []
+
+========================================================================
+요약
+========================================================================
+관찰(지시와 다름): 없음
+runner 종료 (returncode=1)
+controller 종료 (returncode=1)

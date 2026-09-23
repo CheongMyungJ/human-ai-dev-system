@@ -1,0 +1,177 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 5,
+  "case_id": "case-1911d71a8c11e478",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-p4-03-A-130017994",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "defect_fix",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "observed_behavior",
+    "expected_behavior",
+    "expectation_basis",
+    "occurrence_conditions",
+    "restore_scope"
+  ],
+  "fields": {
+    "goal": {
+      "text": "저장 후 목록에 이전 값이 표시되는 원인을 확정하고, 그 원인을 수정하여 기대 동작을 복원한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "저장 후 목록 화면으로 돌아오면 새로 고침 없이 변경한 값이 표시되며, 확정한 원인과 수정의 인과관계가 검증된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "store.py의 save()와 list_items()를 중심으로 저장 후 목록 조회에서 이전 값이 표시되는 원인을 조사하고 수정한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "constraints": {
+      "text": "원인 확정과 해당 원인의 수정이 모두 필요하다. 원인을 확정하지 못한 채 증상만 사라지거나 재현되지 않는 상태는 완료로 인정하지 않는다. 확인 전에는 원인이나 수정 방법을 고정하지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "실제 화면의 재현 환경, 저장·목록 복귀·새로 고침에서의 호출 흐름, 화면 검증에 사용할 실행 경로가 확인되지 않았다.",
+      "state": "proposed",
+      "origin": "observation"
+    },
+    "observed_behavior": {
+      "text": "사용자 보고에 따르면 저장 버튼을 누른 뒤 목록 화면으로 돌아오면 이전 값이 보이며, 새로 고침하면 변경한 값이 표시된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_behavior": {
+      "text": "저장 버튼을 누른 뒤 목록 화면으로 돌아오면 방금 저장한 값이 표시된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expectation_basis": {
+      "text": "사용자가 저장 후 이전 값이 표시되는 현상을 결함으로 제시하고, 원인을 확정하여 수정할 것을 명시했다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "occurrence_conditions": {
+      "text": "값을 변경하고 저장 버튼을 누른 다음 목록 화면으로 돌아올 때 발생한다. 목록에는 변경 전 값이 표시되고 새로 고침 후에는 새 값이 보인다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "restore_scope": {
+      "text": "값 변경·저장·목록 복귀 흐름에서 목록 표시가 방금 저장한 값을 반영하는 동작을 복원한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "보고한 증상을 재현하고 수정 후 화면 동작을 검증할 수 있는 실행 환경과 화면 진입 경로는 무엇인가요? 저장·목록 복귀·새로 고침 시 호출되는 코드가 있다면 그 위치도 필요합니다.",
+      "summary": "화면 재현 및 검증 경로 확보",
+      "decide_at": "plan",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "goal",
+      "text": "저장 후 목록에 이전 값이 표시되는 원인이 확정되고, 새로 고침 후 새 값이 표시되는 현상까지 동일한 설명과 관찰 근거로 연결된다. 정적 코드에서 발견한 의심 지점만으로 원인 확정을 대체하지 않는다.",
+      "method": "수정 전 보고된 흐름을 재현하여 save()와 list_items()의 호출 순서, 파일 내용, 캐시 상태, 반환값 및 화면 표시를 비교한다. 의심한 원인 조건을 통제하는 비교 검증으로 증상과의 인과관계를 확인하고, 새로 고침 시 달라지는 상태를 추적한다. 실제 화면 검증 경로는 q1에서 확인한다.",
+      "summary": "증상 발생 원인의 확정",
+      "method_summary": "상태 추적과 조건 통제로 인과관계 검증",
+      "obligation": "cause",
+      "conclusion_rule": "definitive_required"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "restore_scope",
+      "text": "확정된 원인을 수정한 뒤, 기존 값을 조회하고 값을 변경·저장한 다음 목록으로 돌아오는 흐름에서 새로 고침 없이 변경한 값이 표시된다. 수정 전 실패와 수정 후 성공을 동일한 재현 조건에서 확인한다.",
+      "method": "기존 목록 조회 후 save()를 호출하고 list_items()를 다시 호출하는 회귀 검증에서 저장값과 반환값을 비교한다. q1에서 확보한 실제 화면 경로로 같은 흐름을 수행하여 변경값 표시를 확인하고, 수정 내용이 C-01에서 확정한 원인을 해소하는지 검토한다.",
+      "summary": "저장 직후 목록 표시 복원",
+      "method_summary": "함수 회귀 검증과 화면 흐름 확인",
+      "obligation": "restoration"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "observed_behavior",
+      "text": "새로 고침하면 저장한 새 값이 표시되는 기존 동작이 유지된다.",
+      "method": "값을 변경·저장한 뒤 파일에 해당 값이 기록되었는지 확인하고, 실제 화면에서 새로 고침하여 같은 값이 표시되는지 비교한다.",
+      "summary": "새로 고침 후 저장값 유지",
+      "method_summary": "파일 기록과 새로 고침 결과 대조",
+      "obligation": "preservation"
+    }
+  ],
+  "objectives": [
+    "cause"
+  ],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "low",
+        "evidence": "사용자가 결함 증상, 기대하는 표시 결과, 조사할 함수, 원인 확정이 필요한 완료 조건을 명시했다.",
+        "judgement": "복원할 동작과 원인 확정 의무가 명확하다.",
+        "unconfirmed": "실제 화면에서 사용할 재현 및 검증 경로."
+      },
+      {
+        "axis": "change_scope",
+        "weight": "medium",
+        "evidence": "store.py에 저장·조회 함수와 모듈 캐시가 함께 있으나, 제공된 작업 폴더에서는 화면 및 호출부 코드를 확인하지 못했다.",
+        "judgement": "직접 조사 대상은 작지만 실제 화면 증상과의 연결 및 필요한 변경 범위는 추가 확인이 필요하다.",
+        "unconfirmed": "호출부, 캐시 수명, 새로 고침 처리와의 의존 관계."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "save()는 items.json을 읽고 값을 변경하여 다시 기록하며, list_items()는 캐시된 목록 객체를 반환한다.",
+        "judgement": "파일 저장과 반환 객체에 의존하는 기존 계약의 범위를 판단할 근거가 부족하다.",
+        "unconfirmed": "데이터 형식 계약, 반환 객체의 재사용 여부, 동시 접근 및 다른 저장 경로."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "확인한 코드에는 로컬 JSON 파일 접근이 있으나 사용자 구분, 접근 권한, 데이터 민감도에 관한 정보는 없다.",
+        "judgement": "권한 및 민감 데이터에 대한 영향을 판단할 수 없다.",
+        "unconfirmed": "실행 계정의 파일 접근 권한, 데이터 민감도, 사용자 간 캐시 공유 여부."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "insufficient_evidence",
+        "evidence": "save()는 JSON 파일 전체를 다시 기록한다. 실제 데이터와 백업·복구 방식은 제공되지 않았다.",
+        "judgement": "코드 변경 범위만으로 데이터 관련 실패 비용과 복구 가능성을 판단할 수 없다.",
+        "unconfirmed": "검증 데이터 격리 방법, 실제 저장 파일의 중요도와 복구 수단."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "medium",
+        "evidence": "list_items()는 _CACHE에 items가 있으면 파일을 읽지 않고 반환하며, save()에는 _CACHE를 변경하는 처리가 없다. 실제 화면 흐름에서의 동작은 검증하지 않았다.",
+        "judgement": "캐시와 파일의 불일치는 원인 후보를 뒷받침하지만, 보고된 증상의 원인으로 아직 확정할 수 없다.",
+        "unconfirmed": "증상 발생 시 캐시 상태와 호출 순서, 새로 고침이 새 값을 노출하는 실제 경로."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "evidence": "함수 수준에서는 파일·캐시·반환값을 비교할 수 있으나, 화면 코드와 기존 테스트는 작업 폴더에서 확인되지 않았다.",
+        "judgement": "함수 수준 검증에 더해 실제 화면 재현과 원인 확정 근거를 확보해야 한다.",
+        "unconfirmed": "화면 실행 환경, 기존 검증 도구, 보고된 현상의 재현 가능 조건."
+      }
+    ]
+  }
+}

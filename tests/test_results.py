@@ -269,6 +269,7 @@ def test_a_completed_run_can_prove_a_criterion(harness, agreed_case):
         evidence_run_id="run-ok",
         evidence_artifact_id=run["output_artifact_id"],
         evidence_artifact_rev=run["output_artifact_rev"],
+        satisfaction="changed_and_verified",
     )
     assert response.status_code == 200, response.text
     recorded = response.json()
@@ -298,7 +299,7 @@ def test_a_new_intent_version_does_not_inherit_criteria_or_verdicts(harness, agr
     criterion = harness.criteria(case["id"])[0]
     assert (
         harness.record_result(
-            case["id"], criterion["id"], "met", evidence_kind="human_judgement"
+            case["id"], criterion["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
         ).status_code
         == 200
     )

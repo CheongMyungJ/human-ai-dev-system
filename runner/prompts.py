@@ -62,11 +62,58 @@ def _intent_profile_note(profile: str | None, profile_version: str | None) -> st
     if profile is None or profile_version is None:
         return ""
     d = profiles.resolve(profile, profile_version)
-    return (
+    note = (
         f"\n이 업무의 대표 목적은 **{profile}** 이다: {d.purpose}.\n"
         f"정상 완료의 의미: {d.completion_meaning}\n"
         f"이 초안에서 고정하지 않는 것: {d.not_fixed_in_draft}\n"
     )
+    if d.completion is not None:
+        note += _completion_contract_note(d.completion)
+    return note
+
+
+#: 목적 의무의 설명. 지시문과 화면이 같은 뜻을 쓰도록 정의의 이름표를 그대로 쓴다.
+_OBLIGATION_LINES = "\n".join(
+    f"     {name} — {label}" for name, label in profiles.OBLIGATION_LABEL.items()
+)
+
+
+def _completion_contract_note(contract: profiles.CompletionContract) -> str:
+    """완료 계약이 있는 Profile(정의판 v2)의 **목적·의무·결론 요구** 지시(P4-03).
+
+    세 가지를 따로 말하는 이유가 있다. 목적 선언이 없으면 "원인 확정과 수정" 중 한쪽이
+    대표 Profile 에 묻히고, 기준의 의무가 없으면 보존 기준이 개선 기준에 섞이며, 결론
+    요구가 없으면 판단 불가를 정상 결과로 볼지 알 수 없다(case-profiles 4·5절).
+
+    **모르면 비운다.** 결론 요구를 요청이 말하지 않았으면 적지 않는다 — 시스템이 확정
+    필수로 취급한다. 빈칸을 채우려고 요청에 없는 허용을 지어내면 그것이 완료 조건을
+    느슨하게 만든다.
+    """
+    always = [r.obligation.value for r in contract.requirements if r.when_field_filled is None]
+    conditional = [
+        f"{r.obligation.value}({r.when_field_filled.value} 항목을 채웠을 때)"
+        for r in contract.requirements
+        if r.when_field_filled is not None
+    ]
+    required = ", ".join(always + conditional)
+    return f"""
+이 업무에는 **완료 계약**이 있다. 다음 셋을 JSON 에 함께 적는다.
+  A. 최상위 "objectives": 이 요청이 **명시한** 목적 의무의 목록. 대표 목적
+     ({contract.primary.value})은 적지 않아도 항상 요구된다. 요청이 다른 목적을 함께
+     요구하면 — 예: 결함 수정과 함께 "원인을 확정해 달라" — 그 의무(cause)를 적는다.
+     **요청에 없는 목적을 더하지 마라.** 없으면 빈 목록이다.
+  B. criteria 의 기준마다 "obligation": 그 기준이 아래 의무 중 **무엇을 입증하는가.**
+{_OBLIGATION_LINES}
+     이 업무에서 완료하려면 다음 의무마다 기준이 하나 이상 있어야 한다: {required}.
+     보존할 동작·계약·조건은 개선·목표 기준과 **별도 기준**(preservation)으로 쓴다 —
+     개선 기준의 통과가 보존을 증명하지 않는다.
+  C. cause·answer 기준에는 "conclusion_rule": 확정 결론이 필수면
+     definitive_required, 합의한 조사를 마치고 근거·한계를 보고하면 판단 불가도 정상
+     결과이면 bounded_report_allowed. **요청이 어느 쪽인지 말하지 않으면 적지 마라** —
+     시스템이 확정 필수로 취급한다. 다른 의무의 기준에는 적지 않는다.
+예: "objectives": ["cause"], "criteria": [{{"key": "C-01", "relates_to": "goal",
+    "obligation": "cause", "conclusion_rule": "definitive_required", ...}}]
+"""
 
 
 INTENT_AUTHORING_PROMPT = f"""당신은 개발 요청을 읽고 **의도 초안**을 작성한다.
@@ -478,6 +525,10 @@ LOCAL_EXPERIMENT_PROMPT = """당신은 이 업무의 **허용된 로컬 실험**
 4. **관측을 프로젝트 전체 규칙으로 일반화하지 마라.** 이 실험이 보여 준 것과 그것이
    일반적으로 참인지는 다른 문제다.
 5. 운영 데이터·외부 자원·새 권한이 필요하면 **하지 말고** 그 사실을 적는다.
+6. **끝나기 전에 임시 변경을 되돌려** 작업공간을 실험 전 상태로 둔다. 시스템이 실행
+   전후의 작업공간을 대조해 남은 변경을 찾는다 — 남은 임시 변경은 제품 결과에 섞일 수
+   있어 자동 완료를 막는다. 되돌리지 못했으면 그 사실과 이유를 temporary_changes 에
+   적는다.
 
 출력은 이 형태의 JSON **하나만** 낸다.
 
@@ -706,8 +757,20 @@ def parse_intent_draft(
     text: str,
     profile: str | None = None,
     profile_version: str | None = None,
-) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any] | None]:
-    """AI가 쓴 초안을 필수 항목·질문·성공 기준·수준 판단으로 바꾼다.
+) -> tuple[
+    dict[str, Any],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+    list[str] | None,
+]:
+    """AI가 쓴 초안을 필수 항목·질문·성공 기준·수준 판단·목적 선언으로 바꾼다.
+
+    **목적·의무·결론 요구는 완료 계약이 있는 Profile 에서만 읽는다**(P4-03). 계약이
+    없는 Case 의 응답에 그런 값이 있어도 버린다 — 그 Case 의 문서 형식에는 자리가
+    없고, 받아 두면 v1 기준에 뜻 없는 값이 붙는다. 모르는 의무 이름은 **버리지 않는다**
+    — 문서 작성(`compose`)이 거부해 실행이 실패한다. 조용히 지우면 그 기준이 대표
+    의무로 도출되어 다른 목적이 사라진다.
 
     **비운 항목을 채우지 않는다.** 항목이 통째로 빠져 있어도 여기서 만들어 내지
     않고, `domain.intent_doc.compose` 가 `undecided`/`none` 으로 남긴다.
@@ -719,6 +782,7 @@ def parse_intent_draft(
     raw_fields = doc.get("fields") or {}
     if not isinstance(raw_fields, dict):
         raise ValueError("fields 가 객체가 아니다")
+    contract = profiles.completion_contract(profile, profile_version)
 
     fields: dict[str, Any] = {}
     # **P3-R1: 항목 목록은 Profile 이 정한다.** 빠진 항목은 여기서 만들어 내지 않고
@@ -776,17 +840,28 @@ def parse_intent_draft(
             summary = f"성공 기준 {key} (요약 없음 — 원문을 열람해 확인)"
         if not method_summary:
             method_summary = f"확인 방법 {key} (요약 없음 — 원문을 열람해 확인)"
-        criteria.append(
-            {
-                "key": key,
-                "relates_to": str(raw.get("relates_to") or "expected_outcome"),
-                "text": body,
-                "method": method,
-                "summary": summary,
-                "method_summary": method_summary,
-            }
-        )
-    return fields, questions, criteria, _parse_sizing(doc.get("sizing"))
+        item: dict[str, Any] = {
+            "key": key,
+            "relates_to": str(raw.get("relates_to") or "expected_outcome"),
+            "text": body,
+            "method": method,
+            "summary": summary,
+            "method_summary": method_summary,
+        }
+        if contract is not None:
+            for name in ("obligation", "conclusion_rule"):
+                value = str(raw.get(name) or "").strip()
+                if value:
+                    item[name] = value
+        criteria.append(item)
+
+    objectives: list[str] | None = None
+    if contract is not None and doc.get("objectives") is not None:
+        raw_objectives = doc.get("objectives")
+        if not isinstance(raw_objectives, list):
+            raise ValueError("objectives 가 목록이 아니다")
+        objectives = [str(o).strip() for o in raw_objectives if str(o).strip()]
+    return fields, questions, criteria, _parse_sizing(doc.get("sizing")), objectives
 
 
 def _parse_sizing(raw: Any) -> dict[str, Any] | None:

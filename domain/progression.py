@@ -476,11 +476,15 @@ def blocked_task_keys(
 
 # ============================================ 7. 무변경 충족과 미재현 (3.9절)
 
-#: `met` 으로 저장할 수 있는 충족 방식.
+#: `met` 으로 저장할 수 있는 충족 방식 — **v1 기준(목적 의무 없음)의 규칙**이다.
 #:
 #: `NOT_REPRODUCED` 가 **여기 없다.** "재현 실패나 단일 테스트 통과를 기존 문제
 #: 해결의 증거로 확대하지 않는다"(case-profiles 4절)를 화면이 아니라 쓰기 경로에서
 #: 지킨다 — 문구로만 구별하면 API 직접 호출로 우회된다.
+#:
+#: P4-03 부터 목적 의무가 있는 기준은 의무마다 허용 방식이 다르다
+#: (`domain/completion_meaning.MET_SATISFACTION`). 이 집합은 그 이전 규칙의 기록이며
+#: 쓰기 경로는 미재현 거부만 직접 하고 나머지를 그쪽 규칙에 맡긴다.
 SATISFACTION_ALLOWING_MET: frozenset[str] = frozenset(
     {"changed_and_verified", "already_satisfied"}
 )

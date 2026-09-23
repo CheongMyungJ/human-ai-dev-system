@@ -13,18 +13,34 @@ import {
   ACCEPTANCE_REFUSAL_LABEL,
   ApiError,
   CLOSURE_KIND_LABEL,
+  CONCLUSION_LABEL,
+  CONCLUSION_RULE_LABEL,
   CRITERION_VERDICT_LABEL,
   EVIDENCE_KIND_LABEL,
+  EXPERIMENT_CLEANUP_LABEL,
+  MET_SATISFACTION_BY_OBLIGATION,
+  OBLIGATION_LABEL,
   SATISFACTION_LABEL,
   api,
   intentApi,
   resultApi,
   type CaseDetail,
   type CompletionCandidate,
+  type CompletionMeaning,
   type CriterionVerdict,
   type Run,
   type SuccessCriterion,
 } from './api'
+
+/** 목적이 왜 요구되는가. 서버 값(`profile` 등)을 사람 말로 옮긴다. */
+const REQUIRED_BY_LABEL: Record<string, string> = {
+  profile: 'Profile 필수',
+  profile_conditional: 'Profile 조건부 (항목이 채워짐)',
+  declared: '요청이 명시',
+}
+
+/** v1 기준(의무 없음)이 고를 수 있는 충족 방식 — P3-R4 의 세 값 그대로다. */
+const LEGACY_SATISFACTION = ['changed_and_verified', 'already_satisfied', 'not_reproduced']
 
 const CRITERION_STATE_LABEL: Record<string, string> = {
   proposed: 'AI·사람이 제안한 기준',
@@ -117,6 +133,8 @@ export function ResultPanel(props: { detail: CaseDetail; onChanged: () => void }
           })
         }
       />
+
+      <CompletionMeaningView meaning={view.completion_meaning} />
 
       <h4>기준별 결과</h4>
       {view.criteria.length === 0 ? (
@@ -281,6 +299,96 @@ export function ResultPanel(props: { detail: CaseDetail; onChanged: () => void }
   )
 }
 
+/**
+ * **목적별 완료 의미**(P4-03). 여섯 Profile 은 완료가 뜻하는 바가 다르다 — 리팩터링은
+ * 개선과 보존을 **각각**, 조사는 결론의 확정 여부를, 혼합 목적은 목적마다 기준을 요구한다.
+ * 총점 하나로 합치지 않고 목적마다 따로 보인다.
+ */
+function CompletionMeaningView(props: { meaning: CompletionMeaning }) {
+  const { meaning } = props
+  return (
+    <>
+      <h4>목적별 완료 의미</h4>
+      {meaning.contract === null ? (
+        <p className="muted small">
+          {meaning.detail ??
+            '이 Case 의 Profile 정의에는 완료 계약이 없다. 완료 판정은 기준 전부 충족 하나다.'}
+        </p>
+      ) : (
+        <>
+          <p className="muted small">
+            Profile {meaning.profile} (정의판 {meaning.profile_version}). 요구된 목적마다
+            기준이 하나 이상 있어야 하고, 그 기준이 전부 충족돼야 완료된다.{' '}
+            <strong>기준이 없는 목적은 예외로 수용할 수 없다</strong> — 의도·기준을 고친다.
+          </p>
+          <table>
+            <thead>
+              <tr>
+                <th>목적 의무</th>
+                <th>요구 근거</th>
+                <th>기준</th>
+                <th>충족</th>
+              </tr>
+            </thead>
+            <tbody>
+              {meaning.objectives.map((row) => (
+                <tr key={row.obligation}>
+                  <td className="small">
+                    <strong>{OBLIGATION_LABEL[row.obligation] ?? row.obligation}</strong>
+                    <br />
+                    <span className="mono muted">{row.obligation}</span>
+                  </td>
+                  <td className="small">
+                    {row.required
+                      ? row.required_by.map((r) => REQUIRED_BY_LABEL[r] ?? r).join(' · ')
+                      : '요구되지 않음 (기준은 여전히 충족돼야 한다)'}
+                  </td>
+                  <td className="small mono">
+                    {row.criteria.length ? row.criteria.join(', ') : '없음'}
+                  </td>
+                  <td className="small">
+                    {row.status === 'missing' ? (
+                      <strong>기준 없음 — 완료할 수 없다</strong>
+                    ) : (
+                      `${row.met}/${row.total}${row.status === 'met' ? ' · 충족' : ''}`
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+      {meaning.experiments.length > 0 && (
+        <>
+          <p className="small">로컬 실험의 정리 상태 (실행 전후 작업공간 관측):</p>
+          <ul className="list">
+            {meaning.experiments.map((e) => (
+              <li key={e.run_id} className="small">
+                <span className="mono">{e.run_id}</span> ·{' '}
+                {EXPERIMENT_CLEANUP_LABEL[e.cleanup] ?? e.cleanup}
+                {e.restored_by && (
+                  <>
+                    {' '}
+                    (<span className="mono">{e.restored_by}</span>)
+                  </>
+                )}
+                {e.outside_workspace_changed && ' · 작업공간 밖 원래 저장소의 변경 감지'}
+              </li>
+            ))}
+          </ul>
+          <p className="muted small">
+            관측은 격리가 아니다. 되돌렸다는 표시는 "관측한 트리가 같다"이며 실험이
+            작업공간 밖을 건드리지 않았다는 증명이 아니다.
+            {meaning.residue_blocks_auto_completion &&
+              ' 남은 임시 변경이 있어 자동 완료하지 않는다 — 사람은 이 목록을 보고 판단할 수 있다.'}
+          </p>
+        </>
+      )}
+    </>
+  )
+}
+
 function CompletionModeSwitch(props: {
   caseId: string
   mode: string
@@ -321,6 +429,8 @@ function CriterionRow(props: {
     evidence_run_id?: string | null
     evidence_artifact_id?: string | null
     evidence_artifact_rev?: number | null
+    satisfaction?: string | null
+    conclusion?: string | null
   }) => void
   onShowEvidence: (title: string, body: string) => void
   onError: (message: string) => void
@@ -329,9 +439,21 @@ function CriterionRow(props: {
   const [verdict, setVerdict] = useState<CriterionVerdict>('met')
   const [runId, setRunId] = useState('')
   const [summary, setSummary] = useState('')
+  const [satisfaction, setSatisfaction] = useState('')
+  const [conclusion, setConclusion] = useState('')
   const [loading, setLoading] = useState(false)
 
   const chosenRun = props.runs.find((r) => r.run_id === runId) ?? null
+  // **P4-03.** 의무가 있는 기준은 `met` 에 충족 방식이 필수이고 의무마다 고를 수 있는
+  // 것이 다르다. 원인·조사 기준은 결론(확정/판단 불가)을 함께 적는다. v1 기준은 예전
+  // 세 값을 선택 사항으로 둔다.
+  const obligation = criterion.obligation
+  const satisfactionOptions = obligation
+    ? verdict === 'met'
+      ? MET_SATISFACTION_BY_OBLIGATION[obligation]
+      : ['not_reproduced', ...(obligation === 'cause' || obligation === 'answer' ? ['investigated'] : [])]
+    : LEGACY_SATISFACTION
+  const needsConclusion = obligation === 'cause' || obligation === 'answer'
 
   const openEvidence = async () => {
     if (!criterion.evidence_artifact_id) return
@@ -367,6 +489,25 @@ function CriterionRow(props: {
         <strong>{criterion.criterion_key}</strong> {criterion.summary}
         <br />
         <span className="muted">연결된 항목: {criterion.relates_to}</span>
+        {obligation && (
+          <>
+            <br />
+            <span className="muted">
+              입증할 목적: {OBLIGATION_LABEL[obligation] ?? obligation}
+              {criterion.obligation_source === 'derived_from_field' &&
+                ' (연결 항목에서 도출)'}
+            </span>
+          </>
+        )}
+        {criterion.conclusion_rule_effective && (
+          <>
+            <br />
+            <span className="muted">
+              결론 요구: {CONCLUSION_RULE_LABEL[criterion.conclusion_rule_effective]}
+              {criterion.conclusion_rule === null && ' (기록 없음 → 확정 필수로 취급)'}
+            </span>
+          </>
+        )}
       </td>
       <td className="small">{criterion.method_summary}</td>
       <td className="small">
@@ -382,6 +523,14 @@ function CriterionRow(props: {
             <br />
             <span className="muted">
               {SATISFACTION_LABEL[criterion.satisfaction] ?? criterion.satisfaction}
+            </span>
+          </>
+        )}
+        {criterion.conclusion && (
+          <>
+            <br />
+            <span className="muted">
+              결론: {CONCLUSION_LABEL[criterion.conclusion] ?? criterion.conclusion}
             </span>
           </>
         )}
@@ -455,6 +604,33 @@ function CriterionRow(props: {
             </option>
           ))}
         </select>
+        {verdict !== 'unverified' && verdict !== 'blocked' && (
+          <select
+            value={satisfaction}
+            disabled={props.disabled}
+            onChange={(e) => setSatisfaction(e.target.value)}
+          >
+            <option value="">
+              {obligation && verdict === 'met' ? '어떻게 충족했는가 (필수)' : '충족 방식 (선택)'}
+            </option>
+            {satisfactionOptions.map((value) => (
+              <option key={value} value={value}>
+                {SATISFACTION_LABEL[value] ?? value}
+              </option>
+            ))}
+          </select>
+        )}
+        {needsConclusion && verdict !== 'unverified' && verdict !== 'blocked' && (
+          <select
+            value={conclusion}
+            disabled={props.disabled}
+            onChange={(e) => setConclusion(e.target.value)}
+          >
+            <option value="">결론 {verdict === 'met' ? '(필수)' : '(선택)'}</option>
+            <option value="determined">{CONCLUSION_LABEL.determined}</option>
+            <option value="inconclusive">{CONCLUSION_LABEL.inconclusive}</option>
+          </select>
+        )}
         <input
           value={summary}
           placeholder="판정 요약 (짧게)"
@@ -469,6 +645,9 @@ function CriterionRow(props: {
               props.onError('판정에는 짧은 요약이 필요하다.')
               return
             }
+            // 판정 가능성은 서버가 정한다. 화면은 고른 값을 그대로 보낸다 — 빈 방식의
+            // `met` 도 보내서 서버의 거부 사유(`satisfaction_required`)를 보인다.
+            const recordsHow = verdict !== 'unverified' && verdict !== 'blocked'
             props.onRecord({
               verdict,
               summary: summary.trim() || '미확인으로 되돌림',
@@ -477,6 +656,8 @@ function CriterionRow(props: {
               evidence_run_id: runId || null,
               evidence_artifact_id: chosenRun?.output_artifact_id ?? null,
               evidence_artifact_rev: chosenRun?.output_artifact_id ? 1 : null,
+              satisfaction: recordsHow && satisfaction ? satisfaction : null,
+              conclusion: recordsHow && needsConclusion && conclusion ? conclusion : null,
             })
             setSummary('')
           }}
@@ -518,6 +699,20 @@ function CandidateView(props: {
               : `자동 완료 정책 (${candidate.acceptance.actor})`}
           </strong>
           {candidate.unsettled_runs.length > 0 && ' · 실행 상태 확인 필요'}
+        </p>
+      )}
+      {candidate.meaning && candidate.meaning.missing.length > 0 && (
+        <p className="small">
+          <strong>기준이 없는 목적:</strong>{' '}
+          {candidate.meaning.missing.map((o) => OBLIGATION_LABEL[o] ?? o).join(', ')} — 예외로
+          수용할 수 없다.
+        </p>
+      )}
+      {candidate.meaning && candidate.meaning.residue.length > 0 && (
+        <p className="small">
+          <strong>정리되지 않은 실험:</strong> {candidate.meaning.residue.join(', ')}
+          {candidate.meaning.residue_blocks_auto_completion &&
+            ' — 자동 완료하지 않는다. 사람이 이 후보를 인수하면 그 사실을 알고 닫는 것이다.'}
         </p>
       )}
       {candidate.unresolved.length > 0 && (

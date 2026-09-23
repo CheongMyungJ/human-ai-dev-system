@@ -593,7 +593,15 @@ def test_criteria_results_acceptance_and_closure_survive_a_forced_kill(controlle
     )
     assert refused.status_code == 409, refused.text
 
-    assert record(criteria[0]["id"], "met").status_code == 200
+    # P4-03. 이 Case 는 `analysis` → root-cause-analysis 이고 C-01 은 연결 항목에서
+    # `cause` 의무로 도출된다. 원인 기준의 `met` 은 **조사로 답했고 확정했다**를 함께
+    # 적는다.
+    assert (
+        record(
+            criteria[0]["id"], "met", satisfaction="investigated", conclusion="determined"
+        ).status_code
+        == 200
+    )
     assert record(criteria[1]["id"], "not_met").status_code == 200
 
     candidate = httpx.post(
@@ -1230,7 +1238,9 @@ def test_policy_profile_budget_and_repositories_survive_a_forced_kill(controller
     assert policy["autonomy"] == "controlled"
     assert policy["autonomy_source"] == "case_explicit"
     assert policy["profile"]["profile"] == "refactoring"
-    assert policy["profile"]["version"] == "1"
+    # P4-03 부터 새 Case 는 정의판 "2"(완료 계약 포함)를 받는다. 복원되는 것은 **그
+    # Case 에 기록된 값**이며 재시작이 현재 정의판으로 바꿔 적지 않는다.
+    assert policy["profile"]["version"] == "2"
 
     points = {p["checkpoint"]: p for p in policy["checkpoints"]}
     assert points["start_scope"]["state"] == "confirmed"

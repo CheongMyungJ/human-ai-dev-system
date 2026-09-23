@@ -21,13 +21,17 @@ Case 가 작성해야 하는 문서 세트"가 아니다.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 
-from domain.models import CaseKind, CaseProfile, IntentField
+from domain.models import CaseKind, CaseProfile, CriterionObligation, IntentField
 
 #: 지금 새 Case 에 붙는 정의판. 문자열인 이유는 조회 키이고 비교하지 않기 때문이다.
-CURRENT_PROFILE_VERSION = "1"
+#:
+#: **P4-03 에서 "2" 로 올랐다.** v2 는 v1 과 의미 항목이 같고 **완료 계약**
+#: (`CompletionContract`)이 더해졌다. 기존 Case 는 자기 `profile_version = "1"` 로
+#: v1 을 조회하므로 계약이 없고, 완료 판정도 v1 그대로다(D-62 소급 금지).
+CURRENT_PROFILE_VERSION = "2"
 
 
 class ProfileField(str, Enum):
@@ -120,6 +124,77 @@ FIELD_LABEL.update(
 )
 
 
+#: 목적 의무의 사람이 읽는 이름.
+OBLIGATION_LABEL: dict[str, str] = {
+    CriterionObligation.BEHAVIOR.value: "합의한 동작·결과",
+    CriterionObligation.RESTORATION.value: "기대 동작 복원",
+    CriterionObligation.CAUSE.value: "원인 질문에 대한 결론",
+    CriterionObligation.ANSWER.value: "조사 질문에 대한 결론",
+    CriterionObligation.IMPROVEMENT.value: "구조·품질 개선",
+    CriterionObligation.PRESERVATION.value: "보존 계약·조건 유지",
+    CriterionObligation.TARGET_STATE.value: "유지 대상의 목표 상태",
+}
+
+
+@dataclass(frozen=True)
+class ObligationRequirement:
+    """완료에 **기준이 있어야 하는** 목적 의무 하나.
+
+    `when_field_filled` 가 있으면 그 의도 항목이 채워졌을 때만 요구한다. 항목이 비어
+    있으면(`undecided`) 요구하지 않는다 — 보존할 조건이 없다고 적힌 유지보수에
+    보존 기준을 지어내게 하지 않기 위해서다(case-profiles 2절 "대상과 무관한 항목을
+    일괄 요구하지 않는다").
+    """
+
+    obligation: CriterionObligation
+    when_field_filled: ProfileField | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "obligation": self.obligation.value,
+            "label": OBLIGATION_LABEL[self.obligation.value],
+            "when_field_filled": (
+                self.when_field_filled.value if self.when_field_filled else None
+            ),
+        }
+
+
+@dataclass(frozen=True)
+class CompletionContract:
+    """한 Profile 의 **완료 계약**(P4-03, case-profiles 4절).
+
+    두 가지를 정한다.
+
+        requirements      완료하려면 기준이 있어야 하는 목적 의무. 첫째가 주 의무다
+        field_obligation  의미 항목 → 의무. 기준이 의무를 적지 않았을 때 그 기준의
+                          연결 항목으로 의무를 정하는 **공개된 대응표**다. 공통 여섯
+                          항목과 표에 없는 항목은 주 의무다
+
+    어떤 충족 방식이 어느 의무에 허용되는지는 Profile 이 아니라 의무의 뜻이므로
+    `domain/completion_meaning.py` 에 둔다.
+    """
+
+    requirements: tuple[ObligationRequirement, ...]
+    field_obligation: tuple[tuple[ProfileField, CriterionObligation], ...] = ()
+
+    @property
+    def primary(self) -> CriterionObligation:
+        return self.requirements[0].obligation
+
+    def obligation_for_field(self, field: str | None) -> CriterionObligation:
+        for name, obligation in self.field_obligation:
+            if name.value == field:
+                return obligation
+        return self.primary
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "primary_obligation": self.primary.value,
+            "requirements": [r.to_dict() for r in self.requirements],
+            "field_obligation": {f.value: o.value for f, o in self.field_obligation},
+        }
+
+
 @dataclass(frozen=True)
 class ProfileDefinition:
     """한 Profile 의 한 버전.
@@ -140,6 +215,9 @@ class ProfileDefinition:
     completion_meaning: str
     #: 초안에서 고정하지 않는 실행 상세. 사람에게 빈칸을 채우게 하지 않기 위한 경계
     not_fixed_in_draft: str
+    #: 완료 계약(P4-03). **v1 에는 없다** — v1 Case 의 완료 판정은 "기준이 전부 met"
+    #: 하나이며, 계약을 v1 에 붙이면 기존 Case 에 새 규칙이 소급된다.
+    completion: CompletionContract | None = None
 
     @property
     def required_fields(self) -> tuple[str, ...]:
@@ -161,6 +239,9 @@ class ProfileDefinition:
             "conditional_evidence": self.conditional_evidence,
             "completion_meaning": self.completion_meaning,
             "not_fixed_in_draft": self.not_fixed_in_draft,
+            "completion_contract": (
+                self.completion.to_dict() if self.completion is not None else None
+            ),
         }
 
 
@@ -266,9 +347,52 @@ _V1: tuple[ProfileDefinition, ...] = (
     ),
 )
 
+_O = CriterionObligation
+
+#: v2 의 완료 계약. 의미 항목·문장은 v1 과 같고 **계약만 더한다.**
+#:
+#: 필수 의무는 case-profiles 4절 "정상 완료의 의미"를 기준의 존재 조건으로 옮긴 것이다.
+#: refactoring 은 개선과 보존을 **함께** 요구한다 — "테스트 통과만으로 모든 보존을
+#: 증명하지 않는다"는 개선 기준의 통과가 보존 기준을 대신하지 않는다는 뜻이다.
+#: maintenance 의 보존은 **보존할 조건이 적혔을 때만** 요구한다.
+_V2_CONTRACTS: dict[CaseProfile, CompletionContract] = {
+    CaseProfile.FEATURE: CompletionContract(
+        requirements=(ObligationRequirement(_O.BEHAVIOR),),
+    ),
+    CaseProfile.DEFECT_FIX: CompletionContract(
+        requirements=(ObligationRequirement(_O.RESTORATION),),
+    ),
+    CaseProfile.ROOT_CAUSE_ANALYSIS: CompletionContract(
+        requirements=(ObligationRequirement(_O.CAUSE),),
+    ),
+    CaseProfile.RESEARCH: CompletionContract(
+        requirements=(ObligationRequirement(_O.ANSWER),),
+    ),
+    CaseProfile.REFACTORING: CompletionContract(
+        requirements=(
+            ObligationRequirement(_O.IMPROVEMENT),
+            ObligationRequirement(_O.PRESERVATION),
+        ),
+        field_obligation=((ProfileField.PRESERVED_CONTRACTS, _O.PRESERVATION),),
+    ),
+    CaseProfile.MAINTENANCE: CompletionContract(
+        requirements=(
+            ObligationRequirement(_O.TARGET_STATE),
+            ObligationRequirement(
+                _O.PRESERVATION, when_field_filled=ProfileField.PRESERVED_CONDITIONS
+            ),
+        ),
+        field_obligation=((ProfileField.PRESERVED_CONDITIONS, _O.PRESERVATION),),
+    ),
+}
+
+_V2: tuple[ProfileDefinition, ...] = tuple(
+    replace(d, version="2", completion=_V2_CONTRACTS[d.profile]) for d in _V1
+)
+
 #: `(profile, version) → 정의`. 새 버전은 더하고 기존 항목은 고치지 않는다.
 DEFINITIONS: dict[tuple[str, str], ProfileDefinition] = {
-    (d.profile.value, d.version): d for d in _V1
+    (d.profile.value, d.version): d for d in _V1 + _V2
 }
 
 #: Profile 에서 유도하는 기존 `kind` 축의 값. 새 Case 의 `case.kind` 를 정한다.
@@ -334,6 +458,15 @@ def field_order(profile: str | None, version: str | None) -> tuple[str, ...]:
     if profile is None or version is None:
         return common
     return resolve(profile, version).required_fields
+
+
+def completion_contract(
+    profile: str | None, version: str | None
+) -> CompletionContract | None:
+    """그 Case 의 완료 계약. **Profile 이 없거나 v1 이면 `None`** 이다."""
+    if profile is None or version is None:
+        return None
+    return resolve(profile, version).completion
 
 
 def catalog() -> list[dict[str, object]]:

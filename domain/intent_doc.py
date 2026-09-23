@@ -20,11 +20,14 @@ import json
 from typing import Any
 
 from domain import profiles
+from domain.completion_meaning import CONCLUSION_OBLIGATIONS, derive_obligation
 from domain.models import (
     AuthoringMode,
     AxisWeight,
+    ConclusionRule,
     ConfirmationState,
     ContentOrigin,
+    CriterionObligation,
     DecideAt,
     FieldChange,
     IntentField,
@@ -46,8 +49,13 @@ DOC_TYPE = "hads.intent-draft"
 #: 적는다 — 읽는 쪽이 현재 정의를 다시 조회하면, 정의가 새 버전으로 바뀐 뒤 옛 문서가
 #: 갑자기 항목이 빠진 문서로 읽힌다(D-62 "새 정의를 기존 Case 에 소급 적용하지
 #: 않는다"). v1~v3 문서의 항목은 공통 여섯 항목이며 Profile 은 **없음**이다.
-DOC_VERSION = 4
-SUPPORTED_DOC_VERSIONS = (1, 2, 3, 4)
+#: v5 에서 **목적 의무**가 들어왔다(P4-03). 문서는 요청이 명시한 목적(`objectives`)과
+#: 기준마다 무엇을 입증하는가(`obligation`), 원인·조사 기준의 결론 요구
+#: (`conclusion_rule`)를 적는다. 셋 다 **완료 계약이 있는 Profile(정의판 v2)** 에서만
+#: 쓴다. v1~v4 문서의 목적은 **없음**이고 기준의 의무도 없다 — 없던 것을 지금 와서
+#: 만들어 내지 않는다.
+DOC_VERSION = 5
+SUPPORTED_DOC_VERSIONS = (1, 2, 3, 4, 5)
 
 #: 필수 여섯 항목의 고정 순서. 줄이지 않는다.
 FIELD_ORDER: tuple[IntentField, ...] = (
@@ -96,6 +104,7 @@ def compose(
     sizing: dict[str, Any] | None = None,
     profile: str | None = None,
     profile_version: str | None = None,
+    objectives: list[str] | None = None,
 ) -> bytes:
     """필수 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
@@ -109,8 +118,26 @@ def compose(
     `profile` 을 주면 공통 여섯 항목 **뒤에** 그 목적의 의미 항목이 붙는다(D-62).
     주지 않으면 여섯 항목만 쓴다 — Profile 이 기록되지 않은 Case(R1 이전)의 문서
     형식이며, 없는 Profile 을 기본값으로 채우지 않는다.
+
+    **목적·의무·결론 요구는 완료 계약이 있는 Profile 에서만 받는다**(v5, P4-03).
+    계약이 없는 Case 에 주면 거부한다 — 받아 두면 그 Case 의 기준에 뜻 없는 값이
+    남고, 나중에 누군가 그것을 규칙으로 읽는다. `objectives` 는 **작성자가 선언한
+    것만** 적는다. Profile 의 필수 의무를 여기에 복사하지 않는다 — 그것은 정의가
+    말하고, 문서는 요청이 말한 것을 말한다.
     """
     field_order = profiles.field_order(profile, profile_version)
+    contract = profiles.completion_contract(profile, profile_version)
+    declared: list[str] | None = None
+    if objectives is not None:
+        if contract is None:
+            raise ValueError(
+                "objectives need a profile with a completion contract (definition v2)"
+            )
+        declared = []
+        for raw in objectives:
+            value = CriterionObligation(str(raw)).value
+            if value not in declared:
+                declared.append(value)
     body: dict[str, Any] = {
         "doc_type": DOC_TYPE,
         "doc_version": DOC_VERSION,
@@ -129,6 +156,8 @@ def compose(
         # 성공 기준은 **이 문서 안에** 있다. 기준마다 관련 의도 항목 → 확인 방법 →
         # 기대값을 이어서 적는다(intent-artifacts 1절). 제어부에는 짧은 요약만 간다.
         "criteria": [],
+        # 요청이 명시한 목적 의무(v5). `None` 은 "선언하지 않음"이며 빈 목록과 다르다.
+        "objectives": declared,
         # 작업 수준 판단도 이 문서 안에 있다(v3). 축별 **근거의 서술**은 여기 남고
         # 제어부에는 영향·짧은 판단 한 줄만 간다. `None` 은 "판단하지 않았다"이며
         # 빈 축 목록과 같은 뜻이다 — 어느 쪽도 "간소"가 아니다.
@@ -207,21 +236,58 @@ def compose(
         relates_to = _field_name(
             raw.get("relates_to") or IntentField.EXPECTED_OUTCOME.value, field_order
         )
-        body["criteria"].append(
-            {
-                "key": key,
-                "relates_to": relates_to,
-                "text": text,
-                "method": method,
-                "summary": summary,
-                "method_summary": method_summary,
-            }
-        )
+        entry: dict[str, Any] = {
+            "key": key,
+            "relates_to": relates_to,
+            "text": text,
+            "method": method,
+            "summary": summary,
+            "method_summary": method_summary,
+        }
+        entry.update(_criterion_obligation(key, raw, contract, relates_to))
+        body["criteria"].append(entry)
 
     if sizing is not None:
         body["sizing"] = _compose_sizing(sizing)
 
     return json.dumps(body, ensure_ascii=False, indent=2, sort_keys=False).encode("utf-8")
+
+
+def _criterion_obligation(
+    key: str,
+    raw: dict[str, Any],
+    contract: profiles.CompletionContract | None,
+    relates_to: str,
+) -> dict[str, str]:
+    """기준의 의무·결론 요구를 **작성자가 적은 그대로** 검증해 돌려준다(v5).
+
+    적지 않은 의무는 문서에 넣지 않는다 — 도출은 제어부가 공개된 대응표로 하고
+    출처를 `derived_from_field` 로 남긴다. 문서가 도출값을 적으면 "원문이 명시했다"와
+    구별되지 않는다.
+
+    결론 요구는 원인·조사 의무의 기준에만 붙는다. 다른 기준에 붙이면 거부한다.
+    """
+    obligation = raw.get("obligation")
+    rule = raw.get("conclusion_rule")
+    if contract is None:
+        if obligation or rule:
+            raise ValueError(
+                f"criterion {key} carries an obligation but the profile has no"
+                " completion contract (definition v2)"
+            )
+        return {}
+    out: dict[str, str] = {}
+    if obligation:
+        out["obligation"] = CriterionObligation(str(obligation)).value
+    effective, _ = derive_obligation(contract, relates_to, out.get("obligation"))
+    if rule:
+        if effective not in CONCLUSION_OBLIGATIONS:
+            raise ValueError(
+                f"criterion {key}: conclusion_rule belongs to cause/answer criteria,"
+                f" not {effective.value if effective else 'none'}"
+            )
+        out["conclusion_rule"] = ConclusionRule(str(rule)).value
+    return out
 
 
 def _field_name(value: Any, field_order: tuple[str, ...]) -> str:
@@ -290,6 +356,8 @@ def parse(body: bytes) -> dict[str, Any]:
     doc.setdefault("profile", None)
     doc.setdefault("profile_version", None)
     doc.setdefault("field_order", [f.value for f in FIELD_ORDER])
+    # v1~v4 문서에는 목적 선언이 없다. `None` 이며 빈 목록으로 바꾸지 않는다.
+    doc.setdefault("objectives", None)
     return doc
 
 
@@ -338,15 +406,19 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
     ]
 
     # 기준도 **요약만** 올린다. 기대값과 확인 방법의 본문은 이 원문 안에 남는다.
-    criteria = [
-        {
+    criteria = []
+    for c in doc["criteria"]:
+        item = {
             "key": c["key"],
             "relates_to": c["relates_to"],
             "summary": c["summary"],
             "method_summary": c["method_summary"],
         }
-        for c in doc["criteria"]
-    ]
+        # 의무·결론 요구는 **열거값**이다. 원문이 적었을 때만 올린다(v5).
+        for name in ("obligation", "conclusion_rule"):
+            if c.get(name):
+                item[name] = c[name]
+        criteria.append(item)
 
     # 수준 판단도 **요약만** 올린다. 축별 근거의 서술은 이 원문 안에 남는다.
     # `sizing` 이 없으면 `None` 이다 — 빈 축 목록으로 바꾸지 않는다. "판단하지
@@ -374,6 +446,8 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
         "fields": fields,
         "questions": questions,
         "criteria": criteria,
+        # 목적 선언은 열거값 목록이다. `None` 은 "선언 없음"이다(v1~v4 문서 포함).
+        "objectives": doc.get("objectives"),
         "sizing": sizing_report,
         "question_diff": {
             "added": sorted(current_keys - prev_keys),

@@ -193,7 +193,7 @@ def test_an_exception_preserves_the_original_verdict(harness, agreed_case):
     passing, failing = criteria[0], criteria[1]
     assert (
         harness.record_result(
-            case["id"], passing["id"], "met", evidence_kind="human_judgement"
+            case["id"], passing["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
         ).status_code
         == 200
     )
@@ -264,7 +264,9 @@ def test_both_modes_agree_on_the_criteria_even_though_one_waits_for_a_person(
     """
     case, _intent = agreed_case
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
+    harness.record_result(
+        case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
+    )
 
     human_view = harness.build_candidate(case["id"])
     assert harness.set_completion_mode(case["id"], "auto_on_conditions").status_code == 200
@@ -291,7 +293,9 @@ def test_auto_mode_does_not_accept_its_own_exceptions(harness, agreed_case):
     """
     case, _intent = agreed_case
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
+    harness.record_result(
+        case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
+    )
     harness.record_result(
         case["id"], criteria[1]["id"], "not_met", evidence_kind="human_judgement"
     )
@@ -315,7 +319,9 @@ def test_a_person_can_still_accept_an_exception_under_the_auto_policy(harness, a
     """
     case, _intent = agreed_case
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
+    harness.record_result(
+        case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
+    )
     harness.record_result(
         case["id"], criteria[1]["id"], "not_met", evidence_kind="human_judgement"
     )
@@ -347,7 +353,9 @@ def test_acceptance_is_a_separate_record_from_agreement_and_gate(harness, agreed
     """AC-9: 인수·예외·의도 동의가 **각각의 행**으로 남는다(FR-23)."""
     case, _intent = agreed_case
     criteria = harness.criteria(case["id"])
-    harness.record_result(case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement")
+    harness.record_result(
+        case["id"], criteria[0]["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
+    )
     harness.record_result(
         case["id"], criteria[1]["id"], "not_met", evidence_kind="human_judgement"
     )

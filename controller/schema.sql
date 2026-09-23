@@ -1468,3 +1468,15 @@ CREATE TABLE IF NOT EXISTS quality_revalidation (
 
 CREATE INDEX IF NOT EXISTS idx_quality_revalidation_run
     ON quality_revalidation(gate_run_id, created_at);
+
+-- ===================================================================
+-- 스키마 v15 (P4-03) — 여섯 Profile 의 완료 의미
+--
+-- 새 표는 없다. 기준이 **무엇을 입증하는가**(목적 의무)·원인/조사 기준의 결론 요구·
+-- 결과의 결론·의도의 목적 선언·후보의 목적별 충족 현황이 기존 표의 컬럼으로 붙는다.
+-- 컬럼은 `db.py` 의 v15 이행이 붙인다 — 기존 DB 에도 같은 컬럼이 필요하기 때문이며
+-- v11 의 `criterion_result.satisfaction` 과 같은 방식이다.
+--
+-- 값은 전부 열거형이고 `CHECK` 로 묶는다. 본문 자리는 없다.
+-- 옛 행은 NULL 이며 그것은 "Profile 정의 v1 로 만들어졌다"이다. 도출해 채우지 않는다.
+-- ===================================================================

@@ -763,12 +763,105 @@ export interface SuccessCriterion {
   satisfaction: string | null
   // 이 판정이 이전 버전에서 이어진 것인가. `carried_from:<id>` 다.
   recheck_source: string | null
+  // **P4-03 목적 의무.** 이 기준이 무엇을 입증하는가. `null` 은 정의판 v1 기준이다.
+  obligation: CriterionObligation | null
+  // 원문이 적었는가(`reported`), 연결 항목에서 정의로 도출했는가.
+  obligation_source: 'reported' | 'derived_from_field' | null
+  // 원인·조사 기준의 결론 요구. 저장값과 **적용되는 값**을 따로 준다 — NULL 은 확정
+  // 필수로 취급한다.
+  conclusion_rule: ConclusionRule | null
+  conclusion_rule_effective: ConclusionRule | null
+  conclusion: 'determined' | 'inconclusive' | null
 }
+
+export type CriterionObligation =
+  | 'behavior'
+  | 'restoration'
+  | 'cause'
+  | 'answer'
+  | 'improvement'
+  | 'preservation'
+  | 'target_state'
+
+export type ConclusionRule = 'definitive_required' | 'bounded_report_allowed'
 
 export const SATISFACTION_LABEL: Record<string, string> = {
   changed_and_verified: '바꾸고 확인함',
   already_satisfied: '변경 없이 이미 목표 상태 (검증 실행이 관측)',
   not_reproduced: '재현하지 못함 — 해결의 증거가 아니다',
+  investigated: '조사·실험의 근거로 답함 (코드 산출물 없음)',
+  preserved: '보존 계약·조건이 그대로임을 검증함',
+}
+
+export const OBLIGATION_LABEL: Record<CriterionObligation, string> = {
+  behavior: '합의한 동작·결과',
+  restoration: '기대 동작 복원',
+  cause: '원인 질문에 대한 결론',
+  answer: '조사 질문에 대한 결론',
+  improvement: '구조·품질 개선',
+  preservation: '보존 계약·조건 유지',
+  target_state: '유지 대상의 목표 상태',
+}
+
+/**
+ * 의무별로 `met` 에 쓸 수 있는 충족 방식. **서버의 `MET_SATISFACTION` 과 같아야 한다**
+ * (domain/completion_meaning.py). 화면은 고를 수 있는 것만 보이고, 판단은 서버가 한다.
+ */
+export const MET_SATISFACTION_BY_OBLIGATION: Record<CriterionObligation, string[]> = {
+  behavior: ['changed_and_verified', 'already_satisfied'],
+  restoration: ['changed_and_verified', 'already_satisfied'],
+  cause: ['investigated'],
+  answer: ['investigated'],
+  improvement: ['changed_and_verified', 'already_satisfied'],
+  preservation: ['preserved'],
+  target_state: ['changed_and_verified', 'already_satisfied'],
+}
+
+export const CONCLUSION_LABEL: Record<string, string> = {
+  determined: '확정',
+  inconclusive: '판단 불가',
+}
+
+export const CONCLUSION_RULE_LABEL: Record<ConclusionRule, string> = {
+  definitive_required: '확정 결론 필수',
+  bounded_report_allowed: '근거·한계 보고면 판단 불가도 정상',
+}
+
+export const EXPERIMENT_CLEANUP_LABEL: Record<string, string> = {
+  restored_in_run: '실행 안에서 되돌림',
+  restored_later: '뒤 실행이 되돌린 상태를 관측',
+  left_changes: '임시 변경이 남음',
+  unobserved: '관측 없음 — 정리됐는지 모른다',
+  no_write_permission: '읽기 권한 실행',
+  not_finished: '아직 끝나지 않음',
+}
+
+/** 결과 조회의 `completion_meaning`(P4-03). 저장값이 아니라 도출값이다. */
+export interface CompletionMeaning {
+  contract: 'profile_completion_contract' | null
+  profile: string | null
+  profile_version: string | null
+  detail: string | null
+  declared_objectives: CriterionObligation[] | null
+  objectives: {
+    obligation: CriterionObligation
+    required: boolean
+    required_by: string[]
+    criteria: string[]
+    total: number
+    met: number
+    status: 'missing' | 'met' | 'open'
+  }[]
+  missing: CriterionObligation[]
+  experiments: {
+    run_id: string
+    repository_id: string | null
+    cleanup: string
+    restored_by: string | null
+    outside_workspace_changed: boolean | null
+  }[]
+  residue: string[]
+  residue_blocks_auto_completion: boolean
 }
 
 /** `criterion_result` 한 행. 기준 정의가 아니라 **판정**만 담는다. */
@@ -841,6 +934,13 @@ export interface CompletionCandidate {
   criteria: CandidateCriterion[]
   exceptions: ExceptionDecision[]
   acceptance: FinalAcceptance | null
+  // P4-03. 후보가 본 목적별 충족 현황. 완료 계약이 없는 Case(v1)는 `null` 이다.
+  meaning: {
+    objectives: { obligation: CriterionObligation; required: boolean; criteria: string[]; met: number; status: string }[]
+    missing: CriterionObligation[]
+    residue: string[]
+    residue_blocks_auto_completion: boolean
+  } | null
 }
 
 export interface ClosureRecord {
@@ -870,6 +970,7 @@ export interface ResultView {
   candidate: CompletionCandidate | null
   closure: ClosureRecord | null
   relations: CaseRelation[]
+  completion_meaning: CompletionMeaning
 }
 
 //: 판정을 사람 말로. `unverified` 와 `not_met` 을 합치지 않는다 — 확인하지 않은 것과
@@ -906,6 +1007,10 @@ export const ACCEPTANCE_REFUSAL_LABEL: Record<string, string> = {
   case_already_closed: '이미 종료된 업무다 — 수정은 연결된 새 Case 로 한다',
   auto_policy_cannot_accept_exception: '자동 완료 모드는 예외를 수용하지 않는다',
   exception_target_not_failing: '충족된 기준에는 예외를 걸 수 없다',
+  objective_without_criteria:
+    '요구된 목적에 기준이 하나도 없다 — 예외 대상이 아니며 의도·기준을 고쳐야 한다',
+  experiment_residue_unresolved:
+    '정리되지 않은 실험의 임시 변경이 있다 — 자동 완료하지 않는다(사람은 보고 판단할 수 있다)',
 }
 
 /** 인수 문구로 인정하는 표현. 서버의 목록과 같아야 한다. */
@@ -925,6 +1030,9 @@ export const resultApi = {
       evidence_run_id?: string | null
       evidence_artifact_id?: string | null
       evidence_artifact_rev?: number | null
+      // P3-R4·P4-03. 어떻게 충족했는가와 원인·조사 기준의 결론.
+      satisfaction?: string | null
+      conclusion?: string | null
     },
   ) =>
     request<CriterionResultRow>(`/api/cases/${caseId}/criteria/${criterionId}/result`, {

@@ -390,7 +390,7 @@ def test_success_criteria_and_acceptance_bodies_stay_on_the_runner(harness):
     criterion = harness.criteria(case["id"])[0]
     assert (
         harness.record_result(
-            case["id"], criterion["id"], "met", evidence_kind="human_judgement"
+            case["id"], criterion["id"], "met", evidence_kind="human_judgement", satisfaction="changed_and_verified"
         ).status_code
         == 200
     )
@@ -442,6 +442,13 @@ def test_the_result_view_carries_references_not_bodies(harness):
         # **그 판정이 이어진 것인가**(이전 기준의 id 참조)다.
         "satisfaction",
         "recheck_source",
+        # P4-03. 전부 **열거값**이다 — 목적 의무와 그 출처, 결론 요구(저장값·적용값),
+        # 결론. 기준의 본문이나 결론의 서술이 아니다.
+        "obligation",
+        "obligation_source",
+        "conclusion_rule",
+        "conclusion_rule_effective",
+        "conclusion",
         "evidence_kind",
         "evidence_run_id",
         "evidence_artifact_id",

@@ -1169,3 +1169,127 @@ def test_a_v13_database_gets_an_application_time_and_invents_no_reservation(tmp_
     assert again["requested_at"] == created_at
     assert conn.execute("SELECT COUNT(*) FROM quality_gate_policy").fetchone()[0] == 1
     conn.close()
+
+
+# ===================================================================== P4-03
+
+
+def _v14_schema() -> str:
+    """P4-03 표식이 없고 v14 표식이 있는 마지막 커밋 스키마.
+
+    v15 의 새 컬럼은 `schema.sql` 이 아니라 `db.py` 가 더한다. 그래서 판별 문자열은
+    스키마 파일에 실제로 들어간 표식(`스키마 v15`)을 쓴다 — `_v11_schema` 와 같은 방식.
+    """
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v14" in schema and "스키마 v15" not in schema:
+            return schema
+    pytest.skip("v14 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v14_database_keeps_its_criteria_and_invents_no_obligation(tmp_path):
+    """v14 → v15 (P4-03 AC-19).
+
+    **이 시험이 P4-03 의 소급 위험을 지킨다.** 옛 기준에 연결 항목에서 의무를 도출해
+    채우면, v1 Profile 로 시작한 Case 가 갑자기 "방식 없는 met 은 받지 않는다"·"목적마다
+    기준이 있어야 한다"를 받는다. 이행은 컬럼만 더하고 값은 NULL 로 둬야 한다.
+    """
+    path = tmp_path / "controller.sqlite3"
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v14_schema())
+    # 실제 v14 DB 에는 v8 이행이 붙인 Profile 컬럼이 있다. 커밋된 `schema.sql` 에는
+    # 없으므로(컬럼은 `db.py` 가 더한다) 그 모습을 그대로 만든다.
+    for column in ("profile", "profile_version", "profile_source"):
+        old.execute(f'ALTER TABLE "case" ADD COLUMN {column} TEXT')
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (14, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    # v14 의 Case 는 정의판 "1" 이다. **이행이 올리지 않는다.**
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at,'
+        " profile, profile_version, profile_source)"
+        " VALUES ('case-1','prj-1','v14 Case','bug','in_progress',?,?,"
+        " 'defect_fix','1','explicit')", (now, now)
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','old','old-host','registered',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
+        " content_hash, byte_size, summary, availability, created_at)"
+        " VALUES ('art-1',1,'case-1','intent','runner-1','h',10,'의도','available',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
+        " status, created_at)"
+        " VALUES ('iv-1','case-1',1,'art-1',1,'agreed',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO success_criterion (id, case_id, intent_version_id, criterion_key,"
+        " summary, method_summary, relates_to, state, created_at)"
+        " VALUES ('crit-1','case-1','iv-1','C-01','저장 뒤 값이 보인다','화면 확인',"
+        " 'expected_behavior','user_confirmed',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO criterion_result (id, criterion_id, case_id, verdict, evidence_kind,"
+        " summary, recorded_by, recorded_at)"
+        " VALUES ('res-1','crit-1','case-1','met','human_judgement','확인함','owner',?)",
+        (now,),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    case = conn.execute('SELECT * FROM "case" WHERE id = ?', ("case-1",)).fetchone()
+    assert case["profile_version"] == "1"
+    crit = conn.execute("SELECT * FROM success_criterion WHERE id = 'crit-1'").fetchone()
+    # **의무를 지어내지 않는다.** `expected_behavior` 는 v2 대응표에서 restoration 이지만
+    # 이 기준은 v1 으로 만들어졌다.
+    assert crit["obligation"] is None
+    assert crit["obligation_source"] is None
+    assert crit["conclusion_rule"] is None
+    result = conn.execute("SELECT * FROM criterion_result WHERE id = 'res-1'").fetchone()
+    assert result["verdict"] == "met"
+    assert result["conclusion"] is None
+    assert result["satisfaction"] is None
+    intent = conn.execute("SELECT * FROM intent_version WHERE id = 'iv-1'").fetchone()
+    assert intent["objectives_json"] is None
+
+    repo = Repository(conn)
+    # v1 Case 에는 완료 계약이 없다 — 조회가 그렇게 말한다.
+    assert repo.completion_contract("case-1") is None
+    assert repo.completion_meaning("case-1")["contract"] is None
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+        == 15
+    )
+
+    # 새 컬럼의 값 제약. 본문이나 모르는 이름을 넣을 수 없다.
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE success_criterion SET obligation = 'whatever' WHERE id = 'crit-1'")
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE criterion_result SET conclusion = 'probably' WHERE id = 'res-1'")
+
+    # 반복 이행이 멱등이다.
+    db.migrate(conn)
+    again = conn.execute("SELECT * FROM success_criterion WHERE id = 'crit-1'").fetchone()
+    assert again["obligation"] is None
+    assert conn.execute("SELECT COUNT(*) FROM success_criterion").fetchone()[0] == 1
+    conn.close()

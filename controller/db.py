@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 def utc_now() -> str:
@@ -240,6 +240,63 @@ def migrate(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "quality_gate_run", "stop_reason", "TEXT")
     _add_column_if_missing(conn, "quality_gate_run", "stop_requested_by", "TEXT")
     _migrate_v14_policy_application(conn)
+
+    # v15: 여섯 Profile 의 **완료 의미**(P4-03). 새 컬럼 여섯이며 새 표는 없다.
+    #
+    #      `success_criterion.obligation`   그 기준이 **무엇을 입증하는가**(목적 의무).
+    #      `success_criterion.obligation_source` 원문이 적었는가, 연결 항목에서 정의로
+    #                            도출했는가.
+    #      `success_criterion.conclusion_rule`  원인·조사 기준이 판단 불가를 정상 결과로
+    #                            허용하는가. NULL 은 **확정 필수로 취급**한다.
+    #      `criterion_result.conclusion`    결론이 확정인가 판단 불가인가.
+    #      `intent_version.objectives_json` 요청이 명시한 목적 의무 목록.
+    #      `completion_candidate.meaning_json` 후보가 본 목적별 충족 현황.
+    #
+    #      **데이터 이행 함수가 없다.** 옛 행은 전부 NULL 이 맞다 — 그 기준은 Profile
+    #      정의 v1 으로 만들어졌고 v1 에는 완료 계약이 없다. 연결 항목에서 의무를
+    #      도출해 채우면 기존 Case 에 새 완료 규칙이 소급된다(D-62). `case.profile_version`
+    #      도 올리지 않는다 — 새 정의판은 **새 Case** 에만 붙는다.
+    _add_column_if_missing(
+        conn,
+        "success_criterion",
+        "obligation",
+        "TEXT CHECK (obligation IS NULL OR obligation IN ('behavior', 'restoration',"
+        " 'cause', 'answer', 'improvement', 'preservation', 'target_state'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "success_criterion",
+        "obligation_source",
+        "TEXT CHECK (obligation_source IS NULL OR obligation_source IN"
+        " ('reported', 'derived_from_field'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "success_criterion",
+        "conclusion_rule",
+        "TEXT CHECK (conclusion_rule IS NULL OR conclusion_rule IN"
+        " ('definitive_required', 'bounded_report_allowed'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "criterion_result",
+        "conclusion",
+        "TEXT CHECK (conclusion IS NULL OR conclusion IN ('determined', 'inconclusive'))",
+    )
+    # 목적 의무 이름 일곱 개의 JSON 목록이 넉넉히 들어가는 크기다. 본문 자리가 아니다.
+    _add_column_if_missing(
+        conn,
+        "intent_version",
+        "objectives_json",
+        "TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200)",
+    )
+    # 의무별 기준 키·수·상태와 잔여 실험 id 뿐이다. 기준 키 64자 × 수백 건을 넘지 않는다.
+    _add_column_if_missing(
+        conn,
+        "completion_candidate",
+        "meaning_json",
+        "TEXT CHECK (meaning_json IS NULL OR length(meaning_json) <= 20000)",
+    )
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

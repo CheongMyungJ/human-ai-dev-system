@@ -1,0 +1,207 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 5,
+  "case_id": "case-c4bf1312780e9cf4",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-p4-03-B-130017994",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "research",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "research_questions",
+    "decision_purpose",
+    "evaluation_criteria",
+    "required_evidence",
+    "research_end_condition"
+  ],
+  "fields": {
+    "goal": {
+      "text": "store.py의 저장 경로에서 표준 json과 orjson 중 무엇이 더 적합한지 조사한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "1만 건 저장 시간과 추가 의존성 부담을 비교하여 판단을 보고한다. 우열을 가리지 못하면 근거와 한계를 보고하는 것으로 충분하다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "store.py의 저장 경로를 대상으로 표준 json과 orjson의 로컬 저장 성능 및 추가 의존성 부담을 조사한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "제품 코드 변경은 제외한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "저장 시간은 로컬에서 측정하며, 비교 대상 건수는 1만 건이다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "대표 입력 데이터, 저장 시간의 측정 구간, 의존성 부담의 세부 평가 항목 및 두 기준 간 우선순위를 정해야 한다.",
+      "state": "proposed",
+      "origin": "ai_proposal"
+    },
+    "research_questions": {
+      "text": "store.py의 저장 경로에서 1만 건을 저장할 때 표준 json과 orjson의 소요 시간은 각각 얼마인가? 추가 의존성 부담에는 어떤 차이가 있는가? 두 기준을 고려하면 어느 쪽이 더 적합한가?",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "decision_purpose": {
+      "text": "store.py의 저장 경로에 사용할 JSON 처리 방식으로 표준 json과 orjson 중 무엇이 나은지 판단한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "evaluation_criteria": {
+      "text": "1만 건 저장 시간과 추가 의존성 부담.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "required_evidence": {
+      "text": "로컬에서 측정한 1만 건 저장 시간과 추가 의존성 부담에 대한 조사 근거. 우열을 가리지 못한 경우에는 그 판단의 근거와 한계.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "research_end_condition": {
+      "text": "합의한 조사·판단 조건에 따라 로컬 측정과 의존성 부담 비교를 완료하고 결과를 보고한다. 우열을 가리지 못하더라도 근거와 한계를 보고하면 정상 완료로 인정한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "1만 건 저장에 사용할 대표 데이터의 구조와 크기는 무엇이며, 사용할 기존 샘플이 있나요?",
+      "summary": "비교에 사용할 입력 확정",
+      "decide_at": "intent",
+      "blocks": []
+    },
+    {
+      "key": "q2",
+      "text": "저장 시간의 측정 시작·종료 지점은 어디이며, 파일 쓰기와 디스크 동기화는 어디까지 포함하나요?",
+      "summary": "시간 측정 경계 정의",
+      "decide_at": "design",
+      "blocks": []
+    },
+    {
+      "key": "q3",
+      "text": "추가 의존성 부담은 어떤 항목으로 평가하나요? 설치·배포 호환성, 패키지 크기, 유지보수 부담 등이 후보가 될 수 있습니다.",
+      "summary": "의존성 평가 항목 선택",
+      "decide_at": "intent",
+      "blocks": []
+    },
+    {
+      "key": "q4",
+      "text": "저장 시간과 추가 의존성 부담이 서로 다른 선택을 지지할 경우, 적용할 우선순위나 허용 기준이 있나요?",
+      "summary": "상충하는 결과의 판단 기준",
+      "decide_at": "intent",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "research_questions",
+      "text": "합의한 대표 입력 1만 건과 동일한 측정 경계로 두 방식의 로컬 저장 시간을 비교하고, 결과의 해석과 한계를 보고한다. 대표 입력과 측정 경계는 q1·q2에서 정해야 하며, 현재 특정 속도나 우위를 기대값으로 확정하지 않는다.",
+      "method": "store.py의 저장 흐름을 읽어 비교 조건을 정리한다. 동일한 입력과 저장 조건으로 두 방식을 측정하고 환경, 버전, 측정 구간, 실행별 결과를 기록한다. 비교가 불가능하거나 우열이 불명확하면 해당 근거와 제한을 검토한다.",
+      "summary": "저장 성능 질문에 근거로 답하기",
+      "method_summary": "동일 조건의 로컬 측정 기록 검토",
+      "obligation": "answer",
+      "conclusion_rule": "bounded_report_allowed"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "evaluation_criteria",
+      "text": "q3에서 정한 항목에 따라 두 방식의 추가 의존성 부담을 비교하고, 확인한 사실과 미확인 사항을 보고한다. 세부 평가 항목이 미정이므로 현재 부담의 허용 수준이나 우위를 확정하지 않는다.",
+      "method": "프로젝트의 의존성 선언과 실행·배포 조건, 해당 버전의 공식 문서 및 필요한 로컬 확인 결과를 대조한다. 평가 항목별 근거와 확인하지 못한 부분이 보고서에 연결되어 있는지 검토한다.",
+      "summary": "의존성 부담의 차이 설명",
+      "method_summary": "프로젝트 조건과 공식 근거 대조",
+      "obligation": "answer",
+      "conclusion_rule": "bounded_report_allowed"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "expected_outcome",
+      "text": "저장 시간과 추가 의존성 부담을 함께 고려한 판단을 보고한다. q4의 판단 기준에 따라 한쪽을 권고하거나, 우열을 가리지 못하는 이유와 근거·한계를 명시하면 충족한다.",
+      "method": "최종 판단이 두 비교 기준의 조사 결과에 연결되는지 검토한다. 미합의 우선순위를 임의로 적용하지 않았는지, 판단 불가인 경우 그 이유와 적용 한계가 제시되었는지 확인한다.",
+      "summary": "종합 판단 또는 판단 불가 보고",
+      "method_summary": "결론과 비교 근거의 연결 확인",
+      "obligation": "answer",
+      "conclusion_rule": "bounded_report_allowed"
+    },
+    {
+      "key": "C-04",
+      "relates_to": "exclusions",
+      "text": "조사 수행으로 제품 코드가 변경되지 않는다.",
+      "method": "조사 전후 제품 코드의 차이 또는 파일 해시를 비교하여 조사로 발생한 변경이 없는지 확인한다. 조사 전에 존재한 변경은 기준 상태에 포함한다.",
+      "summary": "제품 코드 상태 보존",
+      "method_summary": "조사 전후 코드 상태 비교",
+      "obligation": "preservation"
+    }
+  ],
+  "objectives": [],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "medium",
+        "evidence": "비교 대상, 1만 건이라는 건수, 두 평가 기준과 판단 불가 허용 여부가 명시되어 있다.",
+        "judgement": "조사 목적은 분명하지만 재현 가능한 비교와 종합 판단을 위한 세부 조건이 남아 있다.",
+        "unconfirmed": "대표 입력, 측정 경계, 의존성 평가 항목, 기준 간 우선순위."
+      },
+      {
+        "axis": "change_scope",
+        "weight": "insufficient_evidence",
+        "evidence": "대상은 store.py의 저장 경로이고 제품 코드 변경은 제외되지만, 코드 내용과 호출 관계는 제공되지 않았다.",
+        "judgement": "요청의 대상은 특정되어 있으나 조사에 필요한 연관 코드와 실행 구성의 범위는 판단할 수 없다.",
+        "unconfirmed": "저장 경로의 호출 관계와 측정에 필요한 구성 요소."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "저장 데이터의 자료형, 직렬화 옵션, 출력 형식 및 읽기 경로의 요구가 제시되지 않았다.",
+        "judgement": "두 방식이 동일한 저장 조건을 충족하는지 아직 판단할 수 없다.",
+        "unconfirmed": "입력 자료형, 저장 형식, 기존 소비자가 요구하는 데이터 의미."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "로컬 측정 요구는 있으나 사용할 데이터와 저장 대상의 권한·민감도 정보가 없다.",
+        "judgement": "측정 과정의 권한 및 데이터 취급 영향을 판단할 근거가 부족하다.",
+        "unconfirmed": "측정 데이터의 민감도와 저장 위치의 접근 조건."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "insufficient_evidence",
+        "evidence": "제품 코드 변경은 제외되지만 측정용 저장 위치와 기존 데이터에 대한 쓰기 동작은 확인되지 않았다.",
+        "judgement": "제품 코드 변경에 따른 복구는 범위 밖이지만, 측정 부수효과의 가역성과 실패 비용은 미정이다.",
+        "unconfirmed": "측정 결과물의 위치, 덮어쓰기 여부, 정리 방법."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "medium",
+        "evidence": "두 후보와 평가 방향은 정해져 있지만 실제 성능과 의존성 부담은 조사해야 하며, 판단 불가도 허용된다.",
+        "judgement": "비교 방법을 설계하고 실측 근거를 수집해야 하는 수준의 불확실성이 있다.",
+        "unconfirmed": "각 후보의 실행 가능성, 환경 적합성, 측정 결과의 변동."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "evidence": "로컬 저장 시간 측정과 의존성 부담의 근거 비교가 모두 필요하다.",
+        "judgement": "입력과 측정 경계를 맞추고 실행 조건을 기록해야 하므로 단순 확인 이상의 검증 설계가 필요하다.",
+        "unconfirmed": "측정 반복 방식, 파일 캐시와 동기화의 취급, 비교 가능한 결과를 얻을 수 있는지."
+      }
+    ]
+  }
+}

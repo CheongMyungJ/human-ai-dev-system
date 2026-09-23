@@ -414,6 +414,21 @@ class FakeCliExecutor:
         )
 
 
+def met_satisfaction_for(obligation: str | None) -> tuple[str | None, str | None]:
+    """기준의 목적 의무에 맞는 **가장 흔한** 충족 방식과 결론(P4-03).
+
+    시험이 "이 기준이 충족됐다"만 말하고 싶을 때 쓴다. 의무가 없으면(v1 기준) 아무
+    것도 적지 않는다 — v1 기준은 예전 규칙 그대로다.
+    """
+    if obligation is None:
+        return None, None
+    if obligation in ("cause", "answer"):
+        return "investigated", "determined"
+    if obligation == "preservation":
+        return "preserved", None
+    return "changed_and_verified", None
+
+
 def fake_capabilities() -> list[dict[str, Any]]:
     """가짜 CLI의 능력 보고.
 
@@ -721,6 +736,7 @@ class Harness:
         summary: str = "확인함",
         recorded_by: str = "owner",
         satisfaction: str | None = None,
+        conclusion: str | None = None,
     ):
         body: dict[str, Any] = {
             "verdict": verdict,
@@ -735,19 +751,31 @@ class Harness:
         # 명시적 `null` 을 API 계약에서 구별할 이유가 없다.
         if satisfaction is not None:
             body["satisfaction"] = satisfaction
+        # **결론**(P4-03). 원인·조사 기준에만 붙는다.
+        if conclusion is not None:
+            body["conclusion"] = conclusion
         return self.client.post(
             f"/api/cases/{case_id}/criteria/{criterion_id}/result", json=body
         )
 
     def mark_all_criteria_met(self, case_id: str, run_id: str | None = None) -> None:
-        """모든 기준을 충족으로 기록한다. 근거는 사람 판단 또는 실행 결과다."""
+        """모든 기준을 충족으로 기록한다. 근거는 사람 판단 또는 실행 결과다.
+
+        **P4-03: 기준의 목적 의무에 맞는 충족 방식을 함께 적는다.** Profile 정의 v2 의
+        기준은 방식 없는 `met` 을 받지 않는다. 이 도우미가 만드는 상황은 "바꾸고
+        확인했다"(제품 의무), "보존을 확인했다"(보존), "조사로 확정했다"(원인·조사)이며,
+        v1 기준(의무 없음)에는 예전처럼 아무 방식도 적지 않는다.
+        """
         for crit in self.criteria(case_id):
+            satisfaction, conclusion = met_satisfaction_for(crit.get("obligation"))
             response = self.record_result(
                 case_id,
                 crit["id"],
                 "met",
                 evidence_kind="run_output" if run_id else "human_judgement",
                 evidence_run_id=run_id,
+                satisfaction=satisfaction,
+                conclusion=conclusion,
             )
             assert response.status_code == 200, response.text
 
@@ -922,14 +950,20 @@ class Harness:
         criteria: list[dict[str, Any]] | None = None,
         sizing: dict[str, Any] | None = None,
         with_sizing: bool = True,
+        objectives: list[str] | None = None,
     ) -> dict[str, Any]:
         """의도 초안을 제출하고(기본으로) Runner가 저장·구조 보고까지 하게 한다.
 
         `persist=False` 는 "아직 Runner가 저장하지 않은" 상태를 만들기 위한 것이다.
+        `objectives` 는 요청이 명시한 목적 의무(P4-03)이며 주지 않으면 키를 넣지 않는다.
         """
+        extra: dict[str, Any] = {}
+        if objectives is not None:
+            extra["objectives"] = objectives
         response = self.client.post(
             f"/api/cases/{case_id}/intent-drafts",
             json={
+                **extra,
                 "summary": summary,
                 "target_runner_id": RUNNER_ID,
                 "fields": fields,
