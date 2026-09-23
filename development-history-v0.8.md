@@ -46,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절, S-026 에 1.9절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절, S-026 에 1.9절, S-027 에 1.10절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -175,6 +175,17 @@ P4-05 의 재작성·재시도 상한을 **설정으로 바꾼다**. 사용자�
 - **검증:** 두 PC 를 흉내 낸 시험 — PC A 에서 등록한 필수 규칙(권위 원문 포함)이 PC B 의 실행에 주입되고 영수증 `read`, PC A 미연결에서도 동작. 해시가 다른 본문은 읽지 않음. 서버 로그 표식 검사. 이행 v22 → v23.
 - 코드 대조 시작점: `controller/repository.py` 의 P4-06 절(`register_knowledge`·`_add_knowledge_refs`·`list_context_refs`·`_unavailable_core`), `runner/agent.py` 의 `load_context`·`_store_knowledge`, `controller/api.py` 의 `_knowledge_intake`, `tests/test_knowledge.py`·`tests/test_data_boundary.py`.
 
+### 1.10 P4-07 — 선택적 지식 추출 (완료 — 당시 인계로 보존, S-027 에 옮김)
+
+**목표:** 선택적 지식 추출(D-67, [프로젝트 지식](project-knowledge.md) 3절, 6절 P4-07 행) — 의미 있는 사건(중요 결정 확정·비자명한 문제 해결·반복 문제·구조/계약 변경·기존 지식의 반증)에서 **후보**를 만들고, 기존 항목에 근거 추가·버전 대체로 정리하고, 후보 → 적용(활성화)을 잇는다. 아무 후보 없는 Case 도 정상 완료이고 추가 호출을 의무화하지 않으며, 추출 비용은 예산에 누적된다.
+
+- **P4-06이 넘긴 것:** 등록부와 권위 규칙이 있다 — AI 제안은 `ai_proposal` **후보로만** 들어오고(DB CHECK 까지), 활성화는 사람의 새 버전(`user_decision`)이다. 후보는 보조 입력(`knowledge_candidate`, "규칙이 아니다")으로 이미 주입된다. 대화의 명시 규칙은 P4-06의 자동 활성 등록(`user_statement`)이 맡으므로 P4-07은 **작업 결과에서 나온 AI 관찰·제안**이 대상이다. 참고 지식의 자동 활성화("근거·조건을 확인해 참고로 활성화할 수 있다")와 QG-08의 확인 수준은 P4-07에서 정한다. 등록 블록(`hads-knowledge`)·`knowledge_intake`(멱등·거부 사유)·`register_knowledge` 를 재사용할 수 있다.
+- **P4-06b가 넘긴 것:** 지식 원문의 집은 **서버**(`knowledge_body`)다 — 후보의 적용 내용도 Runner 가 `POST /api/runner/knowledge-originals` 로 올리면 어느 PC 의 실행에도 주입·열람된다(4,000 자 상한, 해시 대조). 후보(`ai_proposal`)에는 권위 사용자 메시지가 없으므로 권위 메시지 저장 경로는 쓰지 않는다. 추출 실행이 원문을 올리는 시점은 P4-06 의 논의 응답과 같이 결과 보고 **전**이어야 한다(보고가 원문 참조를 가리킨다).
+- **plan 에서 정할 것:** 추출 계기와 자리(기존 완료·검토 실행이 후보를 함께 남기는가, 별도 실행을 언제 쓰는가 — 의무 아님), 중복 후보의 연결·대체, 후보 → 활성의 확인 수준(QG-08: 근거·범위·상태·버전 확인, 위험·충돌에 따라 독립 검토 선택), Case 브랜치 사실의 범위(당시 코드·환경에 연결), 추출 예산 부족 시 미처리 표시. **새 제품 판단이 있으면 묻는다**(특히 참고 지식 자동 활성화의 조건).
+- 코드 대조 시작점: `domain/knowledge.py`(`check_authority`·`parse_report_item`·`split_knowledge`), `controller/repository.py` 의 P4-06 절(`register_knowledge`·`apply_knowledge_report`·`knowledge_view`)과 P4-06b 절(`store_knowledge_original`·`store_knowledge_body_from_runner`·`knowledge_uploads_for`), `runner/prompts.py` 의 `KNOWLEDGE_REGISTRATION_RULE`, `runner/agent.py` 의 `_store_knowledge`, `controller/request_processor.py` 의 `finish`, `web/src/KnowledgePanel.tsx`.
+
+구현은 [P4-PLAN-07](plans/P4-PLAN-07.md)·[P4-07 결과](p4/evidence/P4-07-results.md)다. S-027 은 사용자에게 물을 수 없는 자율 실행이라 참고 후보의 자동 활성화를 **하지 않는 쪽**으로 두고 제안 조건을 인계에 적었다.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -212,6 +223,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-025 / 2026-09-24 / P4-05b 진행 상한 설정 + P4-06 지식 관리·적용 (**완료**, S-027 에 옮김)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘." 다음 단계는 1.8절의 **P4-05b**(먼저)와 1.7절의 **P4-06**(같은 세션, 사용자 결정 2026-09-24)이었다.
+- **수행:** 시작 상태(`main`/`a933457`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → 웹 빌드·웹 단위 18, pytest **633 통과**, P1 계약 18, 6분 57초)을 직접 확인한 뒤 [P4-PLAN-05b](plans/P4-PLAN-05b.md)를 기록하고 구현·검증했고, 이어 [P4-PLAN-06](plans/P4-PLAN-06.md)을 **구현 전에 기록**했다. P4-06 plan 을 쓰기 전에 **새 제품 판단 하나를 물었다** — 대화에서 말한 프로젝트 규칙의 등록 방식. **사용자의 답(2026-09-24): "자동 활성"** — AI 가 옮긴 글을 사용자 말을 권위로 바로 활성 등록하고, 주입 때 원래 말을 함께 넣고, 카드에서 무효화할 수 있게 한다. D-80 에 보충으로 적었다(decisions.md).
+- **P4-05b:** `domain/work_flow.py` 의 상수를 `ProgressLimits`(재작성 2·재시도 1, 0~10)로, 환경 변수 `HADS_REPAIR_LIMIT`·`HADS_TASK_RETRY_LIMIT`(기동 검증·로그), Case 별 이력(v21 `progress_limit_setting`), `GET/PUT /api/cases/{id}/progress[/limits]`, 상한 대기 카드의 "한도를 올리고 계속", 관리 화면 진행 상한 절. **코드 대조로 찾아 고친 것 둘** — (1) 준비 산출물 상한이 첫 작성까지 세어 재작성 1회였다(plan 은 2회) → 다시 쓴 횟수로 셈(기본에서 재작성 2회로 **동작 변경**), (2) 상한 뒤 계속 진행은 한 번 더 가지 않았다(문서와 다름) → P4-05 시험의 약한 단언을 실제 동작으로 고치고 문서를 바로잡음. 결과 [P4-05b](p4/evidence/P4-05b-results.md).
+- **P4-06 서버:** `domain/knowledge.py`(활동 표·선택·충돌·권위·등록 블록), v22 표 다섯과 `run.knowledge_report_json`, 등록·개정·활성화·무효화·충돌 API, `compose_context`(기존 참조 뒤에 필수·권위 원문·참고·후보), `plan_context_package` 에 저장소·지식 결정·충돌, 생성 트랜잭션의 Manifest(`run_knowledge`), 진입 거부 `knowledge_conflict_unresolved` → 진행기 `knowledge_conflict` 대기, 처리기가 응답 완료 뒤 해석보다 먼저 자동 등록(`knowledge_intake` 멱등·거부 사유), 대화 조회 `knowledge_registrations`, 실행 문맥 조회의 Manifest.
+- **P4-06 Runner·화면:** 지식 참조 머리(키·버전·효력·범위)·지식 안내(제공은 준수의 증거가 아님), 모든 논의 응답의 등록 규칙(현재 지식 목록·저장소 이름), 블록 분리·원문 저장·보고. 새 화면의 등록 카드(무효화)·거부 카드, 관리 화면 지식 패널(`web/src/KnowledgePanel.tsx`)·실행 문맥 칸의 제공 지식. 결과 [P4-06](p4/evidence/P4-06-results.md).
+- **기존 시험의 의미 검토:** 셋을 고쳤고 검사를 지우지 않았다 — v19→v20 이행의 `== 20` → `>= 20`, P4-05 재시도 시험의 마지막 단언(실제 동작), 새로 쓴 v21 이행 시험의 `== 21` → `>= 21`(판 고정은 각 판의 이행 시험).
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **18**, pytest **672 통과·0 실패**(8분 54초, +39), P1 계약 **18**. 새 시험: `test_progress_limits.py` 23, `test_knowledge.py` 14, 브라우저 2(`test_a_limit_card_raises_the_limit_and_goes_once_more`, `test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated`).
+- **실제 CLI·실제 브라우저:** `p4/live/p406_knowledge.py`(제품 코드 import 없음)로 **통과 — 제품 규칙 21/21, 관찰 8, 남은 프로세스 0**(회차 `014343060`, 두 번째 시도 — 첫 시도는 스크립트의 콘솔 인코딩으로 죽음). 규칙 대화 → codex 가 등록 블록을 붙여 **글자 그대로** 옮김(범위는 저장소로 좁힘 — 관찰) → 활성·`user_statement` → 다른 대화의 업무 실행 6개(의도·설계·계획·구현·검증 2) 전부에 필수 규칙·권위 원문이 핵심 입력으로 들어가고 영수증 `read`·Manifest 제공, 논의 응답은 활동 비적용, 기준 판정은 지식 제공과 무관(C-01 `unverified` 로 예외 카드에서 멈춤 — 종료하지 않음). 구현은 한 줄 docstring 을 달았다(관찰; 같은 회차의 `False` 관찰 값은 스크립트 검사 결함이었고 고쳤다).
+- **경계:** 강제 축은 넷 그대로. 한도 올리기·지식 등록·활성화·주입은 권한·동의·인수가 아니고 주입은 준수의 증거가 아니다. 선택 추출(P4-07)·결정 사항/프로젝트 규칙 화면·검색(UI-04)·QG-08·Project 상한은 넣지 않았다(9절).
+- **다음 행동:** **P4-06b — 지식 원문 서버 저장**(1.9절, 사용자 결정 2026-09-24)을 다른 세션에서 새 plan 으로 시작한다. 그 뒤 **P4-07**(1.10절, 제안)·UI-04. 완료된 plan 을 다시 열지 않는다.
+- **사람에게 물어야 할 것:** (1) P4-07 과 UI-04 의 순서(P4-07 먼저를 제안). (2) 자동 등록된 규칙의 범위를 AI 가 좁혀(또는 넓혀) 옮길 수 있다(라이브 관찰) — 그대로 둘지, "프로젝트" 라고 말했을 때 저장소로 좁히지 못하게 규칙을 더 조일지는 제품 판단이다. **답을 받은 것:** 추출 기준(자동 등록은 사용자가 명시한 프로젝트 규칙을 AI 가 판단해 옮기는 것뿐이고 작업 결과에서의 추출은 P4-07)과 지식의 서버 보관을 설명했고, 사용자가 **"지식만 예외로 서버에 저장"** 을 확정했다(권위 원문 한 건 포함, 다른 세션에서 P4-06b, 1.9절·D-67 보충).
+- **사용자 지시로 한 일:** 작업 보고 뒤 질문(추출 기준·서버 보관·다른 PC)에 답했고, 사용자 지시("좋아 그렇게 확정할게 다른 세션에서 할거니까 그렇게 기록하고 마지막엔 지금까지 작업한거 커밋푸시해줘")로 (1) P4-06b 결정을 decisions.md(D-67 보충)·data-boundary-review·project-knowledge 5절·AC-35·36·이 문서(1.9절 등)·README 에 기록하고, (2) 이 세션 작업을 **`d74726a`** 로 커밋한 뒤 이 인계 기록을 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 fetch 해 원격이 `a933457` 그대로임을 확인). P4-06b 자체는 시작하지 않았다. 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`a933457` clean. 이 세션의 변경은 `d74726a` 와 인계 기록 커밋으로 push됐다 — 새 파일 `domain/knowledge.py`, `plans/P4-PLAN-05b.md`·`P4-PLAN-06.md`, `tests/test_progress_limits.py`·`test_knowledge.py`, `p4/live/p406_knowledge.py`, `web/src/KnowledgePanel.tsx`, `p4/evidence/P4-05b-results.md`·`P4-06-*`(결과·라이브 로그·결과 JSON·화면 3장). 수정 파일 `controller/{admission,api,app,config,db,repository,request_processor,schema.sql}`, `domain/{context,models,work_flow}.py`, `runner/{agent,prompts}.py`, `tests/{test_closure_follow_up,test_web_shell,test_work_progressor}.py`, `tests/fake_cli/fake_codex.py`, `web/src/{api.ts,App.tsx,PolicyPanel.tsx}`, `web/src/shell/{ConversationView,ProgressCards}.tsx`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`·`README.md`·`decisions.md`·`project-knowledge.md`·`ui-conversation-design.md`. 문서 `data-boundary-review.md`·`review-acceptance-matrix.md` 도 결정 표시로 고쳤다. `web/dist` 는 빌드 산출물(`.gitignore`). `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner·codex·Edge 는 스크립트가 내렸다(남은 프로세스 0). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p4-06-live\{첫 시도, 014343060}` 에 있고 저장소 `var\` 는 건드리지 않았다. 새 의존성 없음.
+- **다음 세션이 이어서 할 때:** 지식 시험 도우미는 `tests/test_knowledge.py` 의 `_register`(등록 후 `persist_pending_intakes`)·`_start_in`(같은 Project 에서 업무화)·`_manifest` 다. 자동 등록은 가짜 응답에 `hads-knowledge` 블록(`_knowledge_reply`), 실제 프로세스 가짜 codex 는 사용자 말의 `HADS_FAKE_RULE` 표지다. 상한 대기는 `HADS_FAKE_IMPL_NOCHANGE`(구현이 파일을 바꾸지 않음). v22 이행 시험은 v21 이 아직 커밋 전이라 현재 `schema.sql` 의 v22 절 앞을 v21 로 쓴다 — 커밋 뒤에도 성립한다.
 
 ### 이전 개발 인계 — S-024 / 2026-09-23 / P4-05 업무 단계 자동 진행과 완료·예외·후속 (**완료**, S-026 에 옮김)
 

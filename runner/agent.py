@@ -548,7 +548,14 @@ class RunnerAgent:
         # 함께 올린다.
         knowledge_report = (
             self._store_knowledge(
-                case_id, run_id, produced.pop("knowledge_items"), assignment, instruction
+                case_id,
+                run_id,
+                produced.pop("knowledge_items"),
+                assignment,
+                instruction,
+                # P4-07. 권위 메시지는 **논의 응답의 사용자 말 항목**에만 딸린다. 작업 실행의 후보와
+                # 논의 응답의 제안(`proposal`)에는 권위가 없다 — AI 제안이다.
+                with_authority=purpose == RunPurpose.DISCUSSION_REPLY.value,
             )
             if produced.get("knowledge_items")
             else None
@@ -864,6 +871,12 @@ class RunnerAgent:
         produced: dict[str, Any] = {"purpose": purpose, "produced": "none"}
         if output.outcome is not RunOutcome.COMPLETED:
             return produced
+        if purpose in knowmod.EXTRACTION_PURPOSES:
+            # P4-07. 작업 실행의 지식 후보 블록을 **먼저** 뗀다 — 산출물(JSON)은 나머지 글에서 읽고, 블록의
+            # 원문은 결과보다 먼저 서버로 간다(`_store_knowledge`). 블록이 없으면 아무 것도 달라지지 않는다.
+            items = self._detach_knowledge(output)
+            if items:
+                produced["knowledge_items"] = items
 
         try:
             if purpose == RunPurpose.INTENT_AUTHORING.value:
@@ -933,8 +946,8 @@ class RunnerAgent:
         실패다. 업무 단계 응답은 건드리지 않는다(해석 규칙을 받지 않았다).
         """
         original = output.final_message
-        # P4-06. **모든 논의 응답**에서 등록 블록을 뗀다. 항목의 원문은 이 Runner 에 저장되고
-        # (`_store_knowledge`) 제어부에는 메타데이터와 참조만 간다.
+        # P4-06. **모든 논의 응답**에서 등록 블록을 뗀다. 항목의 원문은 서버로 가고(`_store_knowledge`,
+        # P4-06b) 제어부의 결과 보고에는 메타데이터와 참조만 간다.
         text, knowledge_items = knowmod.split_knowledge(original)
         produced: dict[str, Any] = {"produced": "discussion_reply"}
         if knowledge_items:
@@ -949,6 +962,12 @@ class RunnerAgent:
             produced["interpretation"] = interpretation.to_dict()
         if not text:
             raise ValueError("응답 글이 비었다 — 블록만으로는 대화에 붙일 말이 없다")
+        RunnerAgent._replace_final_message(output, original, text)
+        return produced
+
+    @staticmethod
+    def _replace_final_message(output: Any, original: str, text: str) -> None:
+        """최종 메시지에서 기계용 블록을 뗀 글로 바꾼다 — 실행 결과 원문의 최종 메시지 자리도 같이."""
         output.final_message = text
         body = output.output_body
         tail = original.encode("utf-8")
@@ -959,7 +978,21 @@ class RunnerAgent:
             output.output_body = (
                 body.decode("utf-8", errors="replace").replace(original, text).encode("utf-8")
             )
-        return produced
+
+    @staticmethod
+    def _detach_knowledge(output: Any) -> list[dict[str, Any]]:
+        """P4-07. 작업 실행의 응답에서 지식 후보 블록을 뗀다. (항목들 — 없으면 빈 목록)
+
+        블록은 기계용이므로 실행 결과 원문에서도 뗀다(논의 응답과 같다). 나머지 글이 비면 그대로 둔다 —
+        산출물 파싱이 그것을 실패로 판정한다(여기서 판정하지 않는다).
+        """
+        original = output.final_message
+        text, items = knowmod.split_knowledge(original)
+        if not items:
+            return []
+        if text:
+            RunnerAgent._replace_final_message(output, original, text)
+        return items
 
     def _store_knowledge(
         self,
@@ -968,6 +1001,8 @@ class RunnerAgent:
         items: list[dict[str, Any]],
         assignment: dict[str, Any],
         instruction: bytes | None,
+        *,
+        with_authority: bool = True,
     ) -> list[dict[str, Any]]:
         """P4-06. 옮겨 적은 적용 내용을 원문으로 저장·등록하고 보고 항목을 만든다.
 
@@ -977,9 +1012,13 @@ class RunnerAgent:
         서버가 그것을 받지 않으면(사용자 메시지가 아님 등) 건너뛴다 — 등록이 되면 서버가 "올릴 것"으로
         다시 청한다. 형식이 틀린 항목은 그대로 `format_error` 로 보낸다 — 제어부가 거부 사유로 남긴다
         (조용히 버리지 않는다).
+
+        **P4-07.** 작업 실행의 후보(`with_authority=False`)와 논의 응답의 `proposal: true` 항목에는 권위
+        메시지를 올리지 않는다 — AI 제안이며 사용자의 말이 권위가 아니다. 사용자 말 항목이 하나도 없으면
+        권위 메시지도 올리지 않는다.
         """
         report: list[dict[str, Any]] = []
-        uploaded = 0
+        statements = 0
         for raw in items[: knowmod.MAX_REPORT_ITEMS + 5]:
             if raw.get("format_error"):
                 report.append({"format_error": str(raw["format_error"])[:120]})
@@ -999,16 +1038,20 @@ class RunnerAgent:
                     "summary": f"knowledge original from {run_id}"[:200],
                 },
             )
-            uploaded += 1
+            if not raw.get("proposal"):
+                statements += 1
             entry = {
                 key: raw.get(key)
-                for key in ("kind", "obligation", "summary", "repository", "paths", "activities", "supersedes")
+                for key in (
+                    "kind", "obligation", "summary", "repository", "paths", "activities", "supersedes",
+                    "relates_to", "relation", "basis", "proposal",
+                )
             }
             entry["summary"] = " ".join(str(entry.get("summary") or "").split())[:200]
             entry["artifact_id"] = artifact_id
             entry["revision"] = 1
             report.append(entry)
-        if uploaded and instruction is not None and assignment.get("request_id"):
+        if with_authority and statements and instruction is not None and assignment.get("request_id"):
             try:
                 self._send(
                     self.client.store_knowledge_original,

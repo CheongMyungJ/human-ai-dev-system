@@ -757,7 +757,8 @@ def test_the_knowledge_body_table_is_the_only_body_table_and_is_bounded(harness)
     body_like = {"content", "body", "text", "raw", "payload", "diff", "log",
                  "output", "command", "stdout", "stderr", "files", "paths"}
     for table in ("artifact_ref", "knowledge_item", "knowledge_version", "knowledge_conflict",
-                  "knowledge_intake", "run_knowledge", "intake", "artifact_read_request"):
+                  "knowledge_intake", "run_knowledge", "knowledge_evidence", "intake",
+                  "artifact_read_request"):
         columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
         assert columns, f"{table} 이 없다"
         assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"

@@ -16,6 +16,9 @@
     HADS_FAKE_IMPL_NOCHANGE  (P4-05b) 구현 실행이 고쳤다고 적지만 파일을 바꾸지 않는다(실패 → 재시도 상한)
     HADS_FAKE_RULE           (P4-06) 논의 응답이 사용자의 마지막 메시지를 프로젝트 필수 규칙으로 옮기는
                              등록 블록(`hads-knowledge`)을 붙인다
+    HADS_FAKE_PROPOSAL       (P4-07) 논의 응답이 AI 제안(`proposal: true`) 항목 하나를 등록 블록에 붙인다
+    HADS_FAKE_CANDIDATE      (P4-07) 검증 실행이 후보 블록(운영 사실·참고, 근거 한 줄)을 답 뒤에 붙인다.
+                             `HADS_FAKE_CANDIDATE_SUPPORTS=K-001` 이면 그 키를 뒷받침하는 관측으로 붙인다
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -92,7 +95,10 @@ def work_stage_reply(prompt: str) -> str | None:
         )
         return canned.FAKE_IMPLEMENTATION_RESPONSE
     if starts(templates.VERIFICATION_RUN_PROMPT):
-        return canned.FAKE_VERIFICATION_RESPONSE
+        text = canned.FAKE_VERIFICATION_RESPONSE
+        if "HADS_FAKE_CANDIDATE" in prompt and "hads-knowledge" in prompt:
+            text += candidate_block(prompt)
+        return text
     if starts(templates.LIMITED_ANALYSIS_PROMPT):
         return (
             "원인을 확인했습니다.\n\n```json\n"
@@ -101,6 +107,22 @@ def work_stage_reply(prompt: str) -> str | None:
             ' "conclusion": "determined", "summary": "경로 확인"}]}\n```\n'
         )
     return None
+
+
+def candidate_block(prompt: str) -> str:
+    """P4-07. 검증 실행의 후보 블록. 저장소 이름은 지시문의 후보 규칙이 준 값을 그대로 쓴다(지어내지 않는다)."""
+    given = re.search(r'"repository": ("[^"]*"|null)', prompt)
+    repository = json.loads(given.group(1)) if given else None
+    supports = re.search(r"HADS_FAKE_CANDIDATE_SUPPORTS=(K-\d+)", prompt)
+    item = {
+        "kind": "operation", "obligation": "reference", "summary": "검증 환경 관찰",
+        "content": "CANDIDATE-MARK 이 저장소의 시험은 표본 파일 두 개로 돌고 종료 코드 0 이 정상이다.",
+        "basis": "python -m pytest tests/test_reader.py 종료 코드 0", "repository": repository,
+        "paths": [], "activities": ["verification"],
+        "relates_to": supports.group(1) if supports else None,
+        "relation": "supports" if supports else None,
+    }
+    return "\n\n```hads-knowledge\n" + json.dumps({"items": [item]}, ensure_ascii=False) + "\n```"
 
 
 def main() -> int:
@@ -158,16 +180,26 @@ def main() -> int:
         if "hads-knowledge" in prompt:
             # P4-06. 등록 규칙을 받은 논의 응답. 표지는 사용자의 마지막 메시지에서만 읽는다.
             last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
+            items = []
             if "HADS_FAKE_RULE" in last:
-                said = " ".join(last.replace("HADS_FAKE_RULE", "").split())[:300]
-                item = {
+                said = " ".join(last.replace("HADS_FAKE_RULE", "").replace("HADS_FAKE_PROPOSAL", "").split())[:300]
+                items.append({
                     "kind": "constraint", "obligation": "required", "summary": "대화에서 정한 규칙",
                     "content": said, "repository": None, "paths": [], "activities": [],
                     "supersedes": None,
-                }
+                })
+            if "HADS_FAKE_PROPOSAL" in last:
+                # P4-07. AI 제안 — 사용자의 말이 아니다. 후보로만 등록된다.
+                items.append({
+                    "kind": "operation", "obligation": "reference", "summary": "AI 관찰(제안)",
+                    "content": "PROPOSAL-MARK 시험은 저장소 루트에서 python -m pytest 로 돈다.",
+                    "basis": "이 대화의 논의", "repository": None, "paths": [], "activities": [],
+                    "relates_to": None, "relation": None, "proposal": True,
+                })
+            if items:
                 text += (
                     "\n\n```hads-knowledge\n"
-                    + json.dumps({"items": [item]}, ensure_ascii=False)
+                    + json.dumps({"items": items}, ensure_ascii=False)
                     + "\n```"
                 )
     emit(

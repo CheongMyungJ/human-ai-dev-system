@@ -216,6 +216,172 @@ ROLE_REFERENCE = "knowledge_reference"
 ROLE_CANDIDATE = "knowledge_candidate"
 
 
+# ------------------------------------------------------------------ 추출 (P4-07)
+
+
+class Relation(str, Enum):
+    """후보와 **기존 항목**의 관계(P4-07). 중복은 근거 추가·버전 대체로 정리한다(D-67).
+
+    `supports`     기존 항목을 뒷받침하는 관측 — 새 항목을 만들지 않고 그 항목에 **근거 행**을 남긴다
+    `supersedes`   기존 항목을 바꾸자는 제안 — 관계를 가진 **새 후보**. 기존 활성 버전은 그대로다
+    `contradicts`  기존 항목과 다른 관측(반증) — 관계를 가진 새 후보. 대상을 자동으로 무효화하지 않는다
+    """
+
+    SUPPORTS = "supports"
+    SUPERSEDES = "supersedes"
+    CONTRADICTS = "contradicts"
+
+
+#: 후보 블록을 붙일 수 있는 **작업 실행** 목적. 추출은 그 실행이 이미 다룬 근거에서만 한다 — 별도
+#: 추출 실행을 만들지 않는다(project-knowledge 3절). 논의 응답은 `proposal: true` 로 같은 길을 쓴다.
+EXTRACTION_PURPOSES: frozenset[str] = frozenset(
+    {
+        RunPurpose.VERIFICATION_RUN.value,
+        RunPurpose.LIMITED_ANALYSIS.value,
+        RunPurpose.LOCAL_EXPERIMENT.value,
+        RunPurpose.FEATURE_IMPLEMENTATION.value,
+    }
+)
+
+#: 한 작업 실행이 남길 수 있는 후보 수. 실행 하나가 규칙 목록을 쏟아 내지 않게 한다.
+MAX_CANDIDATES_PER_RUN = 3
+
+#: 후보 원문의 관측 문맥·채택 확인 기록의 길이 상한(스키마 CHECK 와 같다). 본문이 아니다.
+MAX_OBSERVED_JSON = 1000
+MAX_ADOPTION_JSON = 2000
+
+
+@dataclass(frozen=True)
+class AdoptionFinding:
+    """QG-08 채택 확인의 항목 하나. `blocking` 이면 활성화를 거부한다."""
+
+    code: str
+    blocking: bool
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"code": self.code, "blocking": self.blocking, "detail": self.detail}
+
+
+#: 채택 확인 코드. 막는 것과 경고를 나눈다(P4-PLAN-07 3.4).
+ADOPTION_NOT_A_CANDIDATE = "not_a_candidate"
+ADOPTION_CONTENT_UNAVAILABLE = "content_unavailable"
+ADOPTION_OPEN_CONFLICT = "open_conflict"
+ADOPTION_CONTRADICTS_ACTIVE = "contradicts_active"
+ADOPTION_TARGET_NOT_ACTIVE = "target_not_active"
+ADOPTION_SCOPE_WIDENED = "scope_widened"
+ADOPTION_NO_EVIDENCE = "no_evidence"
+ADOPTION_SCOPE_WIDER_THAN_OBSERVED = "scope_wider_than_observed"
+ADOPTION_OBLIGATION_RAISED = "obligation_raised"
+ADOPTION_RELATED_VERSION_CHANGED = "related_version_changed"
+ADOPTION_INDEPENDENT_REVIEW_NOT_RUN = "independent_review_not_run"
+
+
+def adoption_check(
+    candidate: dict[str, Any],
+    *,
+    evidence_count: int,
+    storage: str | None,
+    open_conflicts: int,
+    related: dict[str, Any] | None,
+    into: dict[str, Any] | None,
+    requested: dict[str, Any] | None = None,
+) -> list[AdoptionFinding]:
+    """후보 → 활성의 **QG-08 확인**(근거·범위·상태·버전·충돌). 순수 규칙이다.
+
+    `candidate` 는 후보의 현재 버전(`state`·`obligation`·`scope_kind`·`repository_id`·`activities`·
+    `relation`·`relates_to_version`·`observed`). `related` 는 관계 대상의 현재 버전, `into` 는 "이 항목의
+    새 버전으로" 적용할 대상의 현재 버전(없으면 `None`). `requested` 는 활성화가 요청한 축소(효력·범위·
+    활동). **막는 항목이 하나라도 있으면 활성화하지 않는다.** 경고는 새 버전에 기록될 뿐이다.
+
+    독립 AI 검토(QG-08 의 선택 사항)는 이 판에 없다 — 그 사실을 항목으로 남긴다(지어내지 않는다).
+    """
+    requested = requested or {}
+    out: list[AdoptionFinding] = []
+    if candidate.get("state") != KnowledgeState.CANDIDATE.value:
+        out.append(AdoptionFinding(ADOPTION_NOT_A_CANDIDATE, True, f"후보가 아니다: {candidate.get('state')}"))
+    if storage != "server":
+        out.append(
+            AdoptionFinding(
+                ADOPTION_CONTENT_UNAVAILABLE, True, "적용 내용 원문이 서버에 없다 — 원문 없이 규칙을 만들지 않는다"
+            )
+        )
+    if open_conflicts:
+        out.append(AdoptionFinding(ADOPTION_OPEN_CONFLICT, True, f"열린 충돌 {open_conflicts}건"))
+    relation = candidate.get("relation")
+    if relation == Relation.CONTRADICTS.value and related is not None:
+        if related.get("state") == KnowledgeState.ACTIVE.value and (
+            into is None or into.get("knowledge_id") != related.get("knowledge_id")
+        ):
+            out.append(
+                AdoptionFinding(
+                    ADOPTION_CONTRADICTS_ACTIVE,
+                    True,
+                    f"반증 대상 {related.get('knowledge_key')} 이 아직 활성이다 — 대상을 무효·개정하거나 그 항목의"
+                    " 새 버전으로 적용한다",
+                )
+            )
+    if into is not None and into.get("state") not in PROVIDED_STATES:
+        out.append(
+            AdoptionFinding(
+                ADOPTION_TARGET_NOT_ACTIVE, True, f"대상 {into.get('knowledge_key')} 은 {into.get('state')} 이다"
+            )
+        )
+    # 범위는 좁힐 수만 있다.
+    widened: list[str] = []
+    scope_kind = requested.get("scope_kind") or candidate.get("scope_kind")
+    if candidate.get("scope_kind") == ScopeKind.REPOSITORY.value:
+        if scope_kind == ScopeKind.PROJECT.value:
+            widened.append("저장소 → 프로젝트")
+        elif requested.get("repository_id") and requested["repository_id"] != candidate.get("repository_id"):
+            widened.append("다른 저장소")
+    if requested.get("activities") is not None:
+        current = list(candidate.get("activities") or [])
+        asked = list(requested["activities"])
+        if current and any(a not in current for a in asked):
+            widened.append("활동 추가")
+        if not asked and current:
+            widened.append("모든 활동으로")
+    if widened:
+        out.append(AdoptionFinding(ADOPTION_SCOPE_WIDENED, True, "범위를 넓힐 수 없다: " + ", ".join(widened)))
+    # 경고.
+    if evidence_count <= 0:
+        out.append(AdoptionFinding(ADOPTION_NO_EVIDENCE, False, "근거 실행·근거 행이 없다. 활성화 사유가 근거다"))
+    observed = candidate.get("observed") or {}
+    if scope_kind == ScopeKind.PROJECT.value and observed.get("repository_id"):
+        out.append(
+            AdoptionFinding(
+                ADOPTION_SCOPE_WIDER_THAN_OBSERVED,
+                False,
+                f"프로젝트 범위인데 관측은 저장소 {observed.get('repository_name') or observed['repository_id']} 하나다",
+            )
+        )
+    obligation = requested.get("obligation") or candidate.get("obligation")
+    if (
+        candidate.get("obligation") == KnowledgeObligation.REFERENCE.value
+        and obligation == KnowledgeObligation.REQUIRED.value
+    ):
+        out.append(AdoptionFinding(ADOPTION_OBLIGATION_RAISED, False, "참고 후보를 필수로 올린다 — 사람의 결정이다"))
+    if related is not None and candidate.get("relates_to_version") and (
+        related.get("id") != candidate.get("relates_to_version")
+    ):
+        out.append(
+            AdoptionFinding(
+                ADOPTION_RELATED_VERSION_CHANGED,
+                False,
+                f"관계 대상 {related.get('knowledge_key')} 이 후보 이후 v{related.get('version')} 이 됐다",
+            )
+        )
+    out.append(
+        AdoptionFinding(ADOPTION_INDEPENDENT_REVIEW_NOT_RUN, False, "독립 AI 검토는 돌리지 않았다(이 판에는 없다)")
+    )
+    return out
+
+
+def adoption_blocked(findings: Iterable[AdoptionFinding]) -> list[str]:
+    return [f.code for f in findings if f.blocking]
+
+
 def role_for(version: dict[str, Any]) -> str:
     if version["state"] == KnowledgeState.CANDIDATE.value:
         return ROLE_CANDIDATE
@@ -362,6 +528,20 @@ def parse_report_item(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
         return None, "paths_without_repository"
     supersedes = raw.get("supersedes")
     supersedes = str(supersedes).strip() if supersedes else None
+    # P4-07. 후보의 관계·근거·제안 표지. `relation` 이 있으면 대상 키가 있어야 한다. 논의 응답의
+    # `supersedes`(사용자가 바꾸라고 한 기존 규칙)는 그대로 두고, AI 제안의 관계는 `relates_to` 다.
+    relates_to = raw.get("relates_to")
+    relates_to = str(relates_to).strip() if relates_to else None
+    relation = raw.get("relation")
+    relation = str(relation).strip() if relation else None
+    if relation is not None:
+        try:
+            relation = Relation(relation).value
+        except ValueError:
+            return None, "invalid_relation"
+        if relates_to is None:
+            return None, "relation_without_target"
+    basis = " ".join(str(raw.get("basis") or "").split())[:200] or None
     return {
         "kind": kind,
         "obligation": obligation,
@@ -372,6 +552,10 @@ def parse_report_item(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
         "paths": paths,
         "repository": repository,
         "supersedes": supersedes,
+        "relates_to": relates_to,
+        "relation": relation,
+        "basis": basis,
+        "proposal": bool(raw.get("proposal")),
     }, None
 
 

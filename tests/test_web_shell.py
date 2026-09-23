@@ -736,3 +736,84 @@ def test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated(stac
         "배포 전에는 반드시 시험을 돌린다", timeout=15_000
     )
     page.context.close()
+
+
+def test_a_work_run_leaves_a_candidate_card_and_the_admin_panel_checks_and_activates_it(stack):
+    """P4-07 AC-12 — 검증 실행이 남긴 후보가 대화에 "지식 후보" 카드로 보이고(규칙이 아니다), 관리 화면의
+    지식 패널에서 채택 확인을 본 뒤 사람이 활성화한다. 종료 뒤 논의 응답의 AI 제안은 후보 카드로 보인다.
+    """
+    project = stack.project("지식 추출")
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_CANDIDATE 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+
+    card = page.locator('[data-testid="knowledge-candidate-card"]')
+    expect(card).to_be_visible(timeout=30_000)
+    expect(card).to_contain_text("K-001")
+    expect(card).to_contain_text("후보이며 규칙이 아니다")
+    expect(card.locator('[data-testid="knowledge-candidate-row-0"]')).to_have_attribute("data-state", "registered")
+    expect(card).to_contain_text("관측: 저장소")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    current = view["items"][0]["current"]
+    assert (current["state"], current["authority_kind"], current["obligation"]) == ("candidate", "ai_proposal", "reference")
+    assert current["observed"]["purpose"] == "verification_run" and current["storage"] == "server"
+    assert stack.http.get(f"/api/cases/{case_id}").json()["status"] == "closed"  # 후보는 완료를 막지 않는다
+    # 이 대화의 원문 중 서버 본문은 후보 원문뿐이다(권위 메시지 없음). 제어부는 세션 공유라 다른 시험의 행이 있다.
+    with stack.db() as conn:
+        purposes = [
+            r["purpose"]
+            for r in conn.execute(
+                "SELECT b.purpose FROM knowledge_body b JOIN artifact_ref a"
+                " ON a.artifact_id = b.artifact_id AND a.revision = b.revision WHERE a.case_id = ?",
+                (case_id,),
+            )
+        ]
+    assert purposes == ["knowledge"]
+
+    # 종료 뒤 논의 응답의 AI 제안 → 후보 카드(사용자 말이 아니다).
+    _send(page, "HADS_FAKE_PROPOSAL 이 업무에서 배운 것을 정리해줘")
+    proposal = page.locator('[data-testid="knowledge-proposal-card"]')
+    expect(proposal).to_be_visible(timeout=60_000)
+    expect(proposal).to_contain_text("K-002")
+    expect(proposal).to_contain_text("AI 제안")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    assert view["items"][1]["current"]["authority_kind"] == "ai_proposal"
+    assert view["items"][1]["current"]["source_message_id"] is None
+
+    # 관리 화면 — 채택 확인 → 활성화(사람의 결정).
+    page.goto(f"{stack.base}/?view=admin&project={project['id']}&case={case_id}")
+    panel = page.locator('[data-testid="knowledge-panel"]')
+    expect(panel).to_be_visible(timeout=30_000)
+    row = panel.locator('[data-testid="knowledge-K-001"]')
+    expect(row).to_contain_text("후보")
+    expect(row.locator('[data-testid="knowledge-origin-K-001"]')).to_contain_text("관측: 저장소")
+    row.locator('[data-testid="knowledge-check-K-001"]').click()
+    result = row.locator('[data-testid="knowledge-check-result-K-001"]')
+    expect(result).to_be_visible(timeout=15_000)
+    expect(result).to_contain_text("막는 항목 없음")
+    expect(result).to_contain_text("독립 AI 검토는 돌리지 않았다")
+    panel.locator('[data-testid="knowledge-reason"]').fill("시험으로 확인한 관찰이다")
+    row.locator('[data-testid="knowledge-activate-K-001"]').click()
+    expect(row).to_contain_text("활성", timeout=15_000)
+    expect(row.locator('[data-testid="knowledge-adoption-K-001"]')).to_contain_text("채택 확인")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    versions = view["items"][0]["versions"]
+    assert [(v["version"], v["state"], v["authority_kind"]) for v in versions] == [
+        (1, "superseded", "ai_proposal"), (2, "active", "user_decision")
+    ]
+    assert versions[1]["adoption"]["by"] == "owner"
+    page.context.close()

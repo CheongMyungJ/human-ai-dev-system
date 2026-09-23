@@ -1,0 +1,297 @@
+{
+  "tag": "062331187",
+  "status": "passed",
+  "error": null,
+  "codex_version": "codex-cli 0.156.1",
+  "product_rules": [
+    {
+      "rule": "작업 실행(구현·검증)이 하나 이상 끝났음",
+      "ok": true,
+      "detail": [
+        "feature_implementation"
+      ]
+    },
+    {
+      "rule": "실행마다 후보 규칙이 지시문에 있었음(Manifest 기록·지식 목록 배정)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "기준 판정은 지식 후보와 무관(검증 실행 보고 또는 미검증)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "대화의 AI 말에는 등록 블록이 없음",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "정리 응답이 사용자 말(활성 규칙)을 만들지 않음 — 제안은 후보뿐",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "rule": "K-001 원문은 서버에 있고 권위 메시지 없음",
+      "ok": true,
+      "detail": {
+        "storage": "server",
+        "source_message_id": null
+      }
+    },
+    {
+      "rule": "K-002 원문은 서버에 있고 권위 메시지 없음",
+      "ok": true,
+      "detail": {
+        "storage": "server",
+        "source_message_id": null
+      }
+    },
+    {
+      "rule": "채택 확인은 근거·독립 검토 없음을 값으로 낸다",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "후보 활성화(사람의 결정)가 새 버전을 만든다",
+      "ok": true,
+      "detail": "{\"version\":{\"id\":\"knowv-7b8b950b4d8bbc9c\",\"knowledge_id\":\"know-f18d1ed267b32ba1\",\"version\":2,\"artifact_id\":\"art-0606d40cee1b5560\",\"artifact_rev\":1,\"kind\":\"operation\",\"obligation\":\"reference\",\"state\":\""
+    },
+    {
+      "rule": "새 버전은 활성·user_decision·채택 확인 기록",
+      "ok": true,
+      "detail": {
+        "knowledge_key": "K-001",
+        "version": 2,
+        "state": "active",
+        "authority_kind": "user_decision"
+      }
+    },
+    {
+      "rule": "verification_run 에 K-001 v2 가 knowledge_reference 로 들어가고 Runner 가 읽음",
+      "ok": true,
+      "detail": {
+        "roles": [
+          "knowledge_reference"
+        ],
+        "receipt": [
+          "read"
+        ],
+        "decision": [
+          "provided",
+          2
+        ]
+      }
+    },
+    {
+      "rule": "verification_run 에 K-001 v2 가 knowledge_reference 로 들어가고 Runner 가 읽음",
+      "ok": true,
+      "detail": {
+        "roles": [
+          "knowledge_reference"
+        ],
+        "receipt": [
+          "read"
+        ],
+        "decision": [
+          "provided",
+          2
+        ]
+      }
+    },
+    {
+      "rule": "활성화한 지식이 다른 대화의 실행 하나 이상에 주입됨(활동·범위에 맞는 실행)",
+      "ok": true,
+      "detail": 2
+    }
+  ],
+  "observations": [
+    {
+      "observation": "A 멈춘 자리",
+      "detail": {
+        "state": "waiting_human",
+        "codes": [
+          "criteria_unresolved"
+        ]
+      }
+    },
+    {
+      "observation": "A 실행",
+      "detail": [
+        [
+          "discussion_reply",
+          "completed"
+        ],
+        [
+          "intent_authoring",
+          "completed"
+        ],
+        [
+          "plan_authoring",
+          "completed"
+        ],
+        [
+          "feature_implementation",
+          "completed"
+        ]
+      ]
+    },
+    {
+      "observation": "A 작업 실행이 남긴 후보·근거·거부",
+      "detail": []
+    },
+    {
+      "observation": "B 응답(끝 500자)",
+      "detail": "ve/062331187/runner/worktrees/case-87b82ef662ae42a2/repo-d88f18bdeac3901f/README.md)에 적혀 있습니다. 현재 [tests/test_app.py](C:/Users/USER/AppData/Local/Temp/hads-p4-07-live/062331187/runner/worktrees/case-87b82ef662ae42a2/repo-d88f18bdeac3901f/tests/test_app.py)는 표본에 `ERROR` 줄이 하나 이상 있는지와 `app.log`가 호출 가능한지만 검사합니다. `error_lines` 검사는 없습니다.\n- 표본 로그의 기본 경로는 `samples/app.log`이며, `LOGTOOL_SAMPLES` 환경 변수로 다른 파일을 지정할 수 있습니다. README에 적힌 표본 형식은 `시각 수준 메시지`이고 수준은 INFO/WARN/ERROR입니다.\n\n파일은 바꾸지 않았고 시험도 실행하지 않았습니다."
+    },
+    {
+      "observation": "B 정리 응답의 항목",
+      "detail": [
+        {
+          "origin": "proposal",
+          "intake_state": "registered",
+          "refusal": null,
+          "knowledge_key": "K-001",
+          "kind": "operation",
+          "obligation": "reference",
+          "summary": "시험 실행 방법과 현재 검사 범위",
+          "basis": "추출 근거: README.md의 시험 절과 tests/test_app.py의 두 시험 함수를 직접 확인했다."
+        },
+        {
+          "origin": "proposal",
+          "intake_state": "registered",
+          "refusal": null,
+          "knowledge_key": "K-002",
+          "kind": "operation",
+          "obligation": "reference",
+          "summary": "표본 로그 경로와 형식",
+          "basis": "추출 근거: README.md의 표본 설명과 tests/test_app.py의 _sample_lines()를 직접 확인했다."
+        }
+      ]
+    },
+    {
+      "observation": "현재 후보",
+      "detail": [
+        [
+          "K-001",
+          "operation",
+          "reference",
+          "시험 실행 방법과 현재 검사 범위"
+        ],
+        [
+          "K-002",
+          "operation",
+          "reference",
+          "표본 로그 경로와 형식"
+        ]
+      ]
+    },
+    {
+      "observation": "C 채택 확인",
+      "detail": {
+        "blocked": [],
+        "findings": [
+          [
+            "independent_review_not_run",
+            false
+          ]
+        ],
+        "evidence": 1
+      }
+    },
+    {
+      "observation": "C 활성화한 적용 내용",
+      "detail": "README에는 저장소 루트에서 `python -m pytest -q`로 시험을 실행한다고 적혀 있다. 현재 tests/test_app.py는 표본에 `ERROR` 줄이 하나 이상 있는지와 `app.log`가 호출 가능한지만 검사하며, `error_lines` 검사는 없다."
+    },
+    {
+      "observation": "C 질문",
+      "detail": "Python 검증 환경 결정"
+    },
+    {
+      "observation": "C 멈춘 자리",
+      "detail": {
+        "state": "waiting_human",
+        "codes": [
+          "criteria_unresolved"
+        ]
+      }
+    },
+    {
+      "observation": "C 실행",
+      "detail": [
+        [
+          "intent_authoring",
+          "completed"
+        ],
+        [
+          "design_authoring",
+          "completed"
+        ],
+        [
+          "plan_authoring",
+          "completed"
+        ],
+        [
+          "feature_implementation",
+          "completed"
+        ],
+        [
+          "verification_run",
+          "completed"
+        ],
+        [
+          "verification_run",
+          "completed"
+        ]
+      ]
+    },
+    {
+      "observation": "intent_authoring 에는 K-001 가 들어가지 않음(활동·범위)",
+      "detail": [
+        "not_applicable_activity",
+        2
+      ]
+    },
+    {
+      "observation": "design_authoring 에는 K-001 가 들어가지 않음(활동·범위)",
+      "detail": [
+        "not_applicable_activity",
+        2
+      ]
+    },
+    {
+      "observation": "plan_authoring 에는 K-001 가 들어가지 않음(활동·범위)",
+      "detail": [
+        "not_applicable_activity",
+        2
+      ]
+    },
+    {
+      "observation": "feature_implementation 에는 K-001 가 들어가지 않음(활동·범위)",
+      "detail": [
+        "not_applicable_activity",
+        2
+      ]
+    }
+  ],
+  "facts": {
+    "project_id": "prj-0106cd4e7119aa47",
+    "work_case": "case-87b82ef662ae42a2",
+    "B_reply_seconds": 84.1,
+    "activated": {
+      "key": "K-001",
+      "version": 2,
+      "obligation": "reference",
+      "activities": [
+        "verification"
+      ],
+      "scope": "repository"
+    },
+    "second_case": "case-ddf0572140d79502"
+  },
+  "screenshots": [
+    "P4-07-live-A-stopped.png",
+    "P4-07-live-C-stopped.png"
+  ],
+  "data_root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p4-07-live\\062331187"
+}

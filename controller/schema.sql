@@ -1992,3 +1992,38 @@ CREATE TABLE IF NOT EXISTS knowledge_body (
     CHECK (byte_size = length(body)),
     CHECK (byte_size <= 262144)
 );
+
+-- ===================================================================
+-- 스키마 v24 (P4-07) — 선택적 지식 추출
+--
+-- 작업 실행(검증·분석·실험·구현)이 결과와 함께 남긴 **후보**(AI 제안)를 기존 등록부에 넣는다. 새 표는
+-- 근거 하나뿐이다 — 후보 자체는 `knowledge_version`(상태 `candidate`·권위 `ai_proposal`)이고, 관계·
+-- 관측 문맥·채택 확인은 그 표의 새 컬럼이다(`controller/db.py` 가 더한다).
+--
+-- 지키는 것: AI 후보는 어떤 경로로도 활성 필수가 되지 않는다(v22 CHECK 그대로). 후보는 대상 항목의
+-- 버전 사슬을 건드리지 않는다(대체·반증은 관계로만). 본문 컬럼은 여전히 `knowledge_body` 에만 있다.
+-- ===================================================================
+
+-- 기존 항목에 더한 **근거**(관측 실행). 새 항목을 만들지 않는 두 경우 — `supports`(뒷받침하는 관측)와
+-- `duplicate`(같은 내용의 재보고). 근거 원문은 그 실행이 올린 지식 원문(서버 본문)의 참조다.
+CREATE TABLE IF NOT EXISTS knowledge_evidence (
+    id                   TEXT PRIMARY KEY,
+    knowledge_id         TEXT NOT NULL REFERENCES knowledge_item(id),
+    -- 근거를 붙일 때의 현재 버전(그 뒤 개정돼도 "당시 어느 버전을 뒷받침했는가"가 남는다).
+    version_id           TEXT REFERENCES knowledge_version(id),
+    kind                 TEXT NOT NULL CHECK (kind IN ('supports', 'duplicate')),
+    source_run_id        TEXT NOT NULL REFERENCES run(run_id),
+    source_case_id       TEXT NOT NULL REFERENCES "case"(id),
+    source_report_index  INTEGER NOT NULL,
+    artifact_id          TEXT NOT NULL,
+    artifact_rev         INTEGER NOT NULL,
+    -- 근거 한 줄(AI 가 보고한 `basis`, 없으면 항목 요약). 원문 대체가 아니다.
+    summary              TEXT NOT NULL,
+    recorded_by          TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    UNIQUE (source_run_id, source_report_index),
+    FOREIGN KEY (artifact_id, artifact_rev) REFERENCES artifact_ref(artifact_id, revision),
+    CHECK (length(summary) BETWEEN 1 AND 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_item ON knowledge_evidence(knowledge_id);

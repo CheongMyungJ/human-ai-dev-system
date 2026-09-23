@@ -22,6 +22,7 @@ from typing import Any
 
 from domain import profiles
 from domain.intent_doc import FIELD_ORDER
+from domain.knowledge import EXTRACTION_PURPOSES
 from domain.models import PreparationStage, WorkLevel
 from domain.prep_doc import SECTION_LABEL, SECTION_ORDER, required_sections
 
@@ -853,8 +854,20 @@ _KIND_LABEL = {
 }
 
 
+#: P4-07. 후보와 기존 항목의 관계(지시문 머리).
+_RELATION_LABEL = {
+    "supports": "뒷받침",
+    "supersedes": "대체 제안",
+    "contradicts": "반증",
+}
+
+
 def knowledge_head(meta: dict[str, Any]) -> str:
-    """P4-06. 지식 참조의 머리 — 키·버전·효력·종류·범위·활동. 제어부가 준 메타데이터뿐이다."""
+    """P4-06. 지식 참조의 머리 — 키·버전·효력·종류·범위·활동. 제어부가 준 메타데이터뿐이다.
+
+    P4-07. 후보면 관계(`← K-001 반증`)와 관측 문맥(어느 저장소·기준 커밋에서 본 것인가 — Case 브랜치의
+    사실이며 기본 브랜치의 사실이 아니다)을 덧붙인다.
+    """
     if meta.get("source_of"):
         return f"(← {meta['source_of']} 의 권위 원문: 사용자가 한 말)"
     state = "후보" if meta.get("state") == "candidate" else _OBLIGATION_LABEL.get(
@@ -866,10 +879,19 @@ def knowledge_head(meta: dict[str, Any]) -> str:
         if meta.get("paths"):
             scope += " · 경로 " + ", ".join(meta["paths"])
     activities = ", ".join(meta.get("activities") or []) or "모든 작업"
+    tail = ""
+    if meta.get("relation") and meta.get("relates_to_key"):
+        tail += f" · ← {meta['relates_to_key']} {_RELATION_LABEL.get(meta['relation'], meta['relation'])}"
+    observed = meta.get("observed") or {}
+    if observed.get("repository_name") or observed.get("base_commit"):
+        where = observed.get("repository_name") or "?"
+        if observed.get("base_commit"):
+            where += "@" + str(observed["base_commit"])[:7]
+        tail += f" · 관측: 저장소 {where} (Case 브랜치)"
     return (
         f"{{{meta.get('key')} v{meta.get('version')} · {state} · "
         f"{_KIND_LABEL.get(meta.get('kind') or '', meta.get('kind') or '')} · {scope} · 활동 {activities}"
-        f" · {meta.get('summary') or ''}}}"
+        f" · {meta.get('summary') or ''}{tail}}}"
     )
 
 
@@ -905,6 +927,11 @@ KNOWLEDGE_REGISTRATION_RULE = """**프로젝트 규칙 등록.** 사용자의 **
 - content 와 사용자의 그 메시지는 **서버에 저장된다.** 비밀값(토큰·비밀번호·키·개인정보)이 들어
   있으면 블록을 붙이지 말고 글로 알린다.
 - 블록을 붙이면 글에 "프로젝트 규칙으로 등록한다"는 사실과 옮겨 적은 내용을 짧게 적는다.
+- **사용자가 정하지 않았지만** 재사용할 만한 관찰·제안(예: 사용자가 "이 업무에서 배운 것을 정리해
+  줘"라고 청했을 때의 당신의 관찰)은 항목에 `"proposal": true` 를 더해 붙인다. 그 항목은 **후보로만**
+  등록되고 규칙이 되지 않는다(사람이 확인해야 활성이다). 사용자의 말을 proposal 로 적지 말고, 당신의
+  제안을 사용자의 말로 적지 마라. 기존 지식과 관계가 있으면 `"relates_to": "K-001"` 과
+  `"relation"`(supports / supersedes / contradicts)을, 근거를 `"basis"` 한 줄에 적는다.
 
 등록 저장소: {repositories}
 기존 지식:
@@ -913,10 +940,7 @@ KNOWLEDGE_REGISTRATION_RULE = """**프로젝트 규칙 등록.** 사용자의 **
 """
 
 
-def knowledge_rule(index: dict[str, Any] | None) -> str:
-    """P4-06. 등록 규칙에 현재 지식 목록과 저장소 이름을 채운다(제어부가 준 요약뿐이다)."""
-    index = index or {}
-    repos = ", ".join(index.get("repositories") or []) or "(없음)"
+def _knowledge_index_lines(index: dict[str, Any]) -> str:
     lines = []
     for item in index.get("items") or []:
         scope = f"저장소 {item['repository']}" if item.get("repository") else "프로젝트 전체"
@@ -924,8 +948,60 @@ def knowledge_rule(index: dict[str, Any] | None) -> str:
             item.get("obligation") or "", ""
         )
         lines.append(f"  - {item['key']} · {state} · {scope} · {item.get('summary') or ''}")
-    return KNOWLEDGE_REGISTRATION_RULE.format(
-        repositories=repos, items="\n".join(lines) or "  (없음)"
+    return "\n".join(lines) or "  (없음)"
+
+
+def knowledge_rule(index: dict[str, Any] | None) -> str:
+    """P4-06. 등록 규칙에 현재 지식 목록과 저장소 이름을 채운다(제어부가 준 요약뿐이다)."""
+    index = index or {}
+    repos = ", ".join(index.get("repositories") or []) or "(없음)"
+    return KNOWLEDGE_REGISTRATION_RULE.format(repositories=repos, items=_knowledge_index_lines(index))
+
+
+#: P4-07. **작업 실행**(검증·분석·실험·구현)의 지식 후보 규칙. 배정에 `knowledge_index` 가 실렸을 때만
+#: 붙는다(그 실행의 저장소 이름·현재 지식 목록을 제어부가 준다 — 지어내지 않게).
+#:
+#: 후보는 규칙이 아니다 — 그것을 AI 에게도 말한다. 관찰을 프로젝트 전체로 일반화하지 말라는 줄은 D-66·
+#: D-67(Case 브랜치의 사실은 당시 코드·환경에 한정)이다. 붙이지 않는 것이 정상이라는 줄은 "후보가 없다는
+#: 이유로 별도 실행을 만들거나 모든 Case 에 지식 산출물을 요구하지 않는다"(project-knowledge 3절)다.
+KNOWLEDGE_EXTRACTION_RULE = """
+**지식 후보(선택).** 이 실행에서 아래 계기 중 하나를 **실제로** 겪었을 때만, 답(JSON) **뒤에** 아래
+블록을 하나 붙인다. 해당하지 않으면 붙이지 않는다 — 후보가 없는 것이 정상이다. 이 블록은 사람에게
+보이지 않고 시스템이 **후보로만** 등록한다(규칙이 되지 않는다. 사람이 확인해야 활성이다).
+
+계기: 비자명한 문제의 원인·해결을 확인했다 · 같은 문제가 반복된다 · 구조·계약이 문서·기대와 다르게
+관측됐다 · 아래 기존 지식과 다른 관측을 했다(반증) · 빌드·시험·환경의 비자명한 조건을 확인했다.
+
+```hads-knowledge
+{{"items": [{{"kind": "operation", "obligation": "reference", "summary": "짧은 제목",
+  "content": "재사용할 사실과 그 조건·예외(이 실행의 저장소·환경에 한정해 적는다)",
+  "basis": "근거가 된 명령·관측 한 줄", "repository": {repository}, "paths": [], "activities": [],
+  "relates_to": null, "relation": null}}]}}
+```
+
+- 최대 3건. 실행 로그·이번 작업의 진행 요약·일시적 가정은 후보가 아니다.
+- **관찰을 프로젝트 전체 규칙으로 일반화하지 마라.** repository 는 이 실행의 저장소 이름(위 값)으로
+  두고, 다른 저장소·기본 브랜치에서도 참이라고 적지 마라 — 이 실행이 본 코드·환경은 이 업무의 브랜치다.
+- obligation: 지켜야 한다고 제안하면 "required"(그래도 후보다), 참고 사실이면 "reference".
+- kind: decision(설계 결정과 이유) · constraint(지켜야 할 조건) · known_problem(반복되는 문제와 진단법)
+  · operation(빌드·시험·환경 같은 운영 사실).
+- relates_to·relation: 아래 기존 지식과 관계가 있으면 그 키와 supports(뒷받침하는 관측 — 새 항목 없이
+  근거로 남는다) / supersedes(바꾸자는 제안) / contradicts(다른 관측) 중 하나. 없으면 둘 다 null.
+- content 는 서버에 저장된다. 비밀값(토큰·비밀번호·키·개인정보)이 들어 있으면 블록을 붙이지 않는다.
+- 블록을 붙여도 답의 JSON 형식은 그대로다. JSON 을 먼저 두고 그 뒤에 블록을 둔다.
+
+기존 지식:
+{items}
+"""
+
+
+def extraction_rule(index: dict[str, Any] | None) -> str:
+    """P4-07. 후보 규칙에 이 실행의 저장소 이름과 현재 지식 목록을 채운다(제어부가 준 요약뿐이다)."""
+    index = index or {}
+    repository = index.get("run_repository")
+    return KNOWLEDGE_EXTRACTION_RULE.format(
+        repository=json.dumps(repository, ensure_ascii=False) if repository else "null",
+        items=_knowledge_index_lines(index),
     )
 
 
@@ -1043,6 +1119,11 @@ def build(
         )
     if purpose == "limited_analysis" and criteria:
         head = head.replace("--- 지시 원문 ---\n", ANALYSIS_REPORT_RULE + "\n--- 지시 원문 ---\n")
+    if purpose in EXTRACTION_PURPOSES and knowledge_index is not None:
+        # P4-07. 작업 실행의 지식 후보 규칙. 제어부가 `knowledge_index` 를 실은 실행에만 붙는다.
+        if "--- 지시 원문 ---\n" not in head:
+            raise ValueError("작업 지시문의 지시 원문 줄을 찾지 못했다")
+        head = head.replace("--- 지시 원문 ---\n", extraction_rule(knowledge_index) + "\n--- 지시 원문 ---\n")
     if purpose == "intent_authoring" and gate_findings:
         head = head.replace(
             "--- 요청 원문 ---\n", build_findings_block(gate_findings) + "\n--- 요청 원문 ---\n"

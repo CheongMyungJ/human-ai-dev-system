@@ -25,12 +25,14 @@ from controller.repository import (
     AcceptanceRefused,
     ConflictError,
     ConversationRefused,
+    KnowledgeAdoptionRefused,
     NotFoundError,
     PolicyRefused,
     Repository,
 )
 from domain import conversation as convmod
 from domain import ids, intent_doc
+from domain import knowledge as knowmod
 from domain import profiles as case_profiles
 from domain.models import (
     Satisfaction,
@@ -936,6 +938,10 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # P4-07. 작업 실행이 결과와 함께 남긴 지식 후보를 **후보로만** 등록한다(처리기 설정과 무관, 멱등).
+    # 진행·완료 판정과 무관하다 — 후보가 있든 없든 다음 걸음은 같다.
+    if run.get("purpose") in knowmod.EXTRACTION_PURPOSES:
+        _after_report(request, "run_finished_knowledge", repo.apply_extraction_report, run_id)
     # P4-05. 검증·분석 실행의 기준 보고를 먼저 적용한다 — 그 다음 걸음이 그 판정을 봐야 한다.
     _after_report(request, "run_finished_progress", _progressor(request, repo).on_run_finished, run)
     # UI-03. 요청의 마지막 실행이 끝났으면 처리기가 (해석을 적용하고) 요청을 끝낸다. 업무 단계면
@@ -3804,6 +3810,18 @@ class KnowledgeActIn(BaseModel):
     reason_summary: str = Field(min_length=1, max_length=200)
 
 
+class KnowledgeActivateIn(KnowledgeActIn):
+    """P4-07. 활성화 — QG-08 채택 확인을 지난 뒤 새 버전. 범위·효력·활동은 **좁힐 수만** 있고
+    `into_knowledge_id` 를 주면 그 항목의 새 버전으로 적용한다(후보 버전은 대체된 것으로 닫힌다)."""
+
+    into_knowledge_id: str | None = None
+    obligation: str | None = None
+    scope_kind: str | None = None
+    repository_id: str | None = None
+    paths: list[str] | None = Field(default=None, max_length=20)
+    activities: list[str] | None = Field(default=None, max_length=8)
+
+
 class KnowledgeConflictIn(BaseModel):
     knowledge_a: str
     knowledge_b: str
@@ -3905,13 +3923,55 @@ def revise_knowledge(
     return {"version": version}
 
 
-@router.post("/api/knowledge/{knowledge_id}/activate")
-def activate_knowledge(request: Request, knowledge_id: str, payload: KnowledgeActIn) -> dict[str, Any]:
-    """P4-06. 후보 → 활성(사람의 결정, 새 버전)."""
+@router.get("/api/knowledge/{knowledge_id}/adoption-check")
+def knowledge_adoption_check(
+    request: Request,
+    knowledge_id: str,
+    into_knowledge_id: str | None = None,
+    obligation: str | None = None,
+    scope_kind: str | None = None,
+    repository_id: str | None = None,
+) -> dict[str, Any]:
+    """P4-07. 후보의 QG-08 채택 확인(근거·범위·상태·버전·충돌)을 활성화 없이 본다. 판정이 아니라
+    확인 결과이며, 막는 항목이 없어도 활성화는 사람의 결정이다."""
     try:
-        return {"version": _repo(request).activate_knowledge(knowledge_id, payload.actor, payload.reason_summary)}
+        return _repo(request).adoption_check_for(
+            knowledge_id,
+            into_knowledge_id=into_knowledge_id,
+            obligation=obligation,
+            scope_kind=scope_kind,
+            repository_id=repository_id,
+        )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+
+
+@router.post("/api/knowledge/{knowledge_id}/activate")
+def activate_knowledge(
+    request: Request, knowledge_id: str, payload: KnowledgeActivateIn
+) -> dict[str, Any]:
+    """P4-06. 후보 → 활성(사람의 결정, 새 버전). P4-07: QG-08 채택 확인의 막는 항목이 있으면 409 와
+    코드 목록. 경고는 새 버전의 `adoption` 에 남는다. 범위 축소·다른 항목의 새 버전으로 적용을 받는다."""
+    try:
+        version = _repo(request).activate_knowledge(
+            knowledge_id,
+            payload.actor,
+            payload.reason_summary,
+            into_knowledge_id=payload.into_knowledge_id,
+            obligation=payload.obligation,
+            scope_kind=payload.scope_kind,
+            repository_id=payload.repository_id,
+            paths=payload.paths,
+            activities=payload.activities,
+        )
+    except KnowledgeAdoptionRefused as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"refusals": exc.refusals, "findings": exc.check["findings"], "message": str(exc)},
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"version": version, "adoption": version.get("adoption")}
 
 
 @router.post("/api/knowledge/{knowledge_id}/invalidate")

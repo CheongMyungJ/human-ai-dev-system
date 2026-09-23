@@ -199,6 +199,91 @@ export interface KnowledgeVersion {
   // 있는 옛 원문(이행 대기)이다. 권위 메시지도 같다(없으면 null).
   storage?: 'server' | 'runner'
   source_storage?: 'server' | 'runner' | null
+  // P4-07. 후보와 기존 항목의 관계(대체 제안·반증), 관측 문맥(당시 실행·저장소·기준 커밋·도구 —
+  // Case 브랜치의 사실), 활성화 때의 QG-08 채택 확인. 옛 버전은 null(없음이지 값이 아니다).
+  relation?: KnowledgeRelation | null
+  relates_to_knowledge_id?: string | null
+  relates_to_key?: string | null
+  observed?: KnowledgeObserved | null
+  adoption?: KnowledgeAdoption | null
+  source_report_index?: number | null
+}
+
+export type KnowledgeRelation = 'supports' | 'supersedes' | 'contradicts'
+
+export const KNOWLEDGE_RELATION_LABEL: Record<KnowledgeRelation, string> = {
+  supports: '뒷받침',
+  supersedes: '대체 제안',
+  contradicts: '반증',
+}
+
+export interface KnowledgeObserved {
+  run_id?: string | null
+  purpose?: string | null
+  case_id?: string | null
+  repository_id?: string | null
+  repository_name?: string | null
+  base_commit?: string | null
+  tool_version?: string | null
+  relates_to_version?: string | null
+}
+
+export interface KnowledgeAdoptionFinding {
+  code: string
+  blocking: boolean
+  detail: string
+}
+
+export const KNOWLEDGE_ADOPTION_LABEL: Record<string, string> = {
+  not_a_candidate: '후보가 아니다',
+  content_unavailable: '적용 내용 원문이 서버에 없다',
+  open_conflict: '열린 충돌이 있다',
+  contradicts_active: '반증 대상이 아직 활성이다',
+  target_not_active: '적용 대상이 활성·후보가 아니다',
+  scope_widened: '범위를 넓힐 수 없다',
+  no_evidence: '근거 실행이 없다(사유가 근거다)',
+  scope_wider_than_observed: '관측한 저장소보다 넓은 범위다',
+  obligation_raised: '참고 후보를 필수로 올린다',
+  related_version_changed: '관계 대상이 그 뒤 새 버전이 됐다',
+  independent_review_not_run: '독립 AI 검토는 돌리지 않았다',
+}
+
+export interface KnowledgeAdoption {
+  checked_at: string
+  by: string
+  findings: KnowledgeAdoptionFinding[]
+  from_candidate: string
+  into: string | null
+  independent_review: string
+}
+
+export interface KnowledgeAdoptionCheck {
+  knowledge_id: string
+  version_id: string
+  findings: KnowledgeAdoptionFinding[]
+  blocked: string[]
+  evidence_count: number
+  related: { knowledge_key: string; version: number; state: KnowledgeState } | null
+  into: { knowledge_key: string; version: number; state: KnowledgeState } | null
+  independent_review: string
+}
+
+//: P4-07. 기존 항목에 더해진 근거(관측 실행). 참조·요약뿐이다.
+export interface KnowledgeEvidence {
+  id: string
+  knowledge_id: string
+  knowledge_key: string
+  version_id: string | null
+  kind: 'supports' | 'duplicate'
+  source_run_id: string
+  source_case_id: string
+  source_report_index: number
+  artifact_id: string
+  artifact_rev: number
+  summary: string
+  recorded_by: string
+  created_at: string
+  storage: 'server' | 'runner'
 }
 
 export interface KnowledgeItemView {
@@ -209,6 +294,7 @@ export interface KnowledgeItemView {
   created_at: string
   current: KnowledgeVersion | null
   versions: KnowledgeVersion[]
+  evidence?: KnowledgeEvidence[]
 }
 
 export interface KnowledgeConflict {
@@ -255,12 +341,20 @@ export interface RunKnowledgeView {
   note: string
 }
 
-//: 대화의 말에서 등록한(또는 거부한) 지식. 카드가 쓴다.
+//: 대화의 말·실행에서 등록한(또는 거부한·근거로 이은) 지식. 카드가 쓴다.
 export interface KnowledgeRegistration {
   run_id: string
   report_index: number
-  intake_state: 'registered' | 'refused'
+  intake_state: 'registered' | 'refused' | 'evidence'
   refusal: string | null
+  // P4-07. 어디서 왔는가 — 사용자 말(P4-06) / 논의 응답의 AI 제안 / 작업 실행의 후보.
+  origin?: 'statement' | 'proposal' | 'extraction'
+  authority_kind?: string | null
+  relation?: KnowledgeRelation | null
+  relates_to_key?: string | null
+  basis?: string | null
+  evidence?: { id: string; kind: 'supports' | 'duplicate'; summary: string; knowledge_key: string } | null
+  observed?: KnowledgeObserved | null
   reported_summary: string | null
   created_at: string
   version_id: string | null
@@ -307,11 +401,32 @@ export const knowledgeApi = {
       body: JSON.stringify(body),
     }),
 
-  activate: (knowledgeId: string, reason: string) =>
-    request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/activate`, {
+  // P4-07. 활성화는 QG-08 채택 확인을 지난다(막는 항목이면 409 와 코드). 범위·효력·활동은 좁힐 수만
+  // 있고 `into_knowledge_id` 는 그 항목의 새 버전으로 적용한다. 확인만 보려면 `adoptionCheck`.
+  activate: (
+    knowledgeId: string,
+    reason: string,
+    options: {
+      into_knowledge_id?: string | null
+      obligation?: KnowledgeObligation | null
+      scope_kind?: 'project' | 'repository' | null
+      repository_id?: string | null
+      paths?: string[] | null
+      activities?: string[] | null
+    } = {},
+  ) =>
+    request<{ version: KnowledgeVersion; adoption: KnowledgeAdoption | null }>(`/api/knowledge/${knowledgeId}/activate`, {
       method: 'POST',
-      body: JSON.stringify({ reason_summary: reason, actor: 'owner' }),
+      body: JSON.stringify({ reason_summary: reason, actor: 'owner', ...options }),
     }),
+
+  adoptionCheck: (knowledgeId: string, intoKnowledgeId?: string | null, obligation?: KnowledgeObligation | null) => {
+    const params = new URLSearchParams()
+    if (intoKnowledgeId) params.set('into_knowledge_id', intoKnowledgeId)
+    if (obligation) params.set('obligation', obligation)
+    const query = params.toString()
+    return request<KnowledgeAdoptionCheck>(`/api/knowledge/${knowledgeId}/adoption-check${query ? `?${query}` : ''}`)
+  },
 
   invalidate: (knowledgeId: string, reason: string) =>
     request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/invalidate`, {

@@ -13,6 +13,7 @@ import {
   intentApi,
   knowledgeApi,
   KNOWLEDGE_KIND_LABEL,
+  KNOWLEDGE_RELATION_LABEL,
   KNOWLEDGE_STATE_LABEL,
   progressApi,
   resultApi,
@@ -614,6 +615,11 @@ const KNOWLEDGE_REFUSAL_LABEL: Record<string, string> = {
   content_not_stored: '내용이 저장되지 않았다',
   invalid_scope: '범위를 알아볼 수 없다',
   too_many_items: '한 번에 너무 많다',
+  // P4-07.
+  run_not_completed: '실행이 완료되지 않았다',
+  unknown_related_key: '관계 대상 지식을 찾지 못했다',
+  invalid_relation: '관계를 알아볼 수 없다',
+  relation_without_target: '관계 대상이 없다',
 }
 
 /**
@@ -637,6 +643,65 @@ export function KnowledgeCards(props: {
   )
 }
 
+/**
+ * P4-07. 작업 실행(검증·분석·실험·구현)이 결과와 함께 남긴 **지식 후보**와 근거. 후보는 규칙이 아니다 —
+ * 사람이 관리 화면에서 채택 확인을 보고 활성화한다(자동 활성화 없음). 카드는 요약·관계·근거 한 줄뿐이다.
+ */
+export function KnowledgeCandidateCards(props: {
+  registrations: KnowledgeRegistration[]
+  projectId: string
+  caseId: string
+}) {
+  const rows = props.registrations.filter((r) => r.origin === 'extraction')
+  if (rows.length === 0) return null
+  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
+  return (
+    <div className="sh-card sh-card-event" data-testid="knowledge-candidate-card">
+      <div className="sh-card-head">
+        <strong>이 업무의 실행이 남긴 지식 후보</strong> · {rows.length}건 · 후보이며 규칙이 아니다
+      </div>
+      <ul className="sh-list">
+        {rows.map((r) => (
+          <li key={`${r.run_id}-${r.report_index}`} data-testid={`knowledge-candidate-row-${r.report_index}`} data-state={r.intake_state}>
+            {r.intake_state === 'registered' && (
+              <>
+                <strong>{r.knowledge_key}</strong> v{r.version} · {r.obligation === 'required' ? '필수 제안' : '참고'} ·{' '}
+                {KNOWLEDGE_KIND_LABEL[r.kind ?? 'operation']} · {r.summary}
+                {r.relation && r.relates_to_key ? ` · ← ${r.relates_to_key} ${KNOWLEDGE_RELATION_LABEL[r.relation]}` : ''}
+                {r.current_state && r.current_state !== 'candidate' ? ` · 지금 ${KNOWLEDGE_STATE_LABEL[r.current_state]}` : ''}
+              </>
+            )}
+            {r.intake_state === 'evidence' && r.evidence && (
+              <>
+                <strong>{r.evidence.knowledge_key}</strong> 의 근거로 이음 · {r.evidence.kind === 'supports' ? '뒷받침하는 관측' : '같은 내용'} ·{' '}
+                {r.reported_summary ?? ''}
+              </>
+            )}
+            {r.intake_state === 'refused' && (
+              <>
+                등록하지 않음 · {r.reported_summary ?? ''} · {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''}
+              </>
+            )}
+            {r.basis && <div className="sh-muted">{r.basis}</div>}
+            {r.observed?.repository_name && (
+              <div className="sh-muted">
+                관측: 저장소 {r.observed.repository_name}
+                {r.observed.base_commit ? `@${r.observed.base_commit.slice(0, 7)}` : ''} (Case 브랜치) · 실행 {r.run_id}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+      <div className="sh-muted">
+        AI 의 관찰·제안이다. 다음 작업에는 후보(단서)로만 들어가고 지켜야 할 규칙이 되지 않는다.{' '}
+        <a className="sh-link" href={admin} data-testid="knowledge-candidate-admin">
+          관리 화면에서 채택 확인·활성화
+        </a>
+      </div>
+    </div>
+  )
+}
+
 function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: string; caseId: string; onChanged: () => void }) {
   const r = props.registration
   const action = useAction(props.onChanged)
@@ -649,6 +714,34 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
         <strong>프로젝트 규칙으로 등록하지 않음</strong> · {r.reported_summary ?? ''}
         <div className="sh-muted">
           {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''} — 필요하면 범위·내용을 분명히 해서 다시 말하거나 관리 화면에서 등록한다
+        </div>
+      </div>
+    )
+  }
+  if (r.intake_state === 'evidence' && r.evidence) {
+    return (
+      <div className="sh-card sh-card-event" data-testid="knowledge-evidence-card">
+        <strong>{r.evidence.knowledge_key} 의 근거로 이음</strong> · {r.evidence.kind === 'supports' ? '뒷받침하는 관측' : '같은 내용'} ·{' '}
+        {r.reported_summary ?? ''}
+        <div className="sh-muted">{r.evidence.summary} — 새 항목을 만들지 않았다. 규칙의 권위·상태는 그대로다.</div>
+      </div>
+    )
+  }
+  if (r.origin === 'proposal') {
+    // P4-07. AI 제안 — 사용자의 말이 아니다. 후보로만 등록됐고 사람이 관리 화면에서 활성화한다.
+    return (
+      <div className="sh-card sh-card-event" data-testid="knowledge-proposal-card" data-state={r.current_state ?? ''}>
+        <div className="sh-card-head">
+          <strong>지식 후보로 등록됨(AI 제안)</strong> · {r.knowledge_key} v{r.version} ·{' '}
+          {r.obligation === 'required' ? '필수 제안' : '참고'} · {KNOWLEDGE_KIND_LABEL[r.kind ?? 'operation']}
+        </div>
+        <div>{r.summary}</div>
+        {r.basis && <div className="sh-muted">{r.basis}</div>}
+        <div className="sh-muted">
+          당신의 말이 아니라 AI 의 관찰·제안이다. 규칙이 아니며 다음 작업에 단서로만 들어간다.{' '}
+          <a className="sh-link" href={admin}>
+            관리 화면에서 채택 확인·활성화
+          </a>
         </div>
       </div>
     )

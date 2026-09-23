@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 
 def utc_now() -> str:
@@ -472,6 +472,37 @@ def migrate(conn: sqlite3.Connection) -> None:
     #      권위 메시지는 소유 PC 에 있고, 그 PC 가 연결될 때 올린다(`knowledge_uploads_for`). 없는
     #      본문을 지어내지 않으며 그때까지 조회는 `storage = runner` 다.
 
+    # v24: 선택적 지식 추출(P4-07). 근거 표(`knowledge_evidence`)는 schema.sql 이 만들고 여기서는
+    #      후보의 관계·관측 문맥·채택 확인 컬럼을 `knowledge_version` 에 더하며, `knowledge_intake` 를
+    #      근거 상태(`evidence`)를 받는 CHECK 로 다시 만든다(행은 그대로 옮긴다).
+    #
+    #      **데이터 이행 없음.** 옛 버전의 새 컬럼은 NULL — "관측 문맥 없음·채택 확인 전"이지 값이 아니다.
+    _add_column_if_missing(
+        conn, "knowledge_version", "relates_to_knowledge_id", "TEXT REFERENCES knowledge_item(id)"
+    )
+    _add_column_if_missing(
+        conn,
+        "knowledge_version",
+        "relation",
+        "TEXT CHECK (relation IS NULL OR relation IN ('supports', 'supersedes', 'contradicts'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "knowledge_version",
+        "observed_json",
+        "TEXT CHECK (observed_json IS NULL OR length(observed_json) <= 1000)",
+    )
+    _add_column_if_missing(
+        conn,
+        "knowledge_version",
+        "adoption_json",
+        "TEXT CHECK (adoption_json IS NULL OR length(adoption_json) <= 2000)",
+    )
+    _add_column_if_missing(
+        conn, "knowledge_intake", "evidence_id", "TEXT REFERENCES knowledge_evidence(id)"
+    )
+    _migrate_v24_knowledge_intake(conn)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -479,6 +510,39 @@ def migrate(conn: sqlite3.Connection) -> None:
             "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
             (SCHEMA_VERSION, utc_now()),
         )
+
+
+#: v24 의 `knowledge_intake`. v22 의 표에 근거 상태와 `evidence_id`(맨 뒤 — 옛 행을 `SELECT *` 로
+#: 옮기려면 컬럼 순서가 같아야 한다)가 더해졌다. 다른 CHECK 는 그대로다.
+KNOWLEDGE_INTAKE_V24_DDL = """
+CREATE TABLE IF NOT EXISTS knowledge_intake (
+    run_id                TEXT NOT NULL REFERENCES run(run_id),
+    report_index          INTEGER NOT NULL,
+    case_id               TEXT NOT NULL REFERENCES "case"(id),
+    state                 TEXT NOT NULL CHECK (state IN ('registered', 'refused', 'evidence')),
+    knowledge_version_id  TEXT REFERENCES knowledge_version(id),
+    refusal               TEXT,
+    summary               TEXT,
+    created_at            TEXT NOT NULL,
+    evidence_id           TEXT REFERENCES knowledge_evidence(id),
+    PRIMARY KEY (run_id, report_index),
+    CHECK ((state = 'registered') = (knowledge_version_id IS NOT NULL)),
+    CHECK ((state = 'evidence') = (evidence_id IS NOT NULL)),
+    CHECK (refusal IS NULL OR length(refusal) <= 120),
+    CHECK (summary IS NULL OR length(summary) <= 200)
+)
+"""
+
+
+def _migrate_v24_knowledge_intake(conn: sqlite3.Connection) -> None:
+    """P4-07. `knowledge_intake` 의 상태 CHECK 에 `evidence` 를 더한다(표 재구성, 행 보존). 이미 그
+    CHECK 가 있으면 아무 것도 하지 않는다(멱등)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'knowledge_intake'"
+    ).fetchone()
+    if row is None or "'evidence'" in (row["sql"] or ""):
+        return
+    _rebuild_table(conn, "knowledge_intake", KNOWLEDGE_INTAKE_V24_DDL.strip(), "v24")
 
 
 def _sql_list(values: Iterable[str]) -> str:
@@ -570,7 +634,10 @@ def _rebuild_table(
             conn.execute(f'ALTER TABLE "{temp}" RENAME TO "{table}"')
             for index_sql in indexes:
                 conn.execute(index_sql)
-            broken = conn.execute("PRAGMA foreign_key_check").fetchall()
+            # **다시 만든 표의** 외래 키만 본다. 다른 표에 이미 있던 어긋남(외래 키 검사를 끈 채 들어온 옛
+            # 행)은 이 재구성이 만든 것이 아니며 여기서 이행을 멈출 이유가 아니다(P4-07 에서 드러남 —
+            # v21 이행 시험의 고정 자료가 그렇다).
+            broken = conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall()
             if broken:
                 raise RuntimeError(
                     f"{label}: {table} 을 다시 만든 뒤 외래 키가 맞지 않는다: "

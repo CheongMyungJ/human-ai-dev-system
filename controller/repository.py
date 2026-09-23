@@ -279,6 +279,19 @@ class AcceptanceRefused(ConflictError):
         super().__init__("acceptance refused: " + ", ".join(r.value for r in refusals))
 
 
+class KnowledgeAdoptionRefused(ConflictError):
+    """후보를 활성화할 수 없다 — QG-08 채택 확인의 **막는 항목**이 있다(P4-07).
+
+    확인 결과 전체(`check`)를 들고 다닌다. 화면과 직접 API 호출이 같은 코드·항목을 받아야 "왜 활성이
+    되지 않았는가"를 같은 근거로 설명할 수 있다. 경고만 있으면 여기 오지 않는다.
+    """
+
+    def __init__(self, check: dict[str, Any]) -> None:
+        self.check = check
+        self.refusals = list(check.get("blocked") or [])
+        super().__init__("knowledge adoption refused: " + ", ".join(self.refusals))
+
+
 def _snapshot_hash(payload: str) -> str:
     """종료 후보 내용의 지문. 사용자가 본 후보가 지금 것과 같은지 대조한다."""
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -1473,11 +1486,15 @@ class Repository:
         )
         # P4-06. 논의 응답이 대화의 프로젝트 규칙을 등록 블록으로 옮길 때 쓰는 **현재 지식 목록과
         # 등록 저장소 이름**. 대체할 키·저장소 이름을 지어내지 않게 한다. 요약·메타데이터뿐이다.
-        run["knowledge_index"] = (
-            self.knowledge_index_for_assignment(case["project_id"])
-            if purpose == RunPurpose.DISCUSSION_REPLY.value
-            else None
-        )
+        # P4-07. 작업 실행(검증·분석·실험·구현)에도 싣는다 — 후보 규칙이 관계 키와 이 실행의 저장소
+        # 이름을 지어내지 않게. 이 목록이 실린 실행에만 Runner 가 후보 규칙을 붙인다.
+        if purpose == RunPurpose.DISCUSSION_REPLY.value:
+            run["knowledge_index"] = self.knowledge_index_for_assignment(case["project_id"])
+        elif purpose in knowmod.EXTRACTION_PURPOSES:
+            _repository_id, name = self._run_repository_name(run)
+            run["knowledge_index"] = self.knowledge_index_for_assignment(case["project_id"], name)
+        else:
+            run["knowledge_index"] = None
         return run
 
     def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
@@ -1686,10 +1703,16 @@ class Repository:
             criteria_json = json.dumps(parsed, ensure_ascii=False)[:8000] if parsed else None
         knowledge_json: str | None = None
         if knowledge_report is not None:
-            # P4-06. 등록 블록은 **요청에 대한 논의 응답**에만 붙는다. 적용(등록)은 처리기가 응답이
+            # P4-06. 등록 블록은 **요청에 대한 논의 응답**에 붙는다. 적용(등록)은 처리기가 응답이
             # 완료된 뒤에 한다 — 여기서 적으면 보고가 곧 등록이 된다.
-            if run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value or not run.get("request_id"):
-                raise ConflictError("a knowledge report belongs only to a discussion reply of a request")
+            # P4-07. **작업 실행**(검증·분석·실험·구현)의 후보 블록도 받는다 — 적용은 결과 뒤 훅
+            # (`apply_extraction_report`)이 후보로만 한다. 다른 목적(의도 초안·설계·계획·검토)은 받지 않는다.
+            reply = run.get("purpose") == RunPurpose.DISCUSSION_REPLY.value and bool(run.get("request_id"))
+            if not reply and run.get("purpose") not in knowmod.EXTRACTION_PURPOSES:
+                raise ConflictError(
+                    "a knowledge report belongs only to a discussion reply of a request or a work run"
+                    " (verification, analysis, experiment, implementation)"
+                )
             items = list(knowledge_report)[: knowmod.MAX_REPORT_ITEMS + 5]
             knowledge_json = json.dumps(items, ensure_ascii=False)
             if len(knowledge_json) > 8000:
@@ -12597,6 +12620,19 @@ class Repository:
         item = dict(row)
         item["paths"] = json.loads(item.pop("paths_json", None) or "[]")
         item["activities"] = json.loads(item.pop("activities_json", None) or "[]")
+        # P4-07. 후보의 관계·관측 문맥·채택 확인. 옛 버전은 NULL — "없음"이지 값이 아니다.
+        observed = item.pop("observed_json", None)
+        item["observed"] = json.loads(observed) if observed else None
+        adoption = item.pop("adoption_json", None)
+        item["adoption"] = json.loads(adoption) if adoption else None
+        item.setdefault("relation", None)
+        item.setdefault("relates_to_knowledge_id", None)
+        item["relates_to_key"] = None
+        if item.get("relates_to_knowledge_id"):
+            related = self.conn.execute(
+                "SELECT knowledge_key FROM knowledge_item WHERE id = ?", (item["relates_to_knowledge_id"],)
+            ).fetchone()
+            item["relates_to_key"] = related["knowledge_key"] if related else None
         # P4-06b. 본문이 어디에 있는가 — `server` 면 어느 PC 의 실행에도 주입된다. `runner` 는 소유 PC
         # 에만 있는 옛 원문(이행 전)이다. 권위 메시지도 같다(없으면 `None`).
         item["storage"] = (
@@ -12811,18 +12847,25 @@ class Repository:
             )
 
     def _knowledge_meta_by_seq(self, run_id: str) -> dict[int, dict[str, Any]]:
-        """배정·조회의 지식 참조에 붙이는 메타데이터(순번 → 항목·버전·효력·범위). 본문 없음."""
+        """배정·조회의 지식 참조에 붙이는 메타데이터(순번 → 항목·버전·효력·범위). 본문 없음.
+
+        P4-07. 후보면 관계(`← K-001 반증`)와 관측 문맥(저장소·기준 커밋)도 간다 — Case 브랜치의 사실을
+        기본 브랜치의 사실로 읽지 않게 지시문 머리에 적힌다.
+        """
         rows = self.conn.execute(
             "SELECT rk.*, ki.knowledge_key, kv.version, kv.kind, kv.summary, kv.scope_kind,"
-            " kv.paths_json, kv.activities_json, kv.authority_kind, pr.name AS repository_name"
+            " kv.paths_json, kv.activities_json, kv.authority_kind, pr.name AS repository_name,"
+            " kv.relation, kv.observed_json, rel.knowledge_key AS relates_to_key"
             " FROM run_knowledge rk JOIN knowledge_version kv ON kv.id = rk.version_id"
             " JOIN knowledge_item ki ON ki.id = rk.knowledge_id"
             " LEFT JOIN project_repository pr ON pr.id = kv.repository_id"
+            " LEFT JOIN knowledge_item rel ON rel.id = kv.relates_to_knowledge_id"
             " WHERE rk.run_id = ?",
             (run_id,),
         ).fetchall()
         out: dict[int, dict[str, Any]] = {}
         for row in rows:
+            observed = json.loads(row["observed_json"]) if row["observed_json"] else None
             meta = {
                 "knowledge_id": row["knowledge_id"],
                 "key": row["knowledge_key"],
@@ -12838,6 +12881,16 @@ class Repository:
                 "activities": json.loads(row["activities_json"] or "[]"),
                 "authority": row["authority_kind"],
                 "scope_resolution": row["scope_resolution"],
+                "relation": row["relation"],
+                "relates_to_key": row["relates_to_key"],
+                "observed": (
+                    {
+                        "repository_name": observed.get("repository_name"),
+                        "base_commit": observed.get("base_commit"),
+                    }
+                    if observed
+                    else None
+                ),
             }
             if row["context_seq"] is not None:
                 out[int(row["context_seq"])] = meta
@@ -12845,8 +12898,11 @@ class Repository:
                 out[int(row["source_seq"])] = {**meta, "source_of": row["knowledge_key"]}
         return out
 
-    def knowledge_index_for_assignment(self, project_id: str) -> dict[str, Any]:
-        """논의 응답의 등록 규칙이 쓰는 목록: 현재 지식(키·요약·효력·범위)과 등록 저장소 이름."""
+    def knowledge_index_for_assignment(
+        self, project_id: str, run_repository: str | None = None
+    ) -> dict[str, Any]:
+        """논의 응답의 등록 규칙·작업 실행의 후보 규칙이 쓰는 목록: 현재 지식(키·요약·효력·범위)과 등록
+        저장소 이름. P4-07: `run_repository` 는 그 실행의 저장소 이름(후보의 범위를 지어내지 않게)."""
         repos = {r["id"]: r["name"] for r in self.list_project_repositories(project_id)}
         items = [
             {
@@ -12861,7 +12917,39 @@ class Repository:
             for v in self._current_knowledge_versions(project_id)
             if v["state"] in knowmod.PROVIDED_STATES
         ]
-        return {"items": items, "repositories": sorted(repos.values())}
+        return {"items": items, "repositories": sorted(repos.values()), "run_repository": run_repository}
+
+    def _run_repository_name(self, run: dict[str, Any]) -> tuple[str | None, str | None]:
+        """이 실행의 저장소(id, 이름). 실행의 저장소 → 작업공간의 저장소 → 유일한 후보. 모르면 `(None, None)`."""
+        repository_id = run.get("repository_id")
+        if not repository_id:
+            workspace = self.get_workspace(run["case_id"], None)
+            if workspace is not None:
+                repository_id = workspace["repository_id"]
+        if not repository_id:
+            candidates = self._run_repositories(run["case_id"], None)
+            if candidates and len(candidates) == 1:
+                repository_id = candidates[0]
+        if not repository_id:
+            return None, None
+        try:
+            return repository_id, self.get_project_repository(repository_id)["name"]
+        except NotFoundError:
+            return repository_id, None
+
+    def _observed_context(self, run: dict[str, Any]) -> dict[str, Any]:
+        """P4-07. 후보가 관측된 **당시 코드·환경**: 실행·저장소·기준 커밋·도구 판. 모르는 것은 `None` 이다."""
+        repository_id, name = self._run_repository_name(run)
+        workspace = self.get_workspace(run["case_id"], repository_id) if repository_id else None
+        return {
+            "run_id": run["run_id"],
+            "purpose": run.get("purpose"),
+            "case_id": run["case_id"],
+            "repository_id": repository_id,
+            "repository_name": name,
+            "base_commit": workspace["base_commit"] if workspace else None,
+            "tool_version": run.get("observed_tool_version"),
+        }
 
     # ------------------------------------------------------------- 등록·변경
 
@@ -12886,6 +12974,10 @@ class Repository:
         source_report_index: int | None = None,
         reason_summary: str | None = None,
         knowledge_id: str | None = None,
+        relates_to_knowledge_id: str | None = None,
+        relation: str | None = None,
+        observed: dict[str, Any] | None = None,
+        adoption: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """지식 버전 하나를 기록한다. `knowledge_id` 가 없으면 새 항목(K-NNN)이다.
 
@@ -12893,9 +12985,31 @@ class Repository:
         새 버전은 이전 현재 버전을 `superseded` 로 바꾸고 대체 관계를 남긴다. 무효였던 버전은 무효
         그대로 두고 대체 관계만 적는다. 권위 규칙은 `domain.knowledge.check_authority` 가 본다 —
         AI 제안은 후보로만 들어온다.
+
+        P4-07. `relates_to_knowledge_id`·`relation` 은 후보와 **다른** 항목의 관계(대체 제안·반증)이며
+        그 항목의 버전 사슬을 건드리지 않는다. `observed` 는 관측 문맥, `adoption` 은 활성화 때의 QG-08
+        확인 결과다(둘 다 짧은 구조, 본문 아님).
         """
         case = self.get_case(case_id)
         project_id = case["project_id"]
+        if relation is not None:
+            try:
+                relation = knowmod.Relation(relation).value
+            except ValueError:
+                raise ConflictError(f"unknown knowledge relation {relation!r}") from None
+            if relates_to_knowledge_id is None:
+                raise ConflictError("a relation needs the knowledge item it relates to")
+        if relates_to_knowledge_id is not None:
+            if self.get_knowledge_item(relates_to_knowledge_id)["project_id"] != project_id:
+                raise ConflictError("the related knowledge belongs to another project")
+            if knowledge_id is not None and relates_to_knowledge_id == knowledge_id:
+                raise ConflictError("a knowledge version does not relate to its own item")
+        observed_json = json.dumps(observed, ensure_ascii=False) if observed else None
+        if observed_json and len(observed_json) > knowmod.MAX_OBSERVED_JSON:
+            raise ConflictError("the observed context is too large")
+        adoption_json = json.dumps(adoption, ensure_ascii=False) if adoption else None
+        if adoption_json and len(adoption_json) > knowmod.MAX_ADOPTION_JSON:
+            raise ConflictError("the adoption record is too large")
         ref = self.get_artifact_ref(artifact_id, int(artifact_rev))
         if ref["case_id"] != case_id:
             raise ConflictError("knowledge content must be an original stored in this case")
@@ -12961,8 +13075,9 @@ class Repository:
                 "INSERT INTO knowledge_version (id, knowledge_id, version, artifact_id, artifact_rev,"
                 " kind, obligation, state, summary, scope_kind, repository_id, paths_json,"
                 " activities_json, authority_kind, source_case_id, source_message_id, source_run_id,"
-                " source_report_index, created_by, reason_summary, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " source_report_index, created_by, reason_summary, created_at,"
+                " relates_to_knowledge_id, relation, observed_json, adoption_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     version_id,
                     knowledge_id,
@@ -12985,6 +13100,10 @@ class Repository:
                     created_by,
                     _summary(reason_summary) if reason_summary else None,
                     now,
+                    relates_to_knowledge_id,
+                    relation,
+                    observed_json,
+                    adoption_json,
                 ),
             )
             if previous is not None:
@@ -13055,31 +13174,304 @@ class Repository:
             **fields,
         )
 
-    def activate_knowledge(self, knowledge_id: str, actor: str, reason_summary: str) -> dict[str, Any]:
-        """후보 → 활성. **사람의 결정이며 새 버전이다**(`user_decision`) — 후보 행을 덮어쓰지 않는다."""
+    def adoption_check_for(
+        self,
+        knowledge_id: str,
+        *,
+        into_knowledge_id: str | None = None,
+        obligation: str | None = None,
+        scope_kind: str | None = None,
+        repository_id: str | None = None,
+        activities: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """P4-07. 후보의 **QG-08 채택 확인**(근거·범위·상태·버전·충돌). 활성화 없이 본다.
+
+        판정은 `domain.knowledge.adoption_check` 다 — 여기서는 사실(근거 수·원문 저장 위치·열린 충돌·관계
+        대상·`into` 대상의 현재 버전)을 모아 넘긴다. 반환: `{findings, blocked, candidate, related, into}`.
+        """
+        current = self.current_knowledge_version(knowledge_id)
+        if current is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        related = None
+        if current.get("relates_to_knowledge_id"):
+            related = self.current_knowledge_version(current["relates_to_knowledge_id"])
+        into = None
+        if into_knowledge_id and into_knowledge_id != knowledge_id:
+            into = self.current_knowledge_version(into_knowledge_id)
+            if into is None:
+                raise NotFoundError(f"knowledge not found: {into_knowledge_id}")
+            if into["project_id"] != current["project_id"]:
+                raise ConflictError("the target knowledge belongs to another project")
+        evidence_count = len(self.knowledge_evidence_for(knowledge_id)) + (
+            1 if current.get("source_run_id") else 0
+        )
+        open_conflicts = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM knowledge_conflict WHERE state = 'open'"
+            " AND (knowledge_a = ? OR knowledge_b = ?)",
+            (knowledge_id, knowledge_id),
+        ).fetchone()["n"]
+        requested = {
+            "obligation": obligation,
+            "scope_kind": scope_kind,
+            "repository_id": repository_id,
+            "activities": activities,
+        }
+        candidate = dict(current)
+        candidate["relates_to_version"] = (current.get("observed") or {}).get("relates_to_version")
+        findings = knowmod.adoption_check(
+            candidate,
+            evidence_count=evidence_count,
+            storage=current.get("storage"),
+            open_conflicts=int(open_conflicts),
+            related=related,
+            into=into,
+            requested=requested,
+        )
+        return {
+            "knowledge_id": knowledge_id,
+            "version_id": current["id"],
+            "findings": [f.to_dict() for f in findings],
+            "blocked": knowmod.adoption_blocked(findings),
+            "evidence_count": evidence_count,
+            "related": (
+                {"knowledge_key": related["knowledge_key"], "version": related["version"], "state": related["state"]}
+                if related
+                else None
+            ),
+            "into": (
+                {"knowledge_key": into["knowledge_key"], "version": into["version"], "state": into["state"]}
+                if into
+                else None
+            ),
+            "independent_review": "not_run",
+        }
+
+    def activate_knowledge(
+        self,
+        knowledge_id: str,
+        actor: str,
+        reason_summary: str,
+        *,
+        into_knowledge_id: str | None = None,
+        obligation: str | None = None,
+        scope_kind: str | None = None,
+        repository_id: str | None = None,
+        paths: list[str] | None = None,
+        activities: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """후보 → 활성. **사람의 결정이며 새 버전이다**(`user_decision`) — 후보 행을 덮어쓰지 않는다.
+
+        P4-07. 먼저 QG-08 채택 확인을 지난다 — 막는 항목이 있으면 `KnowledgeAdoptionRefused`(코드 목록).
+        경고는 새 버전의 `adoption` 에 남는다. 범위·효력·활동은 **좁힐 수만** 있다(확인이 막는다).
+        `into_knowledge_id` 를 주면 **그 항목의 새 버전**으로 적용하고 후보 버전은 그 새 버전에 대체된
+        것으로 닫는다(후보 키·이력은 남는다).
+        """
         current = self.current_knowledge_version(knowledge_id)
         if current is None:
             raise NotFoundError(f"knowledge not found: {knowledge_id}")
         if current["state"] != knowmod.KnowledgeState.CANDIDATE.value:
             raise ConflictError(f"only a candidate is activated; this is {current['state']}")
-        return self.register_knowledge(
+        if into_knowledge_id == knowledge_id:
+            into_knowledge_id = None
+        check = self.adoption_check_for(
+            knowledge_id,
+            into_knowledge_id=into_knowledge_id,
+            obligation=obligation,
+            scope_kind=scope_kind,
+            repository_id=repository_id,
+            activities=activities,
+        )
+        if check["blocked"]:
+            raise KnowledgeAdoptionRefused(check)
+        fields: dict[str, Any] = {
+            "kind": current["kind"],
+            "obligation": obligation or current["obligation"],
+            "summary": current["summary"],
+            "scope_kind": scope_kind or current["scope_kind"],
+            "repository_id": repository_id or current.get("repository_id"),
+            "paths": current["paths"] if paths is None else list(paths),
+            "activities": current["activities"] if activities is None else list(activities),
+        }
+        if fields["scope_kind"] == knowmod.ScopeKind.PROJECT.value:
+            fields["repository_id"] = None
+            fields["paths"] = []
+        adoption = {
+            "checked_at": utc_now(),
+            "by": actor,
+            "findings": check["findings"],
+            "from_candidate": current["id"],
+            "into": check["into"]["knowledge_key"] if check["into"] else None,
+            "independent_review": "not_run",
+        }
+        target_id = into_knowledge_id or knowledge_id
+        relates_to = current.get("relates_to_knowledge_id")
+        relation = current.get("relation")
+        if relates_to == target_id:
+            relates_to, relation = None, None  # 그 항목 자신의 새 버전이 됐다 — 관계는 이력(후보 버전)에 남는다
+        version = self.register_knowledge(
             current["source_case_id"],
             artifact_id=current["artifact_id"],
             artifact_rev=int(current["artifact_rev"]),
-            kind=current["kind"],
-            obligation=current["obligation"],
-            summary=current["summary"],
             created_by=actor,
             state=knowmod.KnowledgeState.ACTIVE.value,
-            scope_kind=current["scope_kind"],
-            repository_id=current.get("repository_id"),
-            paths=current["paths"],
-            activities=current["activities"],
             authority=knowmod.KnowledgeAuthority.USER_DECISION.value,
             source_message_id=current.get("source_message_id"),
             reason_summary=reason_summary or "후보를 활성으로",
-            knowledge_id=knowledge_id,
+            knowledge_id=target_id,
+            relates_to_knowledge_id=relates_to,
+            relation=relation,
+            observed=current.get("observed"),
+            adoption=adoption,
+            **fields,
         )
+        if target_id != knowledge_id:
+            with transaction(self.conn):
+                self.conn.execute(
+                    "UPDATE knowledge_version SET state = ?, superseded_by = ?, superseded_at = ?"
+                    " WHERE id = ? AND state = ?",
+                    (
+                        knowmod.KnowledgeState.SUPERSEDED.value,
+                        version["id"],
+                        utc_now(),
+                        current["id"],
+                        knowmod.KnowledgeState.CANDIDATE.value,
+                    ),
+                )
+        return version
+
+    # ------------------------------------------------------------- 근거 (P4-07)
+
+    def _knowledge_evidence(self, evidence_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT ke.*, ki.knowledge_key FROM knowledge_evidence ke"
+            " JOIN knowledge_item ki ON ki.id = ke.knowledge_id WHERE ke.id = ?",
+            (evidence_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"knowledge evidence not found: {evidence_id}")
+        item = dict(row)
+        item["storage"] = "server" if self._has_server_body(item["artifact_id"], item["artifact_rev"]) else "runner"
+        return item
+
+    def knowledge_evidence_for(self, knowledge_id: str) -> list[dict[str, Any]]:
+        """한 항목에 더해진 근거(관측 실행). 참조·요약뿐이다 — 근거 원문은 열람 경로로 본다."""
+        rows = self.conn.execute(
+            "SELECT id FROM knowledge_evidence WHERE knowledge_id = ? ORDER BY created_at", (knowledge_id,)
+        ).fetchall()
+        return [self._knowledge_evidence(r["id"]) for r in rows]
+
+    def _record_evidence(
+        self,
+        version: dict[str, Any],
+        kind: str,
+        run: dict[str, Any],
+        index: int,
+        item: dict[str, Any],
+    ) -> dict[str, Any]:
+        """기존 항목에 근거 행을 남긴다(`supports`·`duplicate`). 새 항목·새 버전을 만들지 않는다."""
+        evidence_id = ids.new_id("kev")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO knowledge_evidence (id, knowledge_id, version_id, kind, source_run_id,"
+                " source_case_id, source_report_index, artifact_id, artifact_rev, summary, recorded_by,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    evidence_id,
+                    version["knowledge_id"],
+                    version["id"],
+                    kind,
+                    run["run_id"],
+                    run["case_id"],
+                    int(index),
+                    item["artifact_id"],
+                    int(item["revision"]),
+                    _summary(item.get("basis") or item["summary"]),
+                    f"ai:{run['tool_id']}",
+                    utc_now(),
+                ),
+            )
+        return self._knowledge_evidence(evidence_id)
+
+    def _knowledge_with_hash(self, project_id: str, content_hash: str) -> dict[str, Any] | None:
+        """같은 원문(해시)을 가진 이 Project 의 현재 버전(후보·활성). 같은 뜻의 다른 문장은 못 잡는다."""
+        row = self.conn.execute(
+            "SELECT kv.id FROM knowledge_version kv"
+            " JOIN knowledge_item ki ON ki.id = kv.knowledge_id"
+            " JOIN artifact_ref a ON a.artifact_id = kv.artifact_id AND a.revision = kv.artifact_rev"
+            " WHERE ki.project_id = ? AND a.content_hash = ? AND kv.state IN (?, ?)"
+            " AND kv.version = (SELECT MAX(v2.version) FROM knowledge_version v2"
+            "                   WHERE v2.knowledge_id = kv.knowledge_id)"
+            " ORDER BY ki.knowledge_key LIMIT 1",
+            (
+                project_id,
+                content_hash,
+                knowmod.KnowledgeState.CANDIDATE.value,
+                knowmod.KnowledgeState.ACTIVE.value,
+            ),
+        ).fetchone()
+        return self.get_knowledge_version(row["id"]) if row else None
+
+    def _register_candidate(
+        self,
+        run: dict[str, Any],
+        case: dict[str, Any],
+        index: int,
+        item: dict[str, Any],
+        repository_id: str | None,
+        related: dict[str, Any] | None,
+        observed: dict[str, Any] | None,
+    ) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        """AI 제안 하나를 **후보로** 넣거나 기존 항목의 **근거**로 잇는다. (버전, 근거) 중 하나만 있다.
+
+        같은 원문(해시)이 이미 있으면 근거(`duplicate`), `supports` 면 대상의 근거(`supports`), 그 밖에는
+        새 후보 항목이다. 대체 제안·반증은 관계로만 적고 대상의 버전 사슬은 건드리지 않는다(D-67).
+        """
+        ref = self.get_artifact_ref(item["artifact_id"], int(item["revision"]))
+        same = self._knowledge_with_hash(case["project_id"], ref["content_hash"])
+        if same is not None:
+            return None, self._record_evidence(same, "duplicate", run, index, item)
+        relation = item.get("relation")
+        if related is not None and relation == knowmod.Relation.SUPPORTS.value:
+            target = self.current_knowledge_version(related["id"])
+            if target is None or target["state"] not in knowmod.PROVIDED_STATES:
+                raise ConflictError(f"{related['knowledge_key']} is not current (cannot add evidence)")
+            return None, self._record_evidence(target, "supports", run, index, item)
+        relates_to_id = None
+        if related is not None and relation in (
+            knowmod.Relation.SUPERSEDES.value,
+            knowmod.Relation.CONTRADICTS.value,
+        ):
+            relates_to_id = related["id"]
+            target = self.current_knowledge_version(related["id"])
+            if observed is not None and target is not None:
+                observed = {**observed, "relates_to_version": target["id"]}
+        else:
+            relation = None
+        basis = item.get("basis")
+        version = self.register_knowledge(
+            run["case_id"],
+            artifact_id=item["artifact_id"],
+            artifact_rev=int(item["revision"]),
+            kind=item["kind"],
+            obligation=item["obligation"],
+            summary=item["summary"],
+            created_by=f"ai:{run['tool_id']}",
+            state=knowmod.KnowledgeState.CANDIDATE.value,
+            scope_kind=(
+                knowmod.ScopeKind.REPOSITORY.value if repository_id else knowmod.ScopeKind.PROJECT.value
+            ),
+            repository_id=repository_id,
+            paths=item["paths"],
+            activities=item["activities"],
+            authority=knowmod.KnowledgeAuthority.AI_PROPOSAL.value,
+            source_run_id=run["run_id"],
+            source_report_index=index,
+            reason_summary=(f"추출 근거: {basis}" if basis else "작업 결과에서 AI 가 제안한 후보"),
+            relates_to_knowledge_id=relates_to_id,
+            relation=relation,
+            observed=observed,
+        )
+        return version, None
 
     def invalidate_knowledge(self, knowledge_id: str, actor: str, reason: str) -> dict[str, Any]:
         """무효. **사람의 명시 행동뿐이다** — 원문 조회 실패·적용 미확정을 무효로 적지 않는다."""
@@ -13185,7 +13577,15 @@ class Repository:
                     )["availability"]
                 except NotFoundError:
                     version["availability"] = "missing"
-            items.append({**dict(row), "current": versions[-1] if versions else None, "versions": versions})
+            items.append(
+                {
+                    **dict(row),
+                    "current": versions[-1] if versions else None,
+                    "versions": versions,
+                    # P4-07. 이 항목에 더해진 근거(관측 실행). 참조·요약뿐이다.
+                    "evidence": self.knowledge_evidence_for(row["id"]),
+                }
+            )
         conflicts = [
             self._knowledge_conflict(r["id"])
             for r in self.conn.execute(
@@ -13214,12 +13614,31 @@ class Repository:
         응답이 완료된 요청 응답만 등록한다. 권위는 **요청을 연 사용자 메시지**다(`user_statement`).
         없는 저장소·없는 대체 키·형식 오류는 등록하지 않고 사유를 남긴다. 같은 보고를 다시 처리해도
         두 번 등록하지 않는다(`knowledge_intake`·`UNIQUE(source_run_id, source_report_index)`).
+
+        P4-07. 항목의 `proposal: true` 는 사용자의 말이 아니라 AI 의 제안이다 — **후보로만** 들어가고
+        권위 메시지를 갖지 않는다(`_register_candidate`).
         """
         run = self.get_run(run_id)
-        raw = run.get("knowledge_report_json")
-        if not raw or run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value:
+        if run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value:
             return []
-        if run.get("status") != RunStatus.FINISHED.value:
+        return self._apply_report(run, extraction=False)
+
+    def apply_extraction_report(self, run_id: str) -> list[dict[str, Any]]:
+        """P4-07. 작업 실행(검증·분석·실험·구현)이 결과와 함께 남긴 후보 블록을 **한 번** 처리한다.
+
+        완료된 실행의 항목만 받고 전부 **후보**(`ai_proposal`)다 — 활성 필수가 되지 않는다. 같은 내용은
+        기존 항목의 근거로, `supports` 는 대상의 근거로 잇고, 대체 제안·반증은 관계를 가진 새 후보다.
+        처리기·진행기 설정과 무관하게 결과 보고 뒤 훅이 부른다(`knowledge_intake` 멱등).
+        """
+        run = self.get_run(run_id)
+        if run.get("purpose") not in knowmod.EXTRACTION_PURPOSES:
+            return []
+        return self._apply_report(run, extraction=True)
+
+    def _apply_report(self, run: dict[str, Any], *, extraction: bool) -> list[dict[str, Any]]:
+        run_id = run["run_id"]
+        raw = run.get("knowledge_report_json")
+        if not raw or run.get("status") != RunStatus.FINISHED.value:
             return []
         report = json.loads(raw)
         done = {
@@ -13228,95 +13647,122 @@ class Repository:
                 "SELECT report_index FROM knowledge_intake WHERE run_id = ?", (run_id,)
             ).fetchall()
         }
-        request = self.get_request(run["request_id"]) if run.get("request_id") else None
+        request = (
+            self.get_request(run["request_id"]) if run.get("request_id") and not extraction else None
+        )
         opening_id = request.get("opened_by_message_id") if request else None
         case = self.get_case(run["case_id"])
         repos = {
             r["name"].strip().lower(): r["id"]
             for r in self.list_project_repositories(case["project_id"])
         }
+        observed = self._observed_context(run) if extraction else None
+        limit = knowmod.MAX_CANDIDATES_PER_RUN if extraction else knowmod.MAX_REPORT_ITEMS
         out: list[dict[str, Any]] = []
         for index, raw_item in enumerate(report):
             if index in done:
                 continue
             refusal: str | None = None
             version: dict[str, Any] | None = None
+            evidence: dict[str, Any] | None = None
             summary = None
             if isinstance(raw_item, dict):
                 summary = " ".join(str(raw_item.get("summary") or "").split())[:200] or None
-            if index >= knowmod.MAX_REPORT_ITEMS:
+            if index >= limit:
                 refusal = "too_many_items"
             elif run.get("outcome") != RunOutcome.COMPLETED.value:
-                refusal = "reply_not_completed"
-            elif opening_id is None:
+                refusal = "run_not_completed" if extraction else "reply_not_completed"
+            elif not extraction and opening_id is None:
                 refusal = "no_user_message"
             else:
                 item, refusal = knowmod.parse_report_item(raw_item)
                 if item is not None:
+                    proposal = extraction or bool(item.get("proposal"))
                     repository_id = None
                     if item["repository"]:
                         repository_id = repos.get(item["repository"].lower())
                         if repository_id is None:
                             refusal = "unknown_repository"
                     target = None
-                    if refusal is None and item["supersedes"]:
+                    if refusal is None and item["supersedes"] and not proposal:
                         target = self.find_knowledge_by_key(case["project_id"], item["supersedes"])
                         if target is None:
                             refusal = "unknown_supersedes_key"
+                    related = None
+                    if refusal is None and item.get("relates_to"):
+                        related = self.find_knowledge_by_key(case["project_id"], item["relates_to"])
+                        if related is None:
+                            refusal = "unknown_related_key"
+                    if refusal is None and not self._has_server_body(item["artifact_id"], item["revision"]):
+                        refusal = "content_not_stored"
                     if refusal is None:
                         try:
-                            version = self.register_knowledge(
-                                run["case_id"],
-                                artifact_id=item["artifact_id"],
-                                artifact_rev=item["revision"],
-                                kind=item["kind"],
-                                obligation=item["obligation"],
-                                summary=item["summary"],
-                                created_by=f"ai:{run['tool_id']}",
-                                state=knowmod.KnowledgeState.ACTIVE.value,
-                                scope_kind=(
-                                    knowmod.ScopeKind.REPOSITORY.value
-                                    if repository_id
-                                    else knowmod.ScopeKind.PROJECT.value
-                                ),
-                                repository_id=repository_id,
-                                paths=item["paths"],
-                                activities=item["activities"],
-                                authority=knowmod.KnowledgeAuthority.USER_STATEMENT.value,
-                                source_message_id=opening_id,
-                                source_run_id=run_id,
-                                source_report_index=index,
-                                reason_summary="대화에서 사용자가 정한 프로젝트 규칙(자동 등록)",
-                                knowledge_id=target["id"] if target else None,
-                            )
+                            if proposal:
+                                version, evidence = self._register_candidate(
+                                    run, case, index, item, repository_id, related, observed
+                                )
+                            else:
+                                version = self.register_knowledge(
+                                    run["case_id"],
+                                    artifact_id=item["artifact_id"],
+                                    artifact_rev=item["revision"],
+                                    kind=item["kind"],
+                                    obligation=item["obligation"],
+                                    summary=item["summary"],
+                                    created_by=f"ai:{run['tool_id']}",
+                                    state=knowmod.KnowledgeState.ACTIVE.value,
+                                    scope_kind=(
+                                        knowmod.ScopeKind.REPOSITORY.value
+                                        if repository_id
+                                        else knowmod.ScopeKind.PROJECT.value
+                                    ),
+                                    repository_id=repository_id,
+                                    paths=item["paths"],
+                                    activities=item["activities"],
+                                    authority=knowmod.KnowledgeAuthority.USER_STATEMENT.value,
+                                    source_message_id=opening_id,
+                                    source_run_id=run_id,
+                                    source_report_index=index,
+                                    reason_summary="대화에서 사용자가 정한 프로젝트 규칙(자동 등록)",
+                                    knowledge_id=target["id"] if target else None,
+                                )
                         except sqlite3.IntegrityError:
-                            # 다른 처리가 먼저 등록했다(재처리 경합). 그 버전을 가리킨다.
+                            # 다른 처리가 먼저 등록했다(재처리 경합). 그 버전·근거를 가리킨다.
                             row = self.conn.execute(
                                 "SELECT id FROM knowledge_version WHERE source_run_id = ?"
                                 " AND source_report_index = ?",
                                 (run_id, index),
                             ).fetchone()
-                            if row is None:
-                                refusal = "registration_failed"
-                            else:
+                            found = self.conn.execute(
+                                "SELECT id FROM knowledge_evidence WHERE source_run_id = ?"
+                                " AND source_report_index = ?",
+                                (run_id, index),
+                            ).fetchone()
+                            if row is not None:
                                 version = self.get_knowledge_version(row["id"])
+                            elif found is not None:
+                                evidence = self._knowledge_evidence(found["id"])
+                            else:
+                                refusal = "registration_failed"
                         except (ConflictError, NotFoundError) as exc:
                             refusal = f"refused: {exc}"[:120]
+            state = "registered" if version else ("evidence" if evidence else "refused")
             try:
                 with transaction(self.conn):
                     self.conn.execute(
                         "INSERT INTO knowledge_intake (run_id, report_index, case_id, state,"
-                        " knowledge_version_id, refusal, summary, created_at)"
-                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        " knowledge_version_id, refusal, summary, created_at, evidence_id)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             run_id,
                             index,
                             run["case_id"],
-                            "registered" if version else "refused",
+                            state,
                             version["id"] if version else None,
-                            None if version else (refusal or "refused")[:120],
+                            (refusal or "refused")[:120] if state == "refused" else None,
                             summary,
                             utc_now(),
+                            evidence["id"] if evidence else None,
                         ),
                     )
             except sqlite3.IntegrityError:
@@ -13324,30 +13770,43 @@ class Repository:
             out.append(
                 {
                     "report_index": index,
-                    "state": "registered" if version else "refused",
+                    "state": state,
                     "version": version,
-                    "refusal": None if version else refusal,
+                    "evidence": evidence,
+                    "refusal": refusal if state == "refused" else None,
                 }
             )
         # P4-06b. Runner 가 응답과 함께 올린 권위 메시지 본문은 **이 보고에서 하나라도 등록됐을 때만**
         # 남긴다. 전부 거부됐으면 권위가 될 버전이 없으므로 지운다(다른 버전이 그 메시지를 권위로
         # 가리키면 남는다). 서버가 갖는 사용자 메시지는 자동 등록 규칙의 권위 한 건뿐이어야 한다.
+        # P4-07: 제안(후보)만 등록된 응답도 권위가 될 버전이 없다 — 같은 규칙으로 지워진다.
         if opening_id is not None and out:
             self.drop_unused_authority_body(opening_id)
         return out
 
     def knowledge_registrations_view(self, case_id: str) -> list[dict[str, Any]]:
-        """이 대화의 말에서 등록한(또는 거부한) 지식. 카드가 쓴다 — 요약·키·버전·상태뿐이다."""
+        """이 대화의 말·실행에서 등록한(또는 거부한·근거로 이은) 지식. 카드가 쓴다 — 요약·키·버전·상태뿐이다.
+
+        P4-07. `origin` 이 어디서 왔는지를 말한다 — `statement`(사용자 말, P4-06), `proposal`(논의 응답의
+        AI 제안), `extraction`(작업 실행의 후보). 근거로 이은 항목은 `intake_state = evidence` 다.
+        """
         rows = self.conn.execute(
             "SELECT ki.run_id, ki.report_index, ki.state AS intake_state, ki.refusal, ki.summary"
             " AS reported_summary, ki.created_at, kv.id AS version_id, kv.knowledge_id, kv.version,"
             " kv.kind, kv.obligation, kv.state, kv.summary, kv.scope_kind, kv.paths_json,"
             " kv.activities_json, item.knowledge_key, pr.name AS repository_name,"
-            " kv.source_message_id"
+            " kv.source_message_id, kv.authority_kind, kv.relation, kv.reason_summary,"
+            " rel.knowledge_key AS relates_to_key, r.purpose AS run_purpose,"
+            " ke.id AS evidence_id, ke.kind AS evidence_kind, ke.summary AS evidence_summary,"
+            " ei.knowledge_key AS evidence_key"
             " FROM knowledge_intake ki"
             " LEFT JOIN knowledge_version kv ON kv.id = ki.knowledge_version_id"
             " LEFT JOIN knowledge_item item ON item.id = kv.knowledge_id"
+            " LEFT JOIN knowledge_item rel ON rel.id = kv.relates_to_knowledge_id"
             " LEFT JOIN project_repository pr ON pr.id = kv.repository_id"
+            " LEFT JOIN run r ON r.run_id = ki.run_id"
+            " LEFT JOIN knowledge_evidence ke ON ke.id = ki.evidence_id"
+            " LEFT JOIN knowledge_item ei ON ei.id = ke.knowledge_id"
             " WHERE ki.case_id = ? ORDER BY ki.created_at, ki.report_index",
             (case_id,),
         ).fetchall()
@@ -13356,6 +13815,27 @@ class Repository:
             item = dict(row)
             item["paths"] = json.loads(item.pop("paths_json") or "[]")
             item["activities"] = json.loads(item.pop("activities_json") or "[]")
+            purpose = item.pop("run_purpose", None)
+            if purpose in knowmod.EXTRACTION_PURPOSES:
+                item["origin"] = "extraction"
+            elif item.get("authority_kind") == knowmod.KnowledgeAuthority.AI_PROPOSAL.value:
+                item["origin"] = "proposal"
+            else:
+                item["origin"] = "statement"
+            item["basis"] = item.pop("reason_summary", None) if item["origin"] != "statement" else None
+            evidence_id = item.pop("evidence_id", None)
+            item["evidence"] = (
+                {
+                    "id": evidence_id,
+                    "kind": item.pop("evidence_kind"),
+                    "summary": item.pop("evidence_summary"),
+                    "knowledge_key": item.pop("evidence_key"),
+                }
+                if evidence_id
+                else None
+            )
+            for key in ("evidence_kind", "evidence_summary", "evidence_key"):
+                item.pop(key, None)
             if item["knowledge_id"]:
                 current = self.current_knowledge_version(item["knowledge_id"])
                 item["current_version"] = current["version"] if current else None
@@ -13364,6 +13844,7 @@ class Repository:
                 registered = self.get_knowledge_version(item["version_id"])
                 item["storage"] = registered["storage"]
                 item["source_storage"] = registered["source_storage"]
+                item["observed"] = registered.get("observed")
             out.append(item)
         return out
 

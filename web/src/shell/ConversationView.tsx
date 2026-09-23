@@ -43,7 +43,14 @@ import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodie
 import { Composer, randomId, refusalText } from './Composer'
 import { emit } from './events'
 import type { PanelTab } from './ReviewPanel'
-import { KnowledgeCards, PredecessorLine, ProgressBanner, RelationCards, WaitCards } from './ProgressCards'
+import {
+  KnowledgeCandidateCards,
+  KnowledgeCards,
+  PredecessorLine,
+  ProgressBanner,
+  RelationCards,
+  WaitCards,
+} from './ProgressCards'
 import { checkReceipt, sendAndConfirm } from './send'
 import type { ShellCaseDetail } from './useCaseData'
 
@@ -297,6 +304,11 @@ export function ConversationView(props: {
             </div>
           )
         })}
+        <KnowledgeCandidateCards
+          registrations={conv.knowledge_registrations ?? []}
+          projectId={props.project.id}
+          caseId={caseId}
+        />
         <RelationCards relations={conv.relations ?? []} projectId={props.project.id} />
       </div>
 
