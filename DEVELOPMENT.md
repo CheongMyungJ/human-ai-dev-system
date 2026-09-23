@@ -6,7 +6,7 @@
 
 > C:\git\human-ai-dev-system-design\DEVELOPMENT.md를 읽고 지금 진행할 단계(P4-04)를 수행해줘. 기존 구현과 미커밋 변경을 보존하고 plan·검증·인계 절차를 지켜줘.
 
-**기본 수행 단위는 현재 하위 작업 하나**다. **P4-01·P4-02·P4-03은 끝났고 P3의 남은 라이브 하나(경로 C)는 사용자 지시로 스킵됐다.** 다음은 **P4-04**이며 P4 전체로 범위를 자동 확대하지 않는다. 사용자 지시가 우선하고, 필요한 기술 선택은 진행하되 새 제품 판단이 필요한 경우만 질문한다. **P4-03의 변경은 작업 트리에 미커밋으로 남아 있다**(아래 최신 인계) — 커밋 여부를 먼저 확인한다.
+**기본 수행 단위는 현재 하위 작업 하나**다. **P4-01·P4-02·P4-03은 끝났고 P3의 남은 라이브 하나(경로 C)는 사용자 지시로 스킵됐다.** 다음은 **P4-04**이며 P4 전체로 범위를 자동 확대하지 않는다. 사용자 지시가 우선하고, 필요한 기술 선택은 진행하되 새 제품 판단이 필요한 경우만 질문한다. P4-03의 변경은 **사용자 지시로 커밋·push 했다**(`bf86590`, 아래 최신 인계).
 
 ## 1. 현재 상태
 
@@ -20,9 +20,9 @@
 | 활성 plan | **없다.** [P4-PLAN-03](plans/P4-PLAN-03.md)은 완료됐고 [실행 결과](p4/evidence/P4-03-results.md)가 있다. P4-04를 시작할 때 **새 plan을 쓴다** — 완료된 P4-PLAN-01~03을 다시 열지 않음 |
 | 다음 순서 | P4 → P5 → P6. (스킵한 경로 C 는 예산 라이브가 필요해지는 시점에 다시 본다) |
 | 마지막 제품 검증 | **pytest 481 + P1 계약 unittest 18 통과**, 스키마 **v15**, `npm run build` 성공. P4-03 집중 시험 29·이행 집중 시험 10 통과, 파일 DB 재개와 v14→v15 반복 이행 확인. **실제 `codex-cli 0.154.0` 의도 초안 3건**으로 새 출력 계약 확인(결과는 [P4-03 근거](p4/evidence/P4-03-results.md) 3절). 이전 수치는 당시 사실로 보존 |
-| 이 문서 개정 시작 상태 | `main`, HEAD `f6145f4`(P4-02 커밋), `origin/main` 과 같음·작업 트리 clean 으로 관측. **P4-03 변경은 미커밋**이다 — commit·push 허용을 받지 않았다 |
+| 이 문서 개정 시작 상태 | `main`, HEAD `f6145f4`(P4-02 커밋), `origin/main` 과 같음·작업 트리 clean 으로 관측. P4-03 변경은 **사용자 지시로 `bf86590` 으로 커밋해 `origin/main` 에 push 했다** |
 | 남은 제품 결정 | 없음. **경로 C 스킵은 사용자 지시다**(2026-09-22). P3-04의 시험 기능은 A 로 확정, `autonomy = NULL` 은 controlled 취급으로 확정. P4-03이 미룬 **Profile 재분류 경로**는 의도 항목 집합을 어떻게 이을지의 결정이 필요하다 — 그 작업이 필요해질 때 사례와 함께 묻는다(9절) |
-| 외부 반영 허용 | **이 세션(S-019)은 commit·push·PR 을 하지 않았다.** 이전 세션의 두 커밋(P4-01·P4-02) push 허용은 그 커밋으로 끝났다. 외부로 보낸 것은 라이브의 **codex 실행 3회**뿐이며 codex 의 기존 사용자 설정을 따른다. 제품의 외부 게시는 여전히 P5다 |
+| 외부 반영 허용 | **이 세션(S-019)은 P4-03 을 사용자 지시로 커밋·push 했다**(`bf86590`, 그리고 이 인계 기록 커밋). 그 허용은 이 변경에만 적용되며 다음 변경은 다시 확인받는다. PR 은 만들지 않았다. 그 밖에 외부로 보낸 것은 라이브의 **codex 실행 3회**이며 codex 의 기존 사용자 설정을 따른다. 제품의 외부 게시는 여전히 P5다 |
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
 
@@ -197,7 +197,7 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 - 종료 시 현재 상태·진행표·plan·결과·다음 작업을 함께 갱신한다. 미충족은 완료로 표시하지 않고 `WAITING_USER`/`BLOCKED`/미완료 이유와 독립 진행 가능 범위를 기록한다.
 - 실제 브랜치/HEAD/미커밋 소유·남은 프로세스·자원·실행 명령을 남긴다. 사용자 변경을 섞거나 임의 삭제하지 않는다. 외부 push·PR 허용은 실제 범위를 확인한다.
 
-### 최신 인계 — S-019 / 2026-09-23 / P4-03 여섯 Profile (**완료, 미커밋**)
+### 최신 인계 — S-019 / 2026-09-23 / P4-03 여섯 Profile (**완료**)
 
 - **수행:** 시작 상태(`main`/`f6145f4`, clean, `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → pytest **451** + unittest **18**)을 직접 확인한 뒤 [P4-PLAN-03](plans/P4-PLAN-03.md)을 **구현 전에 기록·공유**하고 구현·검증했다. 상세 근거는 [P4-03 결과](p4/evidence/P4-03-results.md)다.
 - **완료 계약:** Profile 정의 **v2** 를 더하고 새 Case 의 정의판을 "2" 로 올렸다. v2 는 목적별 필수 의무를 갖는다(refactoring 은 개선+보존, maintenance 는 목표 상태+보존 조건이 적혔을 때의 보존). 기준마다 목적 의무가 붙고(보고값 또는 연결 항목에서 도출·출처 구분), 요구된 의무에 기준이 없으면 `objective_without_criteria` 로 자동·사람 인수 모두 거부된다 — 예외 대상이 아니다. **v1 Case 는 그대로다**(계약 없음, 방식 없는 `met` 허용, 후보 해시 불변).
@@ -209,9 +209,10 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 - **검증:** P4-03 집중 **29 통과**, 이행 집중 **10 통과**(v14→v15 신규 1건), 전체 **pytest 481 + P1 계약 unittest 18 통과**, `npm run build` 성공. 파일 DB 재개로 의무·결론·목적·후보 meaning 복원 확인. 알려진 deprecation warning 2건 외 실패 없음.
 - **실제 CLI:** **수행.** 새 AI 출력 계약(의도 문서 v5 의 목적·의무·결론 요구)이므로 `p4/live/profile_intents.py` 로 실제 `codex-cli 0.154.0` 의도 작성 **3회**를 돌렸다(합성 저장소). defect-fix+원인 확정 요청은 `objectives: ["cause"]`·원인 기준 `definitive_required`, research+"판단 불가도 충분"은 조사 기준 전부 `bounded_report_allowed`, refactoring 은 보존 기준 **둘**을 개선 기준과 따로 적었다. 세 건 모두 지시대로였고 의무는 전부 원문이 명시했다(`reported`). 관찰: codex 가 요구되지 않은 보존 기준을 스스로 더했다 — 완료 조건을 늘리는 쪽이며 느슨해지는 일탈은 없었다. 표본은 세 건뿐이다. 근거는 [P4-03 결과](p4/evidence/P4-03-results.md) 3절
 - **경계:** **강제 축은 넷 그대로다**(`publish` 만 P5). 조사 Profile 의 제품 수정 차단(D-66)은 목적 선언으로 풀리지 않는다. P4-04 컨텍스트·재개, P4-05 완료·예외 전반, P4-06~07 지식, P5 push·PR 은 구현하지 않았다. **Profile 재분류 경로도 만들지 않았다**(plan 3.8절, 9절 표).
-- **다음 행동:** P4-03 변경의 커밋 여부를 사용자에게 확인한 뒤 **P4-04(컨텍스트·재개)** 를 새 plan 으로 시작한다. P4-05 이후로 자동 확대하지 않는다.
-- **사람에게 물어야 할 것:** **커밋·push 여부**(이 세션은 허용을 받지 않았다). 제품 판단으로는 없다.
-- **작업공간:** `main`/`f6145f4` 위에 **미커밋 변경**이 있다 — 새 파일 `domain/completion_meaning.py`, `tests/test_profile_completion.py`, `plans/P4-PLAN-03.md`, `p4/evidence/P4-03-*`, `p4/live/profile_intents.py` 와 수정 파일 `controller/{api,db,repository,schema.sql}`, `domain/{intent_doc,models,profiles,progression}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_completion,test_data_boundary,test_migration,test_progression,test_restart_recovery,test_results}.py`, `web/src/{api.ts,ResultPanel.tsx}`, `DEVELOPMENT.md`. 실제 목록은 `git status --short` 로 재확인한다.
+- **사용자 지시로 한 일:** 작업을 마친 뒤 사용자 지시로 P4-03 변경을 **`bf86590` 으로 커밋해 `origin/main` 에 push** 했고, 이 인계 기록을 이어서 커밋·push 했다. 커밋 뒤 `tests/test_migration.py` 를 다시 돌려 `_v14_schema()` 가 커밋 이력에서 v14 스키마를 찾는 것을 확인했다(10건 통과, 건너뜀 없음). 허용은 이 변경에만 적용된다. PR 은 만들지 않았다.
+- **다음 행동:** **P4-04(컨텍스트·재개)** 를 새 plan 으로 시작한다. 완료된 P4-PLAN-01~03 을 다시 열지 않고, P4-05 이후로 자동 확대하지 않는다.
+- **사람에게 물어야 할 것:** 없다. P4-04 는 문서에 확정된 범위로 plan 을 쓸 수 있다. 새 제품 판단이 생길 때만 질문한다.
+- **작업공간:** 시작 `main`/`f6145f4`, clean·`origin/main` 과 같음. 이 세션이 그 위에 P4-03 커밋 `bf86590` 과 인계 기록 커밋을 올렸다 — 새 파일 `domain/completion_meaning.py`, `tests/test_profile_completion.py`, `plans/P4-PLAN-03.md`, `p4/evidence/P4-03-*`, `p4/live/profile_intents.py` 와 수정 파일 `controller/{api,db,repository,schema.sql}`, `domain/{intent_doc,models,profiles,progression}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_completion,test_data_boundary,test_migration,test_progression,test_restart_recovery,test_results}.py`, `web/src/{api.ts,ResultPanel.tsx}`, `DEVELOPMENT.md`. 실제 커밋은 `git log --oneline f6145f4..HEAD`, 원격 반영은 로컬/원격 ref 로, 작업 트리는 `git status --short` 로 재확인한다.
 - **남은 자원:** 라이브 제어부·Runner 프로세스는 종료했다(`Get-CimInstance Win32_Process` 로 uvicorn/runner.agent 가 남지 않음을 확인). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p4-03-live\130017994` 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 증거 사본은 `p4/evidence/P4-03-live*` 에 있다.
 - **다음 세션이 이어서 할 때:** `tests/test_migration.py` 의 `_v14_schema()` 는 `스키마 v15` 표식이 **없는** 가장 최근 커밋 스키마를 찾는다 — P4-03 을 커밋하기 전에도 뒤에도 `f6145f4` 의 스키마를 고른다. 실제 v14 DB 에 있는 `case.profile*` 컬럼은 `db.py` 가 붙이던 것이라 시험이 직접 더한다. 그리고 **v2 기준에 `met` 을 적는 시험은 방식을 함께 적는다** — 도우미 `met_satisfaction_for()`(conftest)가 의무별 기본값을 준다.
 
