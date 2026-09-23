@@ -1,0 +1,163 @@
+{
+  "tag": "163738630",
+  "data_root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p4-04-live\\163738630",
+  "case_id": "case-f0427a8a0bde4806",
+  "facts": {
+    "limit_c": 1029,
+    "sizes": {
+      "instruction_m3": 187,
+      "user_m1": 274,
+      "user_m2": 95,
+      "assistant_a": 1619,
+      "assistant_b": 457
+    },
+    "d_run_id": "run-p404-D1-163738630",
+    "d_raw_lines": 9,
+    "d_raw_has_usage": false,
+    "d_run": {
+      "outcome": "unknown",
+      "session_ref": "01a0cd34-164f-7ad3-aa09-242cf6977569",
+      "usage": "not_reported",
+      "context": "complete"
+    }
+  },
+  "product_checks": [
+    {
+      "check": "A_completed",
+      "ok": true,
+      "detail": "논의 응답 outcome=completed"
+    },
+    {
+      "check": "A_one_assistant_message",
+      "ok": true,
+      "detail": "이 실행의 AI 메시지 1건"
+    },
+    {
+      "check": "A_context_complete",
+      "ok": true,
+      "detail": "A 문맥 complete"
+    },
+    {
+      "check": "B_completed",
+      "ok": true,
+      "detail": "논의 응답 outcome=completed"
+    },
+    {
+      "check": "B_one_assistant_message",
+      "ok": true,
+      "detail": "이 실행의 AI 메시지 1건"
+    },
+    {
+      "check": "B_context_complete",
+      "ok": true,
+      "detail": "B 문맥 complete (한도 262144)"
+    },
+    {
+      "check": "A_is_the_larger_ai_message",
+      "ok": true,
+      "detail": "A 응답 1619B, B 응답 457B"
+    },
+    {
+      "check": "C_completed",
+      "ok": true,
+      "detail": "논의 응답 outcome=completed"
+    },
+    {
+      "check": "C_one_assistant_message",
+      "ok": true,
+      "detail": "이 실행의 AI 메시지 1건"
+    },
+    {
+      "check": "C_only_old_ai_message_omitted",
+      "ok": true,
+      "detail": "참조 [('conversation_user_message', 'inline', 'read'), ('conversation_assistant_message', 'omitted_size_limit', 'omitted'), ('conversation_user_message', 'inline', 'read'), ('conversation_assistant_message', 'inline', 'read')]"
+    },
+    {
+      "check": "C_omitted_is_A",
+      "ok": true,
+      "detail": "생략된 참조 art-2d319e1f4a77a5aa"
+    },
+    {
+      "check": "C_context_partial",
+      "ok": true,
+      "detail": "partial"
+    },
+    {
+      "check": "C_limit_recorded",
+      "ok": true,
+      "detail": "기록된 한도 1029 / 설정 1029"
+    },
+    {
+      "check": "C_reserved_is_inline_package",
+      "ok": true,
+      "detail": "예약 1013.0 = 인라인 1013 ≤ 한도 1029"
+    },
+    {
+      "check": "D_not_finished_before_restart",
+      "ok": true,
+      "detail": "강제 종료 뒤 상태 assigned"
+    },
+    {
+      "check": "D_cli_not_called_again",
+      "ok": true,
+      "detail": "이 실행의 CLI 호출 기록 0 → 1"
+    },
+    {
+      "check": "D_outcome_unknown",
+      "ok": true,
+      "detail": "unknown"
+    },
+    {
+      "check": "D_session_recovered",
+      "ok": true,
+      "detail": "session_ref 01a0cd34-164f-7ad3-aa09-242cf6977569 / 원시 출력 01a0cd34-164f-7ad3-aa09-242cf6977569"
+    },
+    {
+      "check": "D_usage_not_invented",
+      "ok": true,
+      "detail": "원시 출력에 사용량 없음 → 토큰 None outcome_unknown"
+    },
+    {
+      "check": "D_seconds_unresolved",
+      "ok": true,
+      "detail": "실행 시간 unresolved"
+    },
+    {
+      "check": "D_request_not_completed",
+      "ok": true,
+      "detail": "불명 실행의 요청 processing → 종료 기록 200 → unknown"
+    }
+  ],
+  "observations": [
+    {
+      "check": "A_repository_unchanged",
+      "ok": true,
+      "detail": "HEAD·작업 트리 같음"
+    },
+    {
+      "check": "B_repository_unchanged",
+      "ok": true,
+      "detail": "HEAD·작업 트리 같음"
+    },
+    {
+      "check": "C_repository_unchanged",
+      "ok": true,
+      "detail": "HEAD·작업 트리 같음"
+    },
+    {
+      "check": "C_says_it_cannot_see_the_first_reply",
+      "ok": true,
+      "detail": "첫 답을 볼 수 없다고 밝혔는가"
+    },
+    {
+      "check": "C_recalls_prohibition",
+      "ok": true,
+      "detail": "남아 있는 사용자 금지(코드·문서 수정 금지)를 확인했는가"
+    },
+    {
+      "check": "C_no_work_claim",
+      "ok": true,
+      "detail": "작업 주장 표현 없음"
+    }
+  ]
+}

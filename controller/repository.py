@@ -27,6 +27,7 @@ from controller.db import (
     utc_now,
 )
 from domain import completion_meaning as meaningmod
+from domain import context as ctxmod
 from domain import conversation as convmod
 from domain import ids, prep_doc, profiles, quality
 from domain import progression
@@ -57,6 +58,7 @@ from domain.budget import (
     normalize_usage,
     planned_reservation,
     reservation_contract,
+    usage_was_recovered,
 )
 from domain.models import (
     BUDGET_MEASUREMENT,
@@ -96,7 +98,9 @@ from domain.models import (
     ConformanceMethod,
     ConversationRefusal,
     ContentOrigin,
+    ContextInclusion,
     ContextRefRole,
+    ContextTier,
     ControlledCheckpoint,
     CriterionObligation,
     CriterionState,
@@ -123,6 +127,7 @@ from domain.models import (
     MessageKind,
     MessageReceipt,
     MessageRefKind,
+    NotStartedReason,
     Permission,
     PolicyRefusal,
     PolicyState,
@@ -342,8 +347,15 @@ def _row_to_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
 
 
 class Repository:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        context_inline_limit: int = ctxmod.DEFAULT_INLINE_LIMIT_BYTES,
+    ) -> None:
         self.conn = conn
+        #: P4-04. 한 실행의 지시 + 인라인 고정 참조의 한도(바이트). 제어부 설정에서 온다.
+        #: 생성 때 적용한 값이 실행에 기록된다(`run.context_inline_limit`).
+        self.context_inline_limit = int(context_inline_limit)
 
     # ------------------------------------------------------------------ owner
 
@@ -1053,6 +1065,7 @@ class Repository:
         repository_id: str | None = None,
         context_refs: list[dict[str, Any]] | None = None,
         request_id: str | None = None,
+        context_inline_limit: int | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
@@ -1084,13 +1097,20 @@ class Repository:
             )
         now = utc_now()
         refs = list(context_refs or [])
+        # **예약하는 문맥 크기는 실제로 전달하는 패키지다**(P4-04). 크기 한도로 생략한
+        # 참조는 지시문에 들어가지 않으므로 세지 않는다.
         want = planned_reservation(
             role,
             context_package_bytes(
                 self.conn,
                 instruction_artifact_id,
                 instruction_artifact_rev,
-                [(r["artifact_id"], r["revision"]) for r in refs],
+                [
+                    (r["artifact_id"], r["revision"])
+                    for r in refs
+                    if ctxmod.effective_inclusion(r.get("inclusion"))
+                    == ContextInclusion.INLINE.value
+                ],
             ),
         )
         try:
@@ -1118,8 +1138,8 @@ class Repository:
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
                     " assignment_generation, created_at, purpose, repository_id,"
-                    " is_experiment, request_id)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " is_experiment, request_id, context_inline_limit)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -1145,6 +1165,9 @@ class Repository:
                         # UI-01. 어느 사용자 요청을 처리하는 실행인가. NULL 은 요청과
                         # 무관하게 만든 실행이다(관리 화면·옛 경로).
                         request_id,
+                        # P4-04. 이 실행의 패키지를 정할 때 적용한 한도. 나중에 설정이
+                        # 바뀌어도 "그때 무엇이 왜 생략됐는가"를 답할 수 있어야 한다.
+                        context_inline_limit,
                     ),
                 )
                 self._insert_context_refs(run_id, refs)
@@ -1167,6 +1190,8 @@ class Repository:
         run["usage"] = json.loads(run.pop("usage_json"))
         effect = run.pop("workspace_effect_json")
         run["workspace_effect"] = json.loads(effect) if effect else None
+        freshness = run.pop("context_freshness_json", None)
+        run["context_freshness"] = json.loads(freshness) if freshness else None
         return run
 
     def list_runs(self, case_id: str) -> list[dict[str, Any]]:
@@ -1179,6 +1204,8 @@ class Repository:
             # 무엇을 실제로 실행했는가(P3-03). 화면이 실행 목록에서 바로 보려면
             # 여기 있어야 한다 — 실행마다 따로 조회하게 하지 않는다(FR-14).
             run["commands"] = self.list_run_commands(row["run_id"])
+            # 무엇을 **실제로 읽고** 했는가(P4-04). 같은 이유로 목록에 싣는다.
+            run["context"] = self.run_context_view(row["run_id"])
             runs.append(run)
         return runs
 
@@ -1276,7 +1303,14 @@ class Repository:
         run["target_intent_version_id"] = target["id"] if target else None
         # 고정 컨텍스트 참조. **본문은 없다** — Runner가 이 참조로 자기 저장소에서
         # 읽는다. 읽지 못한 참조는 지시문에 "읽지 못함"으로 적힌다(P3-01).
+        #
+        # P4-04. 참조마다 등급·인라인 여부·해시가 함께 간다. Runner 는 해시를 대조해
+        # 영수증을 보고하고, 핵심을 못 읽으면 CLI 를 부르지 않는다. 지시 원문의 해시도
+        # 같은 이유로 준다.
         run["context_refs"] = self.list_context_refs(run_id)
+        run["instruction_content_hash"] = self.get_artifact_ref(
+            run["instruction_artifact_id"], run["instruction_artifact_rev"]
+        )["content_hash"]
         # 준비 산출물을 만드는 실행은 어느 수준으로 쓸지 알아야 한다. 수준이 없으면
         # `None` 이고 그 경우 진입 검사가 이미 막았다 — 여기서 기본값을 지어내지 않는다.
         level = self.current_level(run["case_id"])
@@ -1350,8 +1384,11 @@ class Repository:
         # (autonomy-budget-policy 7절 "재시작된 실제 AI 호출은 새 소비"). 같은
         # `run_id` 라는 이유로 두 번째 호출을 공짜로 두면 한도가 재배정 횟수만큼
         # 늘어난다. 예산이 없으면 재배정하지 않는다.
+        # 예약은 **처음 만들 때와 같은 패키지**다 — 인라인 참조만 센다(P4-04).
         refs = [
-            (r["artifact_id"], r["revision"]) for r in self.list_context_refs(run_id)
+            (r["artifact_id"], r["revision"])
+            for r in self.list_context_refs(run_id)
+            if r["inclusion"] == ContextInclusion.INLINE.value
         ]
         want = planned_reservation(
             RunRole(run["role"]),
@@ -1444,12 +1481,24 @@ class Repository:
         workspace_effect: dict[str, Any] | None = None,
         residual_activity: str = "unknown",
         observed_tool_version: str | None = None,
+        not_started_reason: NotStartedReason | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
         같은 세대의 같은 결과를 다시 받아도 상태를 바꾸지 않는다(멱등).
         오래된 세대의 보고는 거부한다.
+
+        **P4-04: 시작하지 않은 실행.** `not_started_reason` 은 Runner 가 CLI 를 부르기
+        **전에** 멈췄다는 보고다. 그 실행은 호출이 없었으므로 소비가 0 으로 확정된다.
+        실패 + 잔류 없음일 때만 받는다 — 결과를 모르거나 무언가 남아 있는 실행을
+        "시작하지 않았다"로 적으면 실제 소비가 사라진다.
         """
+        if not_started_reason is not None:
+            not_started_reason = NotStartedReason(not_started_reason)
+            if outcome is not RunOutcome.FAILED or residual_activity != "none":
+                raise ConflictError(
+                    "a run reported as not started must be failed with no residual activity"
+                )
         run = self._check_generation(run_id, generation)
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
@@ -1463,12 +1512,19 @@ class Repository:
                 f"run already finished with outcome {run['outcome']}; refusing to overwrite"
             )
         finished_at = utc_now()
+        # **결과 시점의 최신성**(P4-04). 이 실행이 입력을 고정한 뒤 새로 생긴 입력을
+        # 남긴다. 자기 산출물(이 실행이 쓴 의도·준비·출력)은 이미 등록돼 있으므로 뺀다.
+        # 트랜잭션 밖에서 계산하는 것은 읽기뿐이기 때문이고, 쓰기는 결과와 한 번에 한다.
+        freshness = self._context_freshness(
+            run, "at_result", finished_at, extra_own=[(output_artifact_id, output_artifact_rev)]
+        )
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE run SET status = ?, outcome = ?, exit_code = ?, output_artifact_id = ?,"
                 " output_artifact_rev = ?, session_ref = ?, usage_json = ?,"
                 " workspace_effect_json = ?, residual_activity = ?, observed_tool_version = ?,"
-                " finished_at = ? WHERE run_id = ?",
+                " finished_at = ?, not_started_reason = ?, context_freshness_json = ?"
+                " WHERE run_id = ?",
                 (
                     RunStatus.FINISHED.value,
                     outcome.value,
@@ -1481,6 +1537,8 @@ class Repository:
                     residual_activity,
                     observed_tool_version,
                     finished_at,
+                    not_started_reason.value if not_started_reason else None,
+                    json.dumps(freshness, ensure_ascii=False) if freshness else None,
                     run_id,
                 ),
             )
@@ -1492,6 +1550,9 @@ class Repository:
                     "outcome": outcome.value,
                     "residual_activity": residual_activity,
                     "finished_at": finished_at,
+                    "not_started_reason": (
+                        not_started_reason.value if not_started_reason else None
+                    ),
                 },
                 usage,
                 finished_at,
@@ -4031,12 +4092,22 @@ class Repository:
         instruction_artifact_id: str,
         instruction_artifact_rev: int,
         request_id: str | None = None,
+        plan: ctxmod.ContextPlan | None = None,
     ) -> dict[BudgetMetric, float | None]:
         """이 요청이 잡게 될 예산(P3-R3).
 
         **진입 검사와 생성이 같은 값을 봐야 한다.** 두 곳에서 따로 계산하면 한쪽만
         고쳐졌을 때 "검사는 통과했는데 생성이 막히는" 상태가 조용히 생긴다.
+
+        P4-04. 문맥 크기는 **인라인 패키지**다 — 생성이 쓰는 같은 계획에서 온다.
         """
+        if plan is None:
+            plan = self.plan_context_package(
+                case_id,
+                purpose,
+                request_id,
+                (instruction_artifact_id, instruction_artifact_rev),
+            )
         return planned_reservation(
             role,
             context_package_bytes(
@@ -4045,12 +4116,8 @@ class Repository:
                 instruction_artifact_rev,
                 [
                     (r["artifact_id"], r["revision"])
-                    for r in self.compose_context_refs(
-                        case_id,
-                        purpose,
-                        request_id=request_id,
-                        instruction=(instruction_artifact_id, instruction_artifact_rev),
-                    )
+                    for r in plan.refs
+                    if r["inclusion"] == ContextInclusion.INLINE.value
                 ],
             ),
         )
@@ -4071,13 +4138,23 @@ class Repository:
         repository_id: str | None = None,
         expected_gate_policy: dict[str, Any] | None = None,
         request_id: str | None = None,
+        context_plan: ctxmod.ContextPlan | None = None,
     ) -> AdmissionResult:
         """진입 조건을 검사한다. **판단 근거를 전부 DB에서 다시 읽는다.**
 
         메모리에 "이 Case는 통과했다"를 두지 않는 이유는 재시작으로 우회하지
         못하게 하기 위해서다(FR-29 수용 기준).
+
+        `context_plan` 은 생성이 쓸 **같은 계획**이다(P4-04). 주지 않으면 여기서 세운다.
         """
         case = self.get_case(case_id)
+        if context_plan is None:
+            context_plan = self.plan_context_package(
+                case_id,
+                purpose,
+                request_id,
+                (instruction_artifact_id, instruction_artifact_rev),
+            )
         try:
             ref = self.get_artifact_ref(instruction_artifact_id, instruction_artifact_rev)
             availability = ref["availability"]
@@ -4136,7 +4213,8 @@ class Repository:
                 case_id, self._planned_reservation_for(case_id, purpose, role,
                                                        instruction_artifact_id,
                                                        instruction_artifact_rev,
-                                                       request_id)
+                                                       request_id,
+                                                       plan=context_plan)
             ),
             # **Autonomy·목적·누적 변경도 지금 DB 에서 다시 읽는다**(P3-R4). 같은
             # 규칙이다 — 메모리에 "이 Case 는 시작 확인을 받았다"를 두면 재시작으로
@@ -4166,6 +4244,10 @@ class Repository:
                 self.request_admission_state(case_id, request_id) if request_id else {}
             ),
             instruction_artifact=(instruction_artifact_id, instruction_artifact_rev),
+            # **핵심 입력을 갖추고 한 실행에 담을 수 있는가**(P4-04). 계획도 지금 DB 에서
+            # 세운다 — 같은 규칙이다.
+            context_plan=context_plan.summary(),
+            context_unavailable=self._unavailable_core(context_plan),
         )
         return evaluate_admission(request)
 
@@ -4264,6 +4346,12 @@ class Repository:
         if existing is not None:
             return self.get_run(run_id), False, None, None
 
+        # **입력 패키지 계획을 한 번 세워 검사와 생성이 함께 쓴다**(P4-04). 두 번 세우면
+        # 그 사이 들어온 입력 때문에 "검사한 패키지"와 "만든 패키지"가 달라질 수 있다.
+        plan = self.plan_context_package(
+            case_id, purpose, request_id, (instruction_artifact_id, instruction_artifact_rev)
+        )
+
         # 종료된 Case 도 **진입 검사를 거쳐** 거부된다(`case_already_closed`).
         # 앞단에서 예외로 던지면 "왜 실행이 열리지 않았는가"가 진입 검사 기록에
         # 남지 않는다. 허용도 거부도 같은 표에 남기는 것이 FR-29의 요구다.
@@ -4281,6 +4369,7 @@ class Repository:
             repository_id=repository_id,
             expected_gate_policy=expected_gate_policy,
             request_id=request_id,
+            context_plan=plan,
         )
         if not result.admitted:
             check = self.record_admission(
@@ -4305,14 +4394,11 @@ class Repository:
                 # 고정하는 이유는 "실행이 무엇을 보고 썼는가"가 재배정으로 달라지면
                 # 안 되기 때문이다(review-context-contract 2절). P3-R3 부터는 Run
                 # 행·예약과 **같은 트랜잭션**에 들어간다 — 예약한 `context_bytes` 가
-                # 실제 참조와 어긋나지 않게 하기 위해서다.
-                context_refs=self.compose_context_refs(
-                    case_id,
-                    purpose,
-                    request_id=request_id,
-                    instruction=(instruction_artifact_id, instruction_artifact_rev),
-                ),
+                # 실제 참조와 어긋나지 않게 하기 위해서다. P4-04 부터는 등급·인라인
+                # 여부·크기가 함께 간다 — 검사한 바로 그 계획이다.
+                context_refs=plan.refs,
                 request_id=request_id,
+                context_inline_limit=plan.limit,
             )
         except RequestNotProcessing as lost_race:
             # UI-01. 진입 검사는 통과했는데 트랜잭션 안에서 요청이 이미 끝나 있었다 =
@@ -6621,25 +6707,46 @@ class Repository:
         `ContextRefRole(...)` 로 이름을 검증한다. **모르는 역할 이름을 그대로 넣지
         않는다** — 넣으면 조회가 해석할 수 없는 참조가 생기고, 그 참조가 가리키는
         원문을 실행이 읽어야 하는지 아무도 답할 수 없다.
+
+        P4-04. 등급·인라인 여부·크기를 **계획한 그대로** 넣는다. 계획 없이 들어온
+        참조(`tier` 없음)는 역할에서 등급을 정하고 인라인이다 — 한도 판단을 거치지 않은
+        참조를 생략으로 적지 않는다.
         """
         for seq, ref in enumerate(refs, start=1):
+            role = ContextRefRole(ref["role"]).value
+            byte_size = ref.get("byte_size")
+            if byte_size is None:
+                byte_size = self.get_artifact_ref(ref["artifact_id"], int(ref["revision"]))[
+                    "byte_size"
+                ]
             self.conn.execute(
-                "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
-                " VALUES (?, ?, ?, ?, ?)"
+                "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision,"
+                " tier, inclusion, byte_size)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
                 " ON CONFLICT(run_id, seq) DO NOTHING",
                 (
                     run_id,
                     seq,
-                    ContextRefRole(ref["role"]).value,
+                    role,
                     ref["artifact_id"],
                     int(ref["revision"]),
+                    ContextTier(ref.get("tier") or ctxmod.tier_for(role).value).value,
+                    ContextInclusion(ref.get("inclusion") or ContextInclusion.INLINE.value).value,
+                    int(byte_size),
                 ),
             )
 
     def list_context_refs(self, run_id: str) -> list[dict[str, Any]]:
+        """이 실행에 고정한 참조. **계획**과 가장 최근 세대의 **영수증**을 함께 보인다.
+
+        `tier`·`inclusion` 은 **적용되는** 값이다. P4-04 이전 행은 저장값이 NULL 이며
+        그때는 생략 경로가 없었으므로 인라인이고, 등급은 역할에서 도출한다 —
+        `tier_recorded = False` 가 그 사실을 드러낸다.
+        """
         rows = self.conn.execute(
             "SELECT * FROM run_context_ref WHERE run_id = ? ORDER BY seq", (run_id,)
         ).fetchall()
+        receipt = {r["seq"]: r["status"] for r in self.context_receipt(run_id)}
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -6648,8 +6755,224 @@ class Repository:
             # 지시문에 "읽지 못함"으로 적히고 산출물이 그 사실을 갖는다.
             item["availability"] = ref["availability"]
             item["content_hash"] = ref["content_hash"]
+            item["tier_recorded"] = item["tier"] is not None
+            item["tier"] = ctxmod.effective_tier(item["tier"], item["role"])
+            item["inclusion_recorded"] = item["inclusion"] is not None
+            item["inclusion"] = ctxmod.effective_inclusion(item["inclusion"])
+            if item["byte_size"] is None:
+                item["byte_size"] = ref["byte_size"]
+            # Runner 가 **실제로** 읽었는가. 영수증이 없으면 `None` 이며 읽음이 아니다.
+            item["receipt_status"] = receipt.get(item["seq"])
             out.append(item)
         return out
+
+    # ---------------------------------------------------------- P4-04 문맥 계획
+
+    def plan_context_package(
+        self,
+        case_id: str,
+        purpose: RunPurpose,
+        request_id: str | None,
+        instruction: tuple[str, int],
+    ) -> ctxmod.ContextPlan:
+        """이 실행의 입력 패키지 — 무엇을 넣고 무엇을 드러내어 생략하는가(P4-04).
+
+        **진입 검사·생성·예약이 이 한 계획을 쓴다.** 따로 계산하면 "검사는 통과했는데
+        다른 패키지가 만들어지는" 상태가 조용히 생긴다(P3-R3 의 예약과 같은 이유).
+        크기는 제어부가 아는 `artifact_ref.byte_size` 다 — 본문을 읽지 않는다.
+        """
+        refs = self.compose_context_refs(
+            case_id, purpose, request_id=request_id, instruction=instruction
+        )
+        sized: list[dict[str, Any]] = []
+        for ref in refs:
+            row = self.get_artifact_ref(ref["artifact_id"], ref["revision"])
+            sized.append(
+                {**ref, "byte_size": int(row["byte_size"]), "availability": row["availability"]}
+            )
+        try:
+            instruction_bytes = int(self.get_artifact_ref(*instruction)["byte_size"])
+        except NotFoundError:
+            instruction_bytes = 0
+        return ctxmod.plan_inline(instruction_bytes, sized, self.context_inline_limit)
+
+    @staticmethod
+    def _unavailable_core(plan: ctxmod.ContextPlan) -> list[dict[str, Any]]:
+        """인라인으로 넣을 **핵심** 참조 중 지금 `available` 이 아닌 것."""
+        return [
+            {
+                "role": r["role"],
+                "artifact_id": r["artifact_id"],
+                "revision": r["revision"],
+                "availability": r["availability"],
+            }
+            for r in plan.refs
+            if r["tier"] == ContextTier.CORE.value
+            and r["inclusion"] == ContextInclusion.INLINE.value
+            and r.get("availability") != Availability.AVAILABLE.value
+        ]
+
+    # ---------------------------------------------------------- P4-04 영수증
+
+    def context_receipt(self, run_id: str) -> list[dict[str, Any]]:
+        """가장 최근 세대의 영수증. 없으면 빈 목록이다 — 읽음이 아니다."""
+        row = self.conn.execute(
+            "SELECT MAX(generation) AS g FROM run_context_receipt WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None or row["g"] is None:
+            return []
+        rows = self.conn.execute(
+            "SELECT * FROM run_context_receipt WHERE run_id = ? AND generation = ?"
+            " ORDER BY seq",
+            (run_id, row["g"]),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_context_receipt(
+        self,
+        run_id: str,
+        runner_id: str,
+        generation: int,
+        items: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Runner 가 **실제로 읽은 것**을 기록한다(P4-04).
+
+        계획(`run_context_ref`)과 맞아야 받는다 — 순번을 빠짐없이 한 번씩, 인라인으로
+        정한 참조를 생략으로 주장하지 않는다. 같은 세대의 같은 영수증 재전송은 아무 것도
+        바꾸지 않고, 다른 내용은 거부한다. **본문도 경로도 받지 않는다.**
+        """
+        run = self._check_generation(run_id, generation)
+        if run.get("assigned_runner_id") and run["assigned_runner_id"] != runner_id:
+            raise ConflictError("this run is assigned to another runner")
+        refs = self.list_context_refs(run_id)
+        problems = ctxmod.check_receipt(refs, items)
+        if problems:
+            raise ConflictError("context receipt does not match the plan: " + "; ".join(problems))
+        roles = {r["seq"]: r["role"] for r in refs}
+        wanted = {
+            int(i["seq"]): (roles.get(int(i["seq"]), ctxmod.INSTRUCTION_ROLE), i["status"])
+            for i in items
+        }
+        existing = self.conn.execute(
+            "SELECT seq, role, status FROM run_context_receipt WHERE run_id = ? AND generation = ?",
+            (run_id, generation),
+        ).fetchall()
+        if existing:
+            have = {r["seq"]: (r["role"], r["status"]) for r in existing}
+            if have != wanted:
+                raise ConflictError("a different context receipt was already recorded")
+            return self.run_context_view(run_id)
+        if run["status"] == RunStatus.FINISHED.value:
+            raise ConflictError("run already finished; a receipt comes before execution")
+        now = utc_now()
+        with transaction(self.conn):
+            for seq, (role, status) in sorted(wanted.items()):
+                self.conn.execute(
+                    "INSERT INTO run_context_receipt"
+                    " (run_id, generation, seq, role, status, runner_id, reported_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (run_id, generation, seq, role, status, runner_id, now),
+                )
+        return self.run_context_view(run_id)
+
+    # ---------------------------------------------------------- P4-04 최신성
+
+    def _own_outputs(self, run_id: str) -> set[tuple[str, int]]:
+        """그 실행이 **만든** 원문. 최신성에서 새 입력으로 세지 않는다."""
+        own: set[tuple[str, int]] = set()
+        run = self.conn.execute(
+            "SELECT output_artifact_id, output_artifact_rev FROM run WHERE run_id = ?",
+            (run_id,),
+        ).fetchone()
+        if run is not None and run["output_artifact_id"]:
+            own.add((run["output_artifact_id"], int(run["output_artifact_rev"] or 1)))
+        for table in ("intent_version", "preparation_artifact"):
+            for row in self.conn.execute(
+                f"SELECT artifact_id, artifact_rev FROM {table} WHERE author_run_id = ?",
+                (run_id,),
+            ):
+                own.add((row["artifact_id"], int(row["artifact_rev"])))
+        return own
+
+    def _context_freshness(
+        self,
+        run: dict[str, Any],
+        basis: str,
+        measured_at: str,
+        extra_own: Iterable[tuple[str | None, int | None]] = (),
+    ) -> dict[str, Any] | None:
+        """고정한 뒤 새로 생긴 입력. 계산할 수 없으면 `None` 이다 — "새 입력 없음"이 아니다.
+
+        목적이 없던 옛 실행은 무엇을 구성했어야 했는지 모르므로 계산하지 않는다.
+        """
+        purpose = run.get("purpose")
+        if not purpose:
+            return None
+        try:
+            current = self.compose_context_refs(
+                run["case_id"],
+                RunPurpose(purpose),
+                request_id=run.get("request_id"),
+                instruction=(run["instruction_artifact_id"], run["instruction_artifact_rev"]),
+            )
+        except (NotFoundError, ValueError):
+            return None
+        own = self._own_outputs(run["run_id"])
+        own.update((a, int(r or 1)) for a, r in extra_own if a)
+        pinned = self.conn.execute(
+            "SELECT artifact_id, revision FROM run_context_ref WHERE run_id = ?",
+            (run["run_id"],),
+        ).fetchall()
+        added = ctxmod.drift([dict(p) for p in pinned], current, own)
+        return ctxmod.freshness(added, measured_at, basis)
+
+    def run_context_view(self, run_id: str) -> dict[str, Any]:
+        """한 실행의 문맥: 계획·영수증·상태·최신성(P4-04).
+
+        **상태는 도출한다.** 영수증이 없으면 `not_reported` 다 — 계획을 읽음으로 적지
+        않는다. 최신성은 끝난 실행이면 결과 시점의 기록을, 진행 중이면 지금 계산한 것을
+        보인다. 끝난 지 오래된 실행을 "지금과 다르다"로 표시하지 않는다.
+        """
+        run = self.get_run(run_id)
+        refs = self.list_context_refs(run_id)
+        receipt = self.context_receipt(run_id)
+        state = ctxmod.context_state(refs, receipt)
+        inline = [r for r in refs if r["inclusion"] == ContextInclusion.INLINE.value]
+        omitted = [r for r in refs if r["inclusion"] != ContextInclusion.INLINE.value]
+        try:
+            instruction_bytes = int(
+                self.get_artifact_ref(
+                    run["instruction_artifact_id"], run["instruction_artifact_rev"]
+                )["byte_size"]
+            )
+        except NotFoundError:
+            instruction_bytes = 0
+        if run["status"] == RunStatus.FINISHED.value:
+            freshness = run.get("context_freshness")
+        else:
+            freshness = self._context_freshness(run, "live", utc_now())
+        unread = [
+            {"seq": r["seq"], "role": r["role"], "status": r["status"]}
+            for r in receipt
+            if r["status"] in ctxmod.UNREAD_STATUSES
+        ]
+        return {
+            "state": state.value,
+            "limit": run.get("context_inline_limit"),
+            "instruction_bytes": instruction_bytes,
+            "inline_bytes": instruction_bytes + sum(int(r["byte_size"] or 0) for r in inline),
+            "ref_count": len(refs),
+            "omitted_count": len(omitted),
+            "omitted": [
+                {"seq": r["seq"], "role": r["role"], "artifact_id": r["artifact_id"],
+                 "revision": r["revision"]}
+                for r in omitted
+            ],
+            "receipt_generation": receipt[0]["generation"] if receipt else None,
+            "unread": unread,
+            "not_started_reason": run.get("not_started_reason"),
+            "freshness": freshness,
+        }
 
     def result_view(self, case_id: str) -> dict[str, Any]:
         """FR-17이 요구하는 "기준별 증거·미충족·미검증"의 한 묶음.
@@ -9617,6 +9940,10 @@ class Repository:
         )
         seconds = elapsed_seconds(run.get("assigned_at"), run.get("finished_at"))
         reported = normalize_usage(usage)
+        # P4-04. **시작하지 않은 실행은 호출이 없었다.** 예약한 실행 수·문맥 크기·시간을
+        # 그대로 확정하면 없던 호출이 소비로 남는다. 0 을 확정하고, 사후 보고 지표의
+        # 행은 만들지 않는다 — 보고될 소비가 애초에 없다.
+        not_started = bool(run.get("not_started_reason"))
 
         held = self.conn.execute(
             "SELECT * FROM budget_reservation WHERE run_id = ? AND generation = ?"
@@ -9626,6 +9953,19 @@ class Repository:
         for row in held:
             metric = BudgetMetric(row["metric"])
             kind = ReservationKind(row["reservation_kind"])
+            if not_started:
+                self.conn.execute(
+                    "UPDATE budget_reservation SET actual_value = 0, measurement = ?,"
+                    " state = ?, settle_source = ?, settled_at = ? WHERE id = ?",
+                    (
+                        measurement_for_settlement(metric, 0.0).value,
+                        ReservationState.SETTLED.value,
+                        SettleSource.NOT_STARTED.value,
+                        now,
+                        row["id"],
+                    ),
+                )
+                continue
             if kind is ReservationKind.EXACT_PER_RUN:
                 # **잔류 활동이 이 값을 더 키우지 않는다.** 호출은 이미 있었고
                 # 전달한 패키지의 크기도 정해졌다. 여기서 `unresolved` 로 두면
@@ -9668,6 +10008,15 @@ class Repository:
                 ),
             )
 
+        if not_started:
+            return
+        # P4-04. Runner 가 재시작 뒤 원시 출력에서 되찾은 값인가. 값은 같은 CLI 출력이라
+        # 그대로 확정하되 **어디서 왔는지**를 따로 남긴다.
+        reported_source = (
+            SettleSource.RECOVERED_FROM_RUNNER_LOG.value
+            if usage_was_recovered(usage)
+            else SettleSource.ADAPTER_REPORTED.value
+        )
         # 사후 보고 지표는 **정산 시점에 행이 생긴다.** 실행 전에는 잡을 근거가 전혀
         # 없고, 그렇다고 보고된 소비를 버리면 경고선이 아무 것도 보지 못한다.
         for metric in (
@@ -9681,7 +10030,7 @@ class Repository:
                 # 추측이고, 이 값은 관측이다. 추정값이라는 사실은 `measurement` 가
                 # 따로 말한다.
                 state = ReservationState.SETTLED.value
-                source = SettleSource.ADAPTER_REPORTED.value
+                source = reported_source
             elif outcome == RunOutcome.UNKNOWN.value:
                 state = ReservationState.UNRESOLVED.value
                 source = SettleSource.OUTCOME_UNKNOWN.value

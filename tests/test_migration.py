@@ -1404,11 +1404,14 @@ def test_a_v15_database_gets_no_conversation_it_never_had(tmp_path):
         assert view["messages"] == [] and view["requests"] == []
         assert view["send"]["general"]["allowed"] is True
         assert view["visibility"]["archived"] is False
+    # **현재 판까지 이행됐는가**를 본다. v16 을 고정하던 것을 P4-04 에서 `>= 16` 으로
+    # 바꿨다 — 이 시험의 뜻은 "v15 DB 가 지금 판으로 열린다"이고, v17 고정은 아래
+    # v16→v17 시험이 맡는다(UI-01 이 v14 시험에 한 것과 같은 판단이다).
     assert (
         conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
         == db.SCHEMA_VERSION
-        == 16
     )
+    assert db.SCHEMA_VERSION >= 16
 
     # 새 값의 제약. 모르는 단계·상태를 넣을 수 없다.
     with pytest.raises(sqlite3.IntegrityError):
@@ -1419,4 +1422,123 @@ def test_a_v15_database_gets_no_conversation_it_never_had(tmp_path):
     again = conn.execute('SELECT stage FROM "case" WHERE id = ?', ("case-v2",)).fetchone()
     assert again["stage"] is None
     assert conn.execute("SELECT COUNT(*) FROM conversation_request").fetchone()[0] == 0
+    conn.close()
+
+
+def _v16_schema() -> str:
+    """P4-04 표식이 없고 v16 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v16" in schema and "스키마 v17" not in schema:
+            return schema
+    pytest.skip("v16 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v16_database_gets_no_receipt_or_freshness_it_never_had(tmp_path):
+    """v16 → v17 (P4-04 AC-17).
+
+    **이 시험이 P4-04 의 소급 위험을 지킨다.** 옛 실행에 영수증을 채우면 "그 실행은 요청
+    원문을 읽었다"가 근거 없이 생기고, 등급·인라인을 채우면 그때 없던 한도 판단이 있었던
+    것처럼 보인다. 이행은 컬럼과 표만 더하고 값은 NULL 로 둬야 하며, 옛 실행은
+    `not_reported`·"기록 전"으로 **도출**된다.
+    """
+    path = tmp_path / "controller.sqlite3"
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v16_schema())
+    # 실제 v16 DB 에는 db.py 이행이 붙인 컬럼이 있다(커밋된 `schema.sql` 에는 없다).
+    for column in ("profile", "profile_version", "profile_source", "stage"):
+        old.execute(f'ALTER TABLE "case" ADD COLUMN {column} TEXT')
+    old.execute("ALTER TABLE run ADD COLUMN request_id TEXT")
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (16, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    old.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at,'
+        " profile, profile_version, profile_source)"
+        " VALUES ('case-1', 'prj-1', 'old', 'feature', 'received', ?, ?, 'feature', '2',"
+        " 'explicit')",
+        (now, now),
+    )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','old','old-host','registered',?)", (now,)
+    )
+    for artifact_id, kind in (("art-inst", "instruction"), ("art-msg", "run_output")):
+        old.execute(
+            "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
+            " content_hash, byte_size, summary, availability, created_at)"
+            " VALUES (?,1,'case-1',?,'runner-1','h',10,'s','available',?)",
+            (artifact_id, kind, now),
+        )
+    old.execute(
+        "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+        " instruction_artifact_id, instruction_artifact_rev, status, assignment_generation,"
+        " created_at, outcome) VALUES ('run-1','case-1','task-1','author','codex',"
+        " 'exec','read_only','art-inst',1,'finished',1,?,'completed')",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run_context_ref (run_id, seq, role, artifact_id, revision)"
+        " VALUES ('run-1', 1, 'conversation_assistant_message', 'art-msg', 1)"
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    ref = conn.execute("SELECT * FROM run_context_ref WHERE run_id = 'run-1'").fetchone()
+    # **채워 넣지 않는다.** NULL 이 "P4-04 이전 참조" 다.
+    assert (ref["tier"], ref["inclusion"], ref["byte_size"]) == (None, None, None)
+    run = conn.execute("SELECT * FROM run WHERE run_id = 'run-1'").fetchone()
+    assert run["context_inline_limit"] is None
+    assert run["not_started_reason"] is None
+    assert run["context_freshness_json"] is None
+    assert run["outcome"] == "completed"
+    assert conn.execute("SELECT COUNT(*) FROM run_context_receipt").fetchone()[0] == 0
+
+    repo = Repository(conn)
+    view = repo.run_context_view("run-1")
+    assert view["state"] == "not_reported"
+    assert view["freshness"] is None and view["limit"] is None
+    listed = repo.list_context_refs("run-1")
+    # 등급은 역할에서 **도출**해 보이되 기록되지 않았다고 적는다. 그때는 전부 인라인이었다.
+    assert [(r["tier"], r["tier_recorded"], r["inclusion"], r["inclusion_recorded"],
+             r["receipt_status"]) for r in listed] == [
+        ("supporting", False, "inline", False, None)
+    ]
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+        == 17
+    )
+
+    # 새 값의 제약. 모르는 등급·상태·사유를 넣을 수 없다.
+    for statement in (
+        "UPDATE run_context_ref SET tier = 'vital' WHERE run_id = 'run-1'",
+        "UPDATE run_context_ref SET inclusion = 'trimmed' WHERE run_id = 'run-1'",
+        "UPDATE run SET not_started_reason = 'felt_like_it' WHERE run_id = 'run-1'",
+        "INSERT INTO run_context_receipt (run_id, generation, seq, role, status, runner_id,"
+        " reported_at) VALUES ('run-1', 1, 0, 'instruction', 'probably', 'runner-1', 't')",
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(statement)
+
+    # 반복 이행이 멱등이다.
+    db.migrate(conn)
+    again = conn.execute("SELECT tier FROM run_context_ref WHERE run_id = 'run-1'").fetchone()
+    assert again["tier"] is None
+    assert conn.execute("SELECT COUNT(*) FROM run_context_receipt").fetchone()[0] == 0
     conn.close()

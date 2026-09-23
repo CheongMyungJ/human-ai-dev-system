@@ -10,12 +10,16 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from domain.context import DEFAULT_INLINE_LIMIT_BYTES
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 ENV_DATA_ROOT = "HADS_CONTROLLER_DATA"
 ENV_HOST = "HADS_CONTROLLER_HOST"
 ENV_PORT = "HADS_CONTROLLER_PORT"
 ENV_WEB_DIST = "HADS_WEB_DIST"
+#: P4-04. 한 실행의 지시 + 인라인 고정 참조의 한도(바이트). 상세 설계 제안값이다.
+ENV_CONTEXT_INLINE_LIMIT = "HADS_CONTEXT_INLINE_LIMIT_BYTES"
 
 DEFAULT_HOST = "127.0.0.1"  # 로컬 기본 접점은 루프백이다(implementation-baseline 2절)
 DEFAULT_PORT = 8765
@@ -27,6 +31,8 @@ class ControllerConfig:
     host: str = DEFAULT_HOST
     port: int = DEFAULT_PORT
     web_dist: Path | None = None
+    #: P4-04. 이 값을 넘으면 보조 입력만 드러내어 생략하고, 핵심만으로 넘으면 보류한다.
+    context_inline_limit_bytes: int = DEFAULT_INLINE_LIMIT_BYTES
 
     @property
     def db_path(self) -> Path:
@@ -48,9 +54,15 @@ def load_config() -> ControllerConfig:
     else:
         candidate = REPO_ROOT / "web" / "dist"
         web_dist = candidate if candidate.is_dir() else None
+    inline_limit = int(os.environ.get(ENV_CONTEXT_INLINE_LIMIT) or DEFAULT_INLINE_LIMIT_BYTES)
+    if inline_limit <= 0:
+        # 0 이하의 한도는 모든 실행을 보류시킨다. 기동 시점에 드러낸다 — 진입 검사에서
+        # 처음 알게 되면 사람은 모든 실행이 왜 막히는지 찾아다녀야 한다.
+        raise ValueError(f"{ENV_CONTEXT_INLINE_LIMIT} must be a positive number of bytes")
     return ControllerConfig(
         data_root=data_root,
         host=os.environ.get(ENV_HOST, DEFAULT_HOST),
         port=int(os.environ.get(ENV_PORT, DEFAULT_PORT)),
         web_dist=web_dist,
+        context_inline_limit_bytes=inline_limit,
     )

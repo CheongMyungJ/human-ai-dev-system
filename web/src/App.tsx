@@ -16,12 +16,14 @@ import {
   gateApi,
   GATE_VERDICT_LABEL,
   REFUSAL_LABEL,
+  RUN_CONTEXT_STATE_LABEL,
   type AdmissionCheck,
   type AdmissionView,
   type ArtifactRef,
   type CaseDetail,
   type GateResult,
   type Project,
+  type Run,
   type RunnerInfo,
   type RunPurpose,
 } from './api'
@@ -605,6 +607,7 @@ function CaseDetailPanel(props: {
             <th>세션</th>
             <th>사용량</th>
             <th>잔여 활동</th>
+            <th>문맥</th>
           </tr>
         </thead>
         <tbody>
@@ -624,11 +627,14 @@ function CaseDetailPanel(props: {
                 {typeof run.usage === 'string' ? run.usage : JSON.stringify(run.usage)}
               </td>
               <td className="small">{run.residual_activity}</td>
+              <td className="small">
+                <RunContextCell run={run} />
+              </td>
             </tr>
           ))}
           {detail.runs.length === 0 && (
             <tr>
-              <td colSpan={8} className="muted">
+              <td colSpan={9} className="muted">
                 아직 없음
               </td>
             </tr>
@@ -850,6 +856,29 @@ function GatePanel(props: { detail: CaseDetail; onChanged: () => void }) {
       )}
     </section>
   )
+}
+
+/**
+ * P4-04. 그 실행이 **실제로 읽은 것**. 서버가 도출한 상태를 그대로 보인다 — 화면이 계산하지
+ * 않는다. 영수증이 없으면 "미보고"이며 읽음으로 보이지 않는다. 입력을 고정한 뒤 새 입력이
+ * 생겼으면(최신성) 함께 적는다. 결과·판정을 바꾸는 표시가 아니다.
+ */
+function RunContextCell(props: { run: Run }) {
+  const context = props.run.context
+  if (!context) return <span className="muted">—</span>
+  const parts: string[] = [RUN_CONTEXT_STATE_LABEL[context.state] ?? context.state]
+  if (context.omitted_count > 0) parts.push(`크기 한도로 생략 ${context.omitted_count}`)
+  if (context.unread.length > 0) {
+    parts.push(`못 읽음 ${context.unread.map((u) => `${u.role}(${u.status})`).join(', ')}`)
+  }
+  if (props.run.not_started_reason) parts.push('시작하지 않음 · 소비 0')
+  const fresh = context.freshness
+  if (fresh && fresh.state === 'drifted') {
+    parts.push(
+      `${fresh.basis === 'live' ? '지금' : '결과 시점'} 기준 고정 뒤 새 입력 ${fresh.added_count}`,
+    )
+  }
+  return <span title={context.limit ? `한도 ${context.limit} B` : undefined}>{parts.join(' · ')}</span>
 }
 
 function AdmissionLog(props: { checks: AdmissionCheck[] }) {

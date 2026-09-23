@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 
 def utc_now() -> str:
@@ -319,6 +319,49 @@ def migrate(conn: sqlite3.Connection) -> None:
     )
     _add_column_if_missing(
         conn, "run", "request_id", "TEXT REFERENCES conversation_request(id)"
+    )
+
+    # v17: 문맥·재개(P4-04). 영수증 표는 schema.sql 이 만들고 여기서는 기존 두 표에
+    #      컬럼을 더한다.
+    #
+    #      `run_context_ref.tier`       핵심/보조. **옛 행은 NULL 이며 기록되지 않았다.**
+    #                                   조회는 역할에서 도출해 보이되 기록 전이라고 적는다.
+    #      `run_context_ref.inclusion`  지시문에 넣었는가. 옛 행은 NULL 이며 그때는 생략
+    #                                   경로가 없었으므로 **전부 인라인이었다.**
+    #      `run_context_ref.byte_size`  고정 시점의 크기. 옛 행은 NULL.
+    #      `run.context_inline_limit`   생성 때 적용한 한도. 옛 행은 NULL = 한도 없음.
+    #      `run.not_started_reason`     Runner 가 CLI 를 부르기 전에 멈춘 이유.
+    #      `run.context_freshness_json` 결과 보고 시점의 최신성(고정 뒤 새로 생긴 입력).
+    #
+    #      **데이터 이행 함수가 없다.** 옛 실행에 영수증·최신성·등급을 만들지 않는다.
+    #      없던 확인을 지어내면 "그 실행은 요청 원문을 읽었다"가 근거 없이 생긴다.
+    _add_column_if_missing(
+        conn,
+        "run_context_ref",
+        "tier",
+        "TEXT CHECK (tier IS NULL OR tier IN ('core', 'supporting'))",
+    )
+    _add_column_if_missing(
+        conn,
+        "run_context_ref",
+        "inclusion",
+        "TEXT CHECK (inclusion IS NULL OR inclusion IN ('inline', 'omitted_size_limit'))",
+    )
+    _add_column_if_missing(conn, "run_context_ref", "byte_size", "INTEGER")
+    _add_column_if_missing(conn, "run", "context_inline_limit", "INTEGER")
+    _add_column_if_missing(
+        conn,
+        "run",
+        "not_started_reason",
+        "TEXT CHECK (not_started_reason IS NULL OR not_started_reason IN"
+        " ('required_context_unavailable', 'no_execution_path', 'workspace_busy'))",
+    )
+    # 역할·참조 id·버전의 목록이다. 본문 자리가 아니다.
+    _add_column_if_missing(
+        conn,
+        "run",
+        "context_freshness_json",
+        "TEXT CHECK (context_freshness_json IS NULL OR length(context_freshness_json) <= 20000)",
     )
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()

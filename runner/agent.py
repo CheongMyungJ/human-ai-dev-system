@@ -35,22 +35,29 @@ from __future__ import annotations
 import base64
 import subprocess
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 from pathlib import Path
 
+from domain import context as ctxmod
 from domain import ids, intent_doc, prep_doc
+from domain.budget import USAGE_RECOVERED_FROM, USAGE_RECOVERED_FROM_RAW_LOG
 from domain.models import (
     ArtifactKind,
     AuthoringMode,
     CapabilityState,
+    ContextInclusion,
+    ContextReceiptStatus,
+    EventType,
+    NotStartedReason,
     Permission,
     PreparationStage,
     RunOutcome,
     RunPurpose,
     WorkLevel,
 )
-from runner import cli_adapter, prompts, workspace
+from runner import cli_adapter, cli_events, prompts, workspace
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
@@ -249,6 +256,8 @@ class RunnerAgent:
                     "outcome": RunOutcome.FAILED.value,
                     "residual_activity": "none",
                     "observed_tool_version": None,
+                    # P4-04. CLI 를 부르지 않았다 — 소비가 아니다.
+                    "not_started_reason": NotStartedReason.NO_EXECUTION_PATH.value,
                 },
             )
             return {
@@ -274,12 +283,69 @@ class RunnerAgent:
                         "outcome": RunOutcome.FAILED.value,
                         "residual_activity": "none",
                         "observed_tool_version": None,
+                        # P4-04. CLI 를 부르지 않았다 — 소비가 아니다.
+                        "not_started_reason": NotStartedReason.WORKSPACE_BUSY.value,
                     },
                 )
                 return {
                     "run_id": run_id,
                     "action": "refused_workspace_busy",
                     "holder": holder,
+                }
+
+        # **P4-04: 실행 전에 실제로 읽을 수 있는지 확인한다.** 지시와 고정 참조를 이
+        # Runner 의 저장소에서 읽고 해시를 대조해 영수증으로 보고한다. 지시 또는 핵심
+        # 참조를 읽지 못하면 CLI 를 부르지 않는다 — 요청 원문 없이 검토하거나 이전 버전
+        # 없이 다시 쓴 결과가 성공 산출물로 남지 않게 한다.
+        #
+        # **원장을 잡기 전에 한다.** 영수증 보고가 유실되면 아무 것도 잡지 않은 채
+        # 올라가므로 다음 배정에 다시 읽는다. 원장을 먼저 잡으면 CLI 를 부르지도 않은
+        # 실행이 다음 재배정에서 "착수했는데 결과가 없다"(결과 불명)로 보고된다.
+        # 이미 원장에 있는 실행(재전송)은 다시 읽지 않는다 — 그 실행은 이미 판단됐다.
+        context: list[dict[str, Any]] = []
+        instruction: bytes | None = None
+        if self.ledger.read(run_id) is None:
+            instruction, instruction_status = self._load_instruction(assignment)
+            context = self.load_context(assignment)
+            self.client.send_context_receipt(
+                run_id,
+                self.config.runner_id,
+                generation,
+                [
+                    {"seq": 0, "role": "instruction", "status": instruction_status},
+                    *(
+                        {"seq": c["seq"], "role": c["role"], "status": c["status"]}
+                        for c in context
+                        if c.get("seq") is not None
+                    ),
+                ],
+            )
+            blocking = ctxmod.core_unreadable(
+                [{"seq": 0, "status": instruction_status}]
+                + [
+                    {"seq": c["seq"], "status": c["status"], "tier": c["tier"]}
+                    for c in context
+                    if c.get("seq") is not None
+                ]
+            )
+            if blocking:
+                refusal = {
+                    "outcome": RunOutcome.FAILED.value,
+                    "residual_activity": "none",
+                    "observed_tool_version": None,
+                    "not_started_reason": NotStartedReason.REQUIRED_CONTEXT_UNAVAILABLE.value,
+                }
+                # 원장에 확정한다. 재배정이 와도 다시 판단하지 않고 같은 결과를 보낸다.
+                self.ledger.claim(run_id, generation)
+                self.ledger.finish(run_id, refusal)
+                send_payload = dict(refusal)
+                send_payload["runner_id"] = self.config.runner_id
+                send_payload["generation"] = generation
+                self.client.send_result(run_id, send_payload)
+                return {
+                    "run_id": run_id,
+                    "action": "refused_context_unavailable",
+                    "unreadable": blocking,
                 }
 
         should_execute, existing = self.ledger.claim(run_id, generation)
@@ -293,28 +359,49 @@ class RunnerAgent:
                 self.client.send_result(run_id, payload)
                 return {"run_id": run_id, "action": "replayed_stored_result"}
             # 착수는 했는데 결과가 없다. 결과를 모르는 상태이며 성공으로 바꾸지 않는다.
-            self.client.send_result(
-                run_id,
-                {
-                    "runner_id": self.config.runner_id,
-                    "generation": generation,
-                    "outcome": RunOutcome.UNKNOWN.value,
-                    "residual_activity": "unknown",
-                    "observed_tool_version": f"{TOOL_ID}/{TOOL_VERSION}",
-                },
-            )
-            return {"run_id": run_id, "action": "reported_unknown_without_reexecution"}
+            #
+            # P4-04. **CLI 가 남긴 원시 출력에서 되찾을 수 있는 것은 되찾는다** — 사용량·
+            # 세션 식별자·이벤트. 결과는 여전히 `unknown` 이다: 산출물 생성·작업공간
+            # 관측·결과 보고가 끊겼고, 원시 출력이 끝까지 쓰였는지도 모른다.
+            recovered = self._recover_from_raw_log(assignment)
+            payload: dict[str, Any] = {
+                "outcome": RunOutcome.UNKNOWN.value,
+                "residual_activity": "unknown",
+                "observed_tool_version": (
+                    f"{TOOL_ID}/{TOOL_VERSION}" if assignment["tool_id"] == TOOL_ID else None
+                ),
+                "usage": recovered["usage"],
+                "session_ref": recovered["session_ref"],
+            }
+            if recovered["events"]:
+                self.client.send_events(
+                    run_id, self.config.runner_id, generation, recovered["events"]
+                )
+            # 되찾은 결과를 원장에 확정한다. 다음 재배정에도 같은 값을 보낸다 —
+            # 그 사이 원시 출력이 지워져도 한 번 보고한 사용량이 사라지지 않는다.
+            self.ledger.finish(run_id, payload)
+            send_payload = dict(payload)
+            send_payload["runner_id"] = self.config.runner_id
+            send_payload["generation"] = generation
+            self.client.send_result(run_id, send_payload)
+            return {
+                "run_id": run_id,
+                "action": "reported_unknown_without_reexecution",
+                "recovered": recovered["summary"],
+            }
 
-        instruction = self.store.get(
-            assignment["instruction_artifact_id"], assignment["instruction_artifact_rev"]
-        )
+        # 여기까지 오면 위에서 지시를 읽고 해시를 확인했다(원장에 없던 실행만 실행한다).
+        if instruction is None:
+            raise RuntimeError(f"{run_id}: 실행하려는데 확인된 지시 원문이 없다")
 
         if assignment["tool_id"] == TOOL_ID:
             # P2-01 골격 실행기. 코딩 CLI가 아니며 목적별 산출물을 만들지 않는다.
             output = self.executor.execute(run_id, case_id, instruction)
             produced: dict[str, Any] = {"purpose": purpose, "produced": "none"}
         else:
-            output, produced = self._execute_with_cli(assignment, instruction, purpose)
+            output, produced = self._execute_with_cli(
+                assignment, instruction, purpose, context=context
+            )
 
         output_artifact_id = ids.new_artifact_id()
         stored = self.store.put(output_artifact_id, 1, output.output_body)
@@ -384,7 +471,11 @@ class RunnerAgent:
     # ------------------------------------------------------- 목적별 실행·산출물
 
     def _execute_with_cli(
-        self, assignment: dict[str, Any], instruction: bytes, purpose: str
+        self,
+        assignment: dict[str, Any],
+        instruction: bytes,
+        purpose: str,
+        context: list[dict[str, Any]] | None = None,
     ) -> tuple[Any, dict[str, Any]]:
         """실제 코딩 CLI로 실행하고 목적이 요구하는 산출물을 만든다.
 
@@ -396,7 +487,8 @@ class RunnerAgent:
         실행이 겹치지 않도록 권고 잠금을 잡는다. 그 대조가 "완료라고 보고됐는데
         아무 것도 바뀌지 않은" 실행을 걸러내는 유일한 증거다.
         """
-        context = self.load_context(assignment)
+        if context is None:
+            context = self.load_context(assignment)
         prompt = prompts.build(
             purpose,
             instruction,
@@ -466,28 +558,108 @@ class RunnerAgent:
         produced = self._produce_for_purpose(assignment, purpose, output, context)
         return output, produced
 
+    def _read_verified(
+        self, artifact_id: str, revision: int, expected_hash: str | None
+    ) -> tuple[bytes | None, str]:
+        """원문을 읽고 **해시를 대조한다**(P4-04). `(본문 또는 None, 영수증 상태)`.
+
+        해시가 다른 본문은 다른 원문이다 — 부분 복원으로 다른 버전이 그 자리에 돌아온
+        경우가 대표다. 읽은 것으로 다루지 않고 지시문에 넣지 않는다. 기대 해시를 모르면
+        (P4-04 이전 제어부) 대조하지 못한 채 읽음으로 둔다.
+        """
+        try:
+            body = self.store.get(artifact_id, revision)
+        except FileNotFoundError:
+            return None, ContextReceiptStatus.MISSING.value
+        if expected_hash and content_hash(body) != expected_hash:
+            return None, ContextReceiptStatus.HASH_MISMATCH.value
+        return body, ContextReceiptStatus.READ.value
+
+    def _load_instruction(self, assignment: dict[str, Any]) -> tuple[bytes | None, str]:
+        return self._read_verified(
+            assignment["instruction_artifact_id"],
+            assignment["instruction_artifact_rev"],
+            assignment.get("instruction_content_hash"),
+        )
+
     def load_context(self, assignment: dict[str, Any]) -> list[dict[str, Any]]:
         """배정에 실린 고정 참조의 원문을 이 Runner의 저장소에서 읽는다.
 
         **없는 원문을 빈 내용으로 바꾸지 않는다.** `body` 가 `None` 이면 읽지 못한
         것이고 지시문에도 그렇게 적힌다. 참조를 조용히 빼면 AI는 그런 자료가 없었다고
         생각하고 처음부터 다시 쓴다 — P2-04에서 초안이 퇴화한 경로가 그것이다.
+
+        P4-04. 해시를 대조하고(`status`), 제어부가 **크기 한도로 생략하기로 정한** 참조는
+        읽지 않는다(`omitted`). 등급(`tier`)은 제어부가 정한 값을 그대로 쓴다.
         """
         context: list[dict[str, Any]] = []
         for ref in assignment.get("context_refs") or []:
-            try:
-                body: bytes | None = self.store.get(ref["artifact_id"], ref["revision"])
-            except FileNotFoundError:
-                body = None
+            inclusion = ctxmod.effective_inclusion(ref.get("inclusion"))
+            if inclusion == ContextInclusion.OMITTED_SIZE_LIMIT.value:
+                body: bytes | None = None
+                status = ContextReceiptStatus.OMITTED.value
+            else:
+                body, status = self._read_verified(
+                    ref["artifact_id"], ref["revision"], ref.get("content_hash")
+                )
             context.append(
                 {
+                    "seq": ref.get("seq"),
                     "role": ref["role"],
                     "artifact_id": ref["artifact_id"],
                     "revision": ref["revision"],
+                    "tier": ctxmod.effective_tier(ref.get("tier"), ref["role"]),
+                    "inclusion": inclusion,
+                    "status": status,
                     "body": body,
                 }
             )
         return context
+
+    def _recover_from_raw_log(self, assignment: dict[str, Any]) -> dict[str, Any]:
+        """착수만 기록된 실행의 **원시 출력**에서 되찾을 수 있는 것(P4-04).
+
+        CLI 를 다시 부르지 않는다. 원시 출력은 CLI 표준 출력을 받은 그대로 저장한
+        것이며(`cli_adapter`), 같은 정규화 규칙으로 읽는다. 사용량이 없으면(강제 종료로
+        `turn.completed`·`result` 가 쓰이지 않음) 지금처럼 `not_reported` 다 — 0 이 아니다.
+        """
+        run_id = assignment["run_id"]
+        raw = self.config.raw_dir / f"{run_id}.stdout.jsonl"
+        empty = {
+            "usage": "not_reported",
+            "session_ref": None,
+            "events": [],
+            "summary": {"raw_log": "absent"},
+        }
+        if assignment["tool_id"] == TOOL_ID or not raw.exists():
+            return empty
+        lines = raw.read_bytes().decode("utf-8", errors="replace").splitlines()
+        stream = cli_events.normalize(assignment["tool_id"], lines)
+        usage: Any = stream.usage
+        if isinstance(usage, dict):
+            usage = {**usage, USAGE_RECOVERED_FROM: USAGE_RECOVERED_FROM_RAW_LOG}
+        events = []
+        for event in stream.events:
+            event = dict(event)
+            # 원시 출력에 시각이 없으면 **복구한 시각**이다. 실행 시각을 지어내지 않는다 —
+            # 이벤트 종류(`native_type`)가 원문 그대로 남는다.
+            if not event["ts"]:
+                event["ts"] = datetime.now(timezone.utc).isoformat(timespec="microseconds")
+            events.append(event)
+        return {
+            "usage": usage,
+            "session_ref": stream.session_ref,
+            "events": events,
+            "summary": {
+                "raw_log": "present",
+                "usage": "recovered" if isinstance(usage, dict) else "not_reported",
+                "session_ref": stream.session_ref is not None,
+                "events": len(events),
+                "run_finished_seen": any(
+                    e["type"] == EventType.RUN_FINISHED.value for e in events
+                ),
+            },
+        }
 
     def _produce_for_purpose(
         self,

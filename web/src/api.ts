@@ -95,6 +95,45 @@ export interface Run {
   workspace_effect?: WorkspaceEffect | null
   // 그 실행이 **실제로 실행한 명령**. 원문은 Runner 에 있다.
   commands?: RunCommand[]
+  // P4-04: CLI 를 부르기 **전에** 멈춘 이유. 있으면 소비가 0 으로 정산됐다.
+  not_started_reason?: string | null
+  context_inline_limit?: number | null
+  // P4-04: 무엇을 주려 했고(계획) 무엇을 실제로 읽었는가(영수증). 서버가 도출한 값이다.
+  context?: RunContext
+}
+
+//: P4-04. `not_reported` 는 영수증이 없는 실행(P4-04 이전)이다 — 읽음으로 보이지 않는다.
+export type RunContextState = 'complete' | 'partial' | 'blocked' | 'not_reported'
+
+export interface RunContextFreshness {
+  state: 'current' | 'drifted'
+  added_count: number
+  added: { role: string; artifact_id: string; revision: number }[]
+  measured_at: string
+  // `at_result` 는 결과 보고 시점의 기록, `live` 는 진행 중 실행의 조회 시점 계산이다.
+  basis: 'at_result' | 'live'
+}
+
+export interface RunContext {
+  state: RunContextState
+  limit: number | null
+  instruction_bytes: number
+  inline_bytes: number
+  ref_count: number
+  omitted_count: number
+  omitted: { seq: number; role: string; artifact_id: string; revision: number }[]
+  receipt_generation: number | null
+  unread: { seq: number; role: string; status: string }[]
+  not_started_reason: string | null
+  // `null` 은 "새 입력 없음"이 아니라 계산하지 않았다(옛 실행)는 뜻이다.
+  freshness: RunContextFreshness | null
+}
+
+export const RUN_CONTEXT_STATE_LABEL: Record<RunContextState, string> = {
+  complete: '완전',
+  partial: '부분',
+  blocked: '핵심 미확인 — 실행 전 중단',
+  not_reported: '미보고',
 }
 
 export interface CaseDetail extends Case {
@@ -716,6 +755,10 @@ export const REFUSAL_LABEL: Record<string, string> = {
   request_not_processing: '그 요청은 이미 끝났다 — 끝난 요청에 실행을 붙이지 않는다',
   request_original_not_stored: '요청을 연 메시지를 PC가 아직 저장하지 않았다',
   request_instruction_mismatch: '논의 응답의 지시는 그 요청을 연 메시지여야 한다',
+  // P4-04. 핵심 입력을 빼고 실행하지 않는다.
+  context_over_inline_limit:
+    '지시와 핵심 입력만으로 한 실행의 크기 한도를 넘는다 — 나누거나 한도를 조정해야 한다',
+  required_context_unavailable: '핵심 입력의 원문을 지금 읽을 수 없다 (저장 대기·유실)',
 }
 
 export const gateApi = {
@@ -1295,6 +1338,14 @@ export interface RunContextRef {
   revision: number
   availability: Availability
   content_hash: string
+  // P4-04. 적용되는 등급·인라인 여부. `*_recorded = false` 는 P4-04 이전 참조다.
+  tier: 'core' | 'supporting'
+  tier_recorded: boolean
+  inclusion: 'inline' | 'omitted_size_limit'
+  inclusion_recorded: boolean
+  byte_size: number
+  // Runner 가 실제로 읽었는가. `null` 은 영수증이 없다는 뜻이며 읽음이 아니다.
+  receipt_status: 'read' | 'missing' | 'hash_mismatch' | 'omitted' | null
 }
 
 export const CONTEXT_ROLE_LABEL: Record<string, string> = {
@@ -1304,6 +1355,11 @@ export const CONTEXT_ROLE_LABEL: Record<string, string> = {
   current_design: '현재 설계안',
   previous_plan: '직전 개발계획',
   feedback: '미해결 피드백',
+  current_plan: '현재 개발계획',
+  question_answer: '질문 답변',
+  original_request: '요청 원문',
+  conversation_user_message: '대화 — 사용자 말',
+  conversation_assistant_message: '대화 — AI 말',
 }
 
 //: 항목의 확인 상태와 내용의 성격 문구. 의도 화면과 준비 화면이 **같은 말**을

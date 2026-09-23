@@ -343,9 +343,15 @@ CONTEXT_LABEL = {
 
 CONTEXT_HEADER = """--- 고정 컨텍스트 ---
 아래는 이 작업에 고정된 자료다. **처음부터 다시 쓰지 마라.** 이전 버전이 있으면 그
-내용을 유지하고 요청받은 곳만 고친다. 읽지 못한 자료는 읽지 못했다고 표시돼 있으며,
-그 내용을 추측해 채우지 마라.
+내용을 유지하고 요청받은 곳만 고친다. 읽지 못한 자료와 크기 한도 때문에 이 실행에 넣지
+않은 자료는 그렇게 표시돼 있으며, 그 내용을 추측해 채우지 마라. 그 자료를 봤다고
+말하지 마라.
 """
+
+#: P4-04. 한도로 생략한 자료의 표시. **없었다고 하지 않는다** — 있었지만 이 실행에
+#: 넣지 않았다는 사실과 참조 ID 를 준다. 조용히 빼면 AI 는 그런 말이 없었다고 생각한다.
+OMITTED_NOTE = "(크기 한도 때문에 이 실행에 넣지 않았다. 내용을 추측하지 마라.)"
+UNREAD_NOTE = "(이 자료를 읽지 못했다. 내용을 추측하지 마라.)"
 
 
 def build_context_block(items: list[dict[str, Any]]) -> str:
@@ -361,8 +367,11 @@ def build_context_block(items: list[dict[str, Any]]) -> str:
     for item in items:
         label = CONTEXT_LABEL.get(item["role"], item["role"])
         head = f"[{label}] {item['artifact_id']}@{item['revision']}"
-        if item.get("body") is None:
-            parts.append(f"{head}\n(이 자료를 읽지 못했다. 내용을 추측하지 마라.)\n")
+        if item.get("status") == "omitted":
+            # P4-04. 읽지 못한 것과 **넣지 않은 것**은 다른 사실이다.
+            parts.append(f"{head}\n{OMITTED_NOTE}\n")
+        elif item.get("body") is None:
+            parts.append(f"{head}\n{UNREAD_NOTE}\n")
         else:
             body = item["body"].decode("utf-8", errors="replace")
             parts.append(f"{head}\n{body}\n")

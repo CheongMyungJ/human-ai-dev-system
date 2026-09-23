@@ -104,6 +104,21 @@ class SettleSource(str, Enum):
     ADAPTER_NOT_REPORTED = "adapter_not_reported"
     OUTCOME_UNKNOWN = "outcome_unknown"
     RESIDUAL_ACTIVITY = "residual_activity"
+    #: P4-04. Runner 가 CLI 를 부르기 **전에** 멈췄다. 호출이 없었으므로 0 이 확정이다 —
+    #: 예약값을 그대로 확정하면 없던 호출이 소비로 남는다.
+    NOT_STARTED = "not_started"
+    #: P4-04. Runner 가 재시작 뒤 **자기 원시 출력에서** 되찾은 사용량이다. 어댑터가
+    #: 결과로 보고한 값과 출처가 같지만(같은 CLI 출력) 경로가 다르므로 구분해 둔다.
+    RECOVERED_FROM_RUNNER_LOG = "recovered_from_runner_log"
+
+
+#: 사용량 묶음에 이 표시가 있으면 Runner 가 재시작 뒤 원시 출력에서 되찾은 값이다.
+USAGE_RECOVERED_FROM = "recovered_from"
+USAGE_RECOVERED_FROM_RAW_LOG = "runner_raw_log"
+
+
+def usage_was_recovered(usage: Any) -> bool:
+    return isinstance(usage, dict) and usage.get(USAGE_RECOVERED_FROM) == USAGE_RECOVERED_FROM_RAW_LOG
 
 
 #: 지표별 예약 계약. **`BUDGET_MEASUREMENT` 와 짝이지 같은 표가 아니다.**

@@ -721,7 +721,14 @@ def test_an_unreadable_reference_is_reported_as_unread(harness):
     """AC-12: 읽지 못한 참조를 **읽은 것으로 적지 않는다.**
 
     조용히 빼면 AI는 그런 자료가 없었다고 생각하고 처음부터 다시 쓴다 — 퇴화의
-    경로가 정확히 그것이다. 읽지 못한 사실을 지시문과 산출물에 남긴다.
+    경로가 정확히 그것이다.
+
+    **P4-04 에서 의미를 좁혔다.** 이 시험은 P3-01 에서 "읽지 못함을 지시문과 산출물에
+    남기고 실행한다"를 고정했다. 그런데 설계 작성의 동의된 의도는 **핵심 입력**이다 —
+    그것 없이 쓴 설계는 동의 범위 밖의 설계가 되고, 그 설계가 성공 산출물로 남는다.
+    이제는 CLI 를 부르지 않고 **시작하지 않은 실패**로 끝나며, 읽지 못한 사실이
+    영수증으로 제어부에 남는다. 원래 의도("읽은 것으로 적지 않는다")는 그대로이고 더
+    강해졌다. 보조 입력의 "읽지 못함 표시 후 실행"은 `test_context.py` 가 본다.
     """
     case, intent = _agreed_case(harness)
     # 소유 Runner의 저장소에서 의도 원문을 치운다. 참조는 그대로 남는다.
@@ -729,12 +736,18 @@ def test_an_unreadable_reference_is_reported_as_unread(harness):
     stored.unlink()
 
     assert harness.ai_prepare(case["id"], "design").status_code == 201
-    call = next(c for c in harness.agent.cli_executor.calls if c["run_id"] == "run-design-1")
-    assert "이 자료를 읽지 못했다" in call["prompt"]
-
-    design = harness.preparation(case["id"])["design"]["artifact"]
-    _request, content = harness.read_original(design["artifact_id"], design["artifact_rev"])
-    assert '"read": false' in content
+    # CLI 가 불리지 않았다. 동의된 의도 없이 설계를 쓰지 않는다.
+    assert not any(c["run_id"] == "run-design-1" for c in harness.agent.cli_executor.calls)
+    run = harness.client.get("/api/runs/run-design-1").json()
+    assert run["outcome"] == "failed"
+    assert run["not_started_reason"] == "required_context_unavailable"
+    assert run["context"]["state"] == "blocked"
+    # 읽지 못한 것이 **무엇인지**가 남는다 — 읽음으로 적히지 않는다.
+    assert run["context"]["unread"] == [{"seq": 1, "role": "agreed_intent", "status": "missing"}]
+    refs = harness.context_refs("run-design-1")
+    assert [(r["role"], r["receipt_status"]) for r in refs] == [("agreed_intent", "missing")]
+    # 설계 산출물이 생기지 않았다.
+    assert harness.preparation(case["id"])["design"]["artifact"] is None
 
 
 def test_a_skeleton_executor_cannot_author_a_design(harness):

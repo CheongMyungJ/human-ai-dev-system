@@ -605,6 +605,18 @@ class AdmissionRefusal(str, Enum):
     REQUEST_ORIGINAL_NOT_STORED = "request_original_not_stored"
     REQUEST_INSTRUCTION_MISMATCH = "request_instruction_mismatch"
 
+    # --- P4-04 문맥·재개 ---------------------------------------------------
+    #
+    # **핵심 입력을 빼고 실행하지 않는다**(review-context-contract 4절 1항). 둘은
+    # 사람이 할 일이 다르다.
+    #
+    #   한도 초과       지시 + 핵심 입력만으로 한 실행의 인라인 한도를 넘는다.
+    #                   자르지 않고 보류한다 — 나누거나 한도를 조정해야 한다
+    #   입력 미확인     핵심 입력의 원문이 아직 저장되지 않았거나 유실됐거나
+    #                   소유 Runner 에 닿지 않는다
+    CONTEXT_OVER_INLINE_LIMIT = "context_over_inline_limit"
+    REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
+
 
 class GateId(str, Enum):
     """P4-01까지 구현한 품질 게이트.
@@ -978,6 +990,71 @@ class ContextRefRole(str, Enum):
     #: 다르기 때문이다 — AI 의 이전 제안은 사용자의 요구가 아니며 위임 근거도 아니다
     #: (D-60). 한 역할로 묶으면 다시 쓰는 AI 가 자기 제안을 사용자 요구로 적는다.
     CONVERSATION_ASSISTANT_MESSAGE = "conversation_assistant_message"
+
+
+# --------------------------------------------------------------------- P4-04
+
+
+class ContextTier(str, Enum):
+    """고정 참조의 등급(P4-04). **크기 한도가 무엇을 뺄 수 있는가**를 정한다.
+
+    `CORE`        요청·결정·명시 금지·동의 범위·사람의 답과 피드백, 재작성의 이전
+                  버전. 한도 때문에 빼지 않는다 — 넘으면 실행을 보류한다
+    `SUPPORTING`  AI 의 이전 제안. 사용자의 결정이 아니므로(D-60) 한도가 넘으면
+                  오래된 것부터 **드러내어** 생략할 수 있다
+    """
+
+    CORE = "core"
+    SUPPORTING = "supporting"
+
+
+class ContextInclusion(str, Enum):
+    """그 참조를 지시문에 넣었는가(P4-04). 생략은 조용한 삭제가 아니라 기록이다."""
+
+    INLINE = "inline"
+    OMITTED_SIZE_LIMIT = "omitted_size_limit"
+
+
+class ContextReceiptStatus(str, Enum):
+    """Runner 가 **실제로** 그 원문을 읽었는가(P4-04).
+
+    `READ`           읽었고 해시가 제어부의 기록과 같다
+    `MISSING`        그 Runner 의 저장소에 없다
+    `HASH_MISMATCH`  있지만 다른 내용이다. 읽지 못한 것으로 다루고 지시문에 넣지 않는다
+    `OMITTED`        제어부가 인라인하지 않기로 정했다. 읽지 않았다
+    """
+
+    READ = "read"
+    MISSING = "missing"
+    HASH_MISMATCH = "hash_mismatch"
+    OMITTED = "omitted"
+
+
+class RunContextState(str, Enum):
+    """한 실행의 문맥이 어땠는가(P4-04). **도출값이며 저장하지 않는다.**
+
+    `COMPLETE`      지시와 모든 참조를 읽었다
+    `PARTIAL`       지시와 핵심은 전부 읽었고 보조 일부를 생략했거나 읽지 못했다
+    `BLOCKED`       지시 또는 핵심을 읽지 못했다 — 실행하지 않았다
+    `NOT_REPORTED`  영수증이 없다(P4-04 이전 실행). 읽었다고도 못 읽었다고도 적지 않는다
+    """
+
+    COMPLETE = "complete"
+    PARTIAL = "partial"
+    BLOCKED = "blocked"
+    NOT_REPORTED = "not_reported"
+
+
+class NotStartedReason(str, Enum):
+    """Runner 가 CLI 를 부르기 **전에** 멈춘 이유(P4-04).
+
+    시작하지 않은 실행은 소비가 아니다 — `run_count` 의 계약은 "시스템이 시작한
+    호출"이다(autonomy-budget-policy 7절). 이 표시가 있는 결과만 0 으로 정산한다.
+    """
+
+    REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
+    NO_EXECUTION_PATH = "no_execution_path"
+    WORKSPACE_BUSY = "workspace_busy"
 
 
 # --------------------------------------------------------------------- P3-02

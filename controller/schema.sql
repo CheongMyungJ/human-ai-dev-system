@@ -1618,3 +1618,32 @@ CREATE TABLE IF NOT EXISTS case_visibility_event (
     recorded_at  TEXT NOT NULL,
     UNIQUE (case_id, seq)
 );
+
+-- ===================================================================
+-- 스키마 v17 (P4-04) — 문맥·재개
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.** Runner 가
+-- 보고하는 것은 순번·역할·상태뿐이고 원문도, 원문의 경로도 올라오지 않는다.
+--
+-- `run_context_ref` 에는 db.py 가 등급·인라인 여부·크기 컬럼을 붙인다. 그 표는 **무엇을
+-- 주려 했는가**(계획)이고, 이 표는 **무엇을 실제로 읽었는가**(영수증)다. 둘을 한 표에
+-- 두면 계획이 읽음으로 보인다.
+--
+-- 옛 실행에는 아무 행도 만들지 않는다. 영수증이 없는 실행은 `not_reported` 로 도출된다
+-- — 읽었다고도 못 읽었다고도 적지 않는다.
+-- ===================================================================
+
+-- 한 실행의 문맥 영수증. 순번 0 은 지시 원문이다. `generation` 이 키에 있는 이유는
+-- 재배정된 실행이 다시 읽기 때문이다(그 사이 원문이 사라졌을 수 있다).
+CREATE TABLE IF NOT EXISTS run_context_receipt (
+    run_id       TEXT NOT NULL REFERENCES run(run_id),
+    generation   INTEGER NOT NULL,
+    seq          INTEGER NOT NULL,
+    role         TEXT NOT NULL,
+    status       TEXT NOT NULL
+                 CHECK (status IN ('read', 'missing', 'hash_mismatch', 'omitted')),
+    runner_id    TEXT NOT NULL,
+    reported_at  TEXT NOT NULL,
+    PRIMARY KEY (run_id, generation, seq),
+    CHECK (length(role) <= 64)
+);

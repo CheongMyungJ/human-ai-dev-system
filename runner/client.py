@@ -70,6 +70,15 @@ class ControllerClient:
     def send_result(self, run_id: str, payload: dict) -> Any:
         return self._post(f"/api/runner/runs/{run_id}/result", payload)
 
+    def send_context_receipt(
+        self, run_id: str, runner_id: str, generation: int, items: list[dict]
+    ) -> Any:
+        """CLI 를 부르기 **전에** 실제로 읽은 것을 보고한다(P4-04). 순번·역할·상태뿐이다."""
+        return self._post(
+            f"/api/runner/runs/{run_id}/context-receipt",
+            {"runner_id": runner_id, "generation": generation, "items": items},
+        )
+
     # ------------------------------------------------- 원문 열람·의도 구조
 
     def pending_read_requests(self, runner_id: str) -> list[dict]:

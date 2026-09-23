@@ -50,6 +50,7 @@ from domain.models import (
     ControlledCheckpoint,
     ConfirmationState,
     ContentOrigin,
+    ContextReceiptStatus,
     CriterionObligation,
     CriterionVerdict,
     DecideAt,
@@ -60,6 +61,7 @@ from domain.models import (
     IntentField,
     MessageKind,
     MessageRefKind,
+    NotStartedReason,
     Permission,
     PreparationStage,
     ReadRequestState,
@@ -80,7 +82,11 @@ router = APIRouter()
 
 
 def _repo(request: Request) -> Repository:
-    return Repository(request.app.state.conn)
+    # P4-04. 실행당 인라인 한도는 제어부 설정에서 온다. 시험은 설정을 바꿔 작게 둔다.
+    return Repository(
+        request.app.state.conn,
+        context_inline_limit=request.app.state.config.context_inline_limit_bytes,
+    )
 
 
 def _handle(exc: Exception) -> HTTPException:
@@ -259,6 +265,22 @@ class ResultIn(BaseModel):
     workspace_effect: dict[str, Any] | None = None
     residual_activity: str = "unknown"
     observed_tool_version: str | None = None
+    #: P4-04. Runner 가 CLI 를 부르기 **전에** 멈췄다. 실패 + 잔류 없음일 때만 받는다.
+    not_started_reason: NotStartedReason | None = None
+
+
+class ContextReceiptItemIn(BaseModel):
+    """영수증의 한 줄. **순번·역할·상태뿐이다** — 본문도 경로도 없다."""
+
+    seq: int = Field(ge=0)
+    role: str | None = Field(default=None, max_length=64)
+    status: ContextReceiptStatus
+
+
+class ContextReceiptIn(BaseModel):
+    runner_id: str
+    generation: int
+    items: list[ContextReceiptItemIn] = Field(max_length=10000)
 
 
 # ---------------------------------------------------------------- idempotency
@@ -573,6 +595,8 @@ def get_run(request: Request, run_id: str) -> dict[str, Any]:
     run["events"] = repo.list_events(run_id)
     # 무엇을 실제로 실행했는가(P3-03). 원문은 Runner 의 산출물에 있다.
     run["commands"] = repo.list_run_commands(run_id)
+    # 무엇을 실제로 읽었는가·그 뒤 무엇이 새로 생겼는가(P4-04).
+    run["context"] = repo.run_context_view(run_id)
     return run
 
 
@@ -709,6 +733,27 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             workspace_effect=payload.workspace_effect,
             residual_activity=payload.residual_activity,
             observed_tool_version=payload.observed_tool_version,
+            not_started_reason=payload.not_started_reason,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/runner/runs/{run_id}/context-receipt")
+def runner_context_receipt(
+    request: Request, run_id: str, payload: ContextReceiptIn
+) -> dict[str, Any]:
+    """Runner 가 CLI 를 부르기 전에 **실제로 읽은 것**을 보고한다(P4-04).
+
+    계획과 맞아야 받는다. 같은 세대의 같은 영수증 재전송은 아무 것도 바꾸지 않고,
+    다른 내용·옛 세대는 409 다.
+    """
+    try:
+        return _repo(request).record_context_receipt(
+            run_id,
+            payload.runner_id,
+            payload.generation,
+            [item.model_dump(mode="json") for item in payload.items],
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

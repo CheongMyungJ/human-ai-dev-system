@@ -245,6 +245,12 @@ class AdmissionRequest:
     #: 이 실행의 지시 원문 `(artifact_id, revision)`. 논의 응답은 그 요청을 연 메시지를
     #: 지시로 받아야 한다 — 응답이 실제로 받은 말에 대한 것이어야 하기 때문이다.
     instruction_artifact: tuple[str, int] | None = None
+    #: P4-04. 이 실행의 입력 패키지 계획(`domain.context.ContextPlan.summary()`).
+    #: 빈 dict 는 계획을 세우지 않은 호출(P2 시절 시험)이며 한도 초과로 읽지 않는다 —
+    #: 그 호출들은 고정 참조가 없거나 작다.
+    context_plan: dict[str, Any] = field(default_factory=dict)
+    #: P4-04. 인라인으로 넣을 **핵심** 참조 중 지금 `available` 이 아닌 것.
+    context_unavailable: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -868,6 +874,37 @@ def _check_budget(request: AdmissionRequest, refuse: Callable[..., None]) -> Non
         )
 
 
+def _check_context(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """핵심 입력을 갖추고 한 실행에 담을 수 있는가(P4-04).
+
+    **핵심을 빼고 실행하지 않는다**(review-context-contract 4절 1항). 한도 때문에
+    자르지 않고, 원문이 아직 없거나 사라졌다고 건너뛰지 않는다. 두 경우 모두 그 실행만
+    보류된다 — 다른 Case·다른 목적은 막지 않는다.
+
+    보조 입력(AI 의 이전 제안)은 여기서 막지 않는다. 한도를 넘으면 계획이 이미 드러내어
+    생략했고, 원문을 못 읽으면 Runner 가 영수증에 적고 실행은 `partial` 이 된다.
+    """
+    plan = request.context_plan
+    if plan.get("over_limit"):
+        refuse(
+            AdmissionRefusal.CONTEXT_OVER_INLINE_LIMIT,
+            f"지시와 핵심 입력만으로 {plan['core_bytes']} 바이트라 한 실행의 인라인 한도"
+            f" {plan['limit']} 바이트를 넘는다(보조 입력을 빼도 넘는다)."
+            " 핵심 입력을 잘라 실행하지 않는다 — 요청·대화를 나누거나 한도를 조정해야 한다",
+        )
+    if request.context_unavailable:
+        detail = ", ".join(
+            f"{u['role']} {u['artifact_id']}@{u['revision']}={u['availability']}"
+            for u in request.context_unavailable
+        )
+        refuse(
+            AdmissionRefusal.REQUIRED_CONTEXT_UNAVAILABLE,
+            f"핵심 입력의 원문을 지금 읽을 수 없다: {detail}."
+            " 그 입력을 빼고 실행하지 않는다 — 저장 대기면 저장된 뒤, 유실이면 다시 보내거나"
+            " 그 입력을 정리한 뒤 실행한다",
+        )
+
+
 def evaluate(request: AdmissionRequest) -> AdmissionResult:
     """진입 조건을 검사한다. 거부 사유는 **모두** 모은다.
 
@@ -941,6 +978,9 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
             AdmissionRefusal.INSTRUCTION_NOT_AVAILABLE,
             f"지시 원문이 {request.instruction_availability} 상태라 실행자가 읽을 수 없다",
         )
+    # 지시 원문 다음에 **나머지 핵심 입력**을 본다(P4-04). 같은 질문의 연장이다 —
+    # 실행자가 읽어야 할 것을 읽을 수 있는가.
+    _check_context(request, refuse)
 
     latest = request.intent_state.get("latest_intent_version")
     agreement_state = request.intent_state.get("agreement_state")

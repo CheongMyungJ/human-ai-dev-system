@@ -1612,3 +1612,167 @@ def test_conversation_requests_and_lock_survive_a_forced_kill(controller):
     # 잠금이 풀려 새 식별자로 다시 보낼 수 있다. 자동으로 다시 보내지 않았다.
     assert len(gone["messages"]) == 1
     assert send(lost, "다시 보냅니다", "c-restart-4").status_code == 202
+
+
+def test_context_plans_receipts_and_recovered_usage_survive_a_forced_kill(tmp_path, monkeypatch):
+    """P4-04 AC-18 — 등급·인라인·한도·영수증·시작하지 않은 실행·최신성·되찾은 사용량이
+    강제 종료 뒤 그대로다. 메모리에 둔 것이 없다는 것을 실제 프로세스로 확인한다."""
+    from tests.conftest import fake_capabilities
+
+    # **작은 한도로 띄운다** — 제어부 설정 경로 그대로다. AI 메시지 하나가 생략된다.
+    monkeypatch.setenv("HADS_CONTEXT_INLINE_LIMIT_BYTES", "1000")
+    controller = ControllerProcess(tmp_path / "controller", _free_port())
+    controller.start()
+    try:
+        base = controller.base_url
+        httpx.post(
+            f"{base}/api/runner/register",
+            json={"runner_id": RUNNER_ID, "name": RUNNER_ID, "host": "test-host",
+                  "capabilities": fake_capabilities()},
+            timeout=10.0,
+        ).raise_for_status()
+        project = httpx.post(
+            f"{base}/api/projects",
+            json={"name": "p404-restart", "repo_path": "C:/tmp/demo", "default_tool_id": "codex"},
+            timeout=10.0,
+        ).json()
+        case_id = httpx.post(
+            f"{base}/api/projects/{project['id']}/conversations",
+            json={"title": "문맥"},
+            timeout=10.0,
+        ).json()["case_id"]
+
+        def send(text: str, cid: str) -> dict:
+            sent = httpx.post(
+                f"{base}/api/cases/{case_id}/messages",
+                json={"client_message_id": cid, "content": text, "summary": f"메시지 {cid}",
+                      "target_runner_id": RUNNER_ID},
+                timeout=10.0,
+            ).json()
+            httpx.post(
+                f"{base}/api/runner/intakes/{sent['message']['intake_id']}/stored",
+                json={"runner_id": RUNNER_ID, "content_hash": sent["message"]["content_hash"]},
+                timeout=10.0,
+            ).raise_for_status()
+            return sent
+
+        def reply(sent: dict, run_id: str) -> None:
+            created = httpx.post(
+                f"{base}/api/cases/{case_id}/runs",
+                json={"run_id": run_id,
+                      "instruction_artifact_id": sent["message"]["artifact_id"],
+                      "purpose": "discussion_reply", "tool_id": "codex", "mode": "exec",
+                      "request_id": sent["request"]["id"]},
+                timeout=10.0,
+            )
+            assert created.status_code == 201, created.text
+
+        def claim() -> dict:
+            claimed = httpx.post(f"{base}/api/runner/{RUNNER_ID}/assignments", timeout=10.0)
+            return {a["run_id"]: a for a in claimed.json()}
+
+        def receipt(assignment: dict, statuses: dict[int, str]) -> None:
+            items = [{"seq": 0, "role": "instruction", "status": "read"}] + [
+                {
+                    "seq": r["seq"],
+                    "role": r["role"],
+                    "status": statuses.get(r["seq"])
+                    or ("omitted" if r["inclusion"] == "omitted_size_limit" else "read"),
+                }
+                for r in assignment["context_refs"]
+            ]
+            httpx.post(
+                f"{base}/api/runner/runs/{assignment['run_id']}/context-receipt",
+                json={"runner_id": RUNNER_ID, "generation": 1, "items": items},
+                timeout=10.0,
+            ).raise_for_status()
+
+        def result(run_id: str, **payload) -> None:
+            httpx.post(
+                f"{base}/api/runner/runs/{run_id}/result",
+                json={"runner_id": RUNNER_ID, "generation": 1, **payload},
+                timeout=10.0,
+            ).raise_for_status()
+
+        # 1) 첫 논의 응답: 큰 AI 응답을 남긴다(크기는 Runner 가 보고한다).
+        first = send("아직 문서는 쓰지 마세요.", "c-k-1")
+        reply(first, "run-k-1")
+        receipt(claim()["run-k-1"], {})
+        httpx.post(
+            f"{base}/api/runner/artifacts",
+            json={"runner_id": RUNNER_ID, "case_id": case_id, "kind": "run_output",
+                  "artifact_id": "art-k-out-1", "revision": 1, "content_hash": "sha256:x",
+                  "byte_size": 5000, "summary": "run output for run-k-1"},
+            timeout=10.0,
+        ).raise_for_status()
+        result("run-k-1", outcome="completed", output_artifact_id="art-k-out-1",
+               output_artifact_rev=1, residual_activity="none")
+        httpx.post(f"{base}/api/cases/{case_id}/requests/{first['request']['id']}/settle",
+                   json={"outcome": "completed", "actor": "system"},
+                   timeout=10.0).raise_for_status()
+
+        # 2) 두 번째: 핵심을 못 읽어 **시작하지 않은** 실행. 결과가 확정이므로 요청을 닫는다.
+        second = send("계속해요.", "c-k-2")
+        reply(second, "run-k-3")
+        receipt(claim()["run-k-3"], {1: "missing"})
+        result("run-k-3", outcome="failed", residual_activity="none",
+               not_started_reason="required_context_unavailable")
+        httpx.post(f"{base}/api/cases/{case_id}/requests/{second['request']['id']}/settle",
+                   json={"outcome": "failed", "actor": "system"},
+                   timeout=10.0).raise_for_status()
+
+        # 3) 세 번째: 앞의 큰 AI 응답이 한도로 생략된다. 결과는 되찾은 사용량과 함께 불명.
+        third = send("구조를 설명해 주세요.", "c-k-3")
+        reply(third, "run-k-2")
+        assignment = claim()["run-k-2"]
+        assert [(r["role"], r["inclusion"]) for r in assignment["context_refs"]] == [
+            ("conversation_user_message", "inline"),
+            ("conversation_assistant_message", "omitted_size_limit"),
+            ("conversation_user_message", "inline"),
+        ]
+        receipt(assignment, {})
+        result("run-k-2", outcome="unknown",
+               usage={"tokens": {"input_tokens": 100, "output_tokens": 7},
+                      "cost_usd": "not_reported", "recovered_from": "runner_raw_log"})
+
+        def snapshot() -> dict:
+            runs = {r["run_id"]: r for r in httpx.get(
+                f"{base}/api/cases/{case_id}", timeout=10.0).json()["runs"]}
+            refs = httpx.get(f"{base}/api/runs/run-k-2/context-refs", timeout=10.0).json()
+            budget = httpx.get(f"{base}/api/cases/{case_id}/budget", timeout=10.0).json()
+            rows = {(r["run_id"], r["metric"]): (r["actual_value"], r["settle_source"])
+                    for r in budget["reservations"]}
+            return {
+                "limit": runs["run-k-2"]["context_inline_limit"],
+                "refs": [(r["tier"], r["inclusion"], r["byte_size"], r["receipt_status"])
+                         for r in refs],
+                "states": {k: v["context"]["state"] for k, v in runs.items()},
+                "not_started": runs["run-k-3"]["not_started_reason"],
+                "freshness": runs["run-k-1"]["context"]["freshness"],
+                "tokens": rows[("run-k-2", "input_tokens")],
+                "not_started_rows": rows[("run-k-3", "run_count")],
+            }
+
+        before = snapshot()
+        assert before["limit"] == 1000
+        assert [r[:2] + r[3:] for r in before["refs"]] == [
+            ("core", "inline", "read"),
+            ("supporting", "omitted_size_limit", "omitted"),
+            ("core", "inline", "read"),
+        ]
+        assert before["refs"][1][2] == 5000
+        assert before["states"] == {"run-k-1": "complete", "run-k-2": "partial",
+                                    "run-k-3": "blocked"}
+        assert before["not_started"] == "required_context_unavailable"
+        assert before["freshness"]["basis"] == "at_result"
+        assert before["tokens"] == (100.0, "recovered_from_runner_log")
+        assert before["not_started_rows"] == (0.0, "not_started")
+
+        # ---- 강제 종료 ----
+        controller.kill_hard()
+        controller.start()
+
+        assert snapshot() == before
+    finally:
+        if controller.proc is not None:
+            controller.kill_hard()
