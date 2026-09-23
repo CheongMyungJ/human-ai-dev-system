@@ -17,7 +17,7 @@ from typing import Any, Iterable, Iterator
 from domain import ids
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 def utc_now() -> str:
@@ -296,6 +296,29 @@ def migrate(conn: sqlite3.Connection) -> None:
         "completion_candidate",
         "meaning_json",
         "TEXT CHECK (meaning_json IS NULL OR length(meaning_json) <= 20000)",
+    )
+
+    # v16: 대화·요청 기반(UI-01). 새 표 다섯은 schema.sql 이 만들고 여기서는 기존 두
+    #      표에 컬럼을 더한다.
+    #
+    #      `case.stage`     준비(`discussion`) 인가 업무(`work`) 인가. **옛 행은 NULL 이며
+    #                       그것은 "UI-01 이전에 만든 Case" 다.** 그때는 목적 없이 Case 를
+    #                       만들 경로가 없었으므로 업무 단계로 도출하되(`domain.
+    #                       conversation.derive_stage`) 값을 채워 넣지 않는다 — 출처가
+    #                       `created_before_stage` 로 드러난다.
+    #      `run.request_id` 이 실행이 **어느 사용자 요청을 처리했는가.** 옛 행은 NULL 이며
+    #                       그것은 요청 개념이 없던 시절의 실행이라는 뜻이다.
+    #
+    #      **데이터 이행 함수가 없다.** 옛 Case 에 메시지·요청·보관 이력을 만들지 않는다.
+    #      없던 대화를 지어내면 그 Case 가 "대화에서 업무화됐다"로 읽힌다.
+    _add_column_if_missing(
+        conn,
+        "case",
+        "stage",
+        "TEXT CHECK (stage IS NULL OR stage IN ('discussion', 'work'))",
+    )
+    _add_column_if_missing(
+        conn, "run", "request_id", "TEXT REFERENCES conversation_request(id)"
     )
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()

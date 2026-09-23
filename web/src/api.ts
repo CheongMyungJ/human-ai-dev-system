@@ -117,6 +117,10 @@ export interface CaseDetail extends Case {
   // P3-R1: 이 업무에 적용되는 목적·깊이·확인 경계·한도·저장소와 **각 축을 지금
   // 누가 강제하는가.** 화면이 기록과 강제를 구별해 보여야 한다(FR-14).
   policy?: CasePolicy
+  // UI-01: 대화·현재 요청과 **지금 보낼 수 있는가·왜 아닌가.** 서버가 판정한다.
+  conversation?: ConversationView
+  // UI-01: 준비(`discussion`)·업무(`work`) 단계. NULL 은 UI-01 이전 Case 다.
+  stage?: 'discussion' | 'work' | null
 }
 
 export interface RunnerCapability {
@@ -248,6 +252,8 @@ export const api = {
       permission?: 'read_only' | 'workspace_write' | 'explicit_escalated'
       task_id?: string
       instruction_artifact_rev?: number
+      // UI-01. 어느 사용자 요청을 처리하는 실행인가.
+      request_id?: string
     },
   ) =>
     request<{ run: Run; created: boolean; admission: AdmissionView | null }>(
@@ -535,6 +541,8 @@ export type RunPurpose =
   // P3-03. 검증은 구현과 **다른 목적**이다 — 완료 판정이 다르다. 구현은 작업공간
   // 변화가 있어야 완료이고, 검증은 실제로 실행된 명령이 있어야 완료다.
   | 'verification_run'
+  // UI-01. 대화의 논의 응답. 읽기 전용이며 요청(request_id)에 묶인다.
+  | 'discussion_reply'
 
 export type GateVerdict =
   | 'pass'
@@ -702,6 +710,12 @@ export const REFUSAL_LABEL: Record<string, string> = {
   intent_version_missing: '검토할 의도 버전이 없다',
   intent_version_not_latest: '검토 대상이 최신 의도 버전이 아니다',
   case_already_closed: '이미 종료된 업무다 — 수정은 연결된 새 Case 로 한다',
+  // UI-01. 준비 단계와 사용자 요청.
+  case_in_discussion_stage: '아직 준비 단계 대화다 — 업무화 뒤에 배정한다',
+  request_required: '논의 응답은 어떤 요청에 대한 응답인지가 있어야 한다',
+  request_not_processing: '그 요청은 이미 끝났다 — 끝난 요청에 실행을 붙이지 않는다',
+  request_original_not_stored: '요청을 연 메시지를 PC가 아직 저장하지 않았다',
+  request_instruction_mismatch: '논의 응답의 지시는 그 요청을 연 메시지여야 한다',
 }
 
 export const gateApi = {
@@ -2039,5 +2053,194 @@ export const policyApi = {
   clearBudget: (caseId: string, metric: string, thresholdKind: string) =>
     request<BudgetState>(`/api/cases/${caseId}/budget/${metric}/${thresholdKind}`, {
       method: 'DELETE',
+    }),
+}
+
+
+// ===================================================================== UI-01
+//
+// 대화·요청 기반. **화면은 보낼 수 있는지를 판단하지 않는다** — `send.general` 은
+// 서버가 실제로 적용하는 판정과 같은 값이고, 버튼을 비활성화해도 서버가 같은 이유로
+// 거부한다(FR-11). 초안의 브라우저 저장·복구(D-83)는 UI-03 이다.
+
+export type MessageReceipt = 'pending' | 'stored' | 'lost_before_persist'
+export type RequestState = 'processing' | 'completed' | 'failed' | 'unknown'
+
+export interface ConversationMessage {
+  id: string
+  case_id: string
+  seq: number
+  author: 'user' | 'assistant'
+  message_kind: 'general' | 'correction' | 'card_answer' | 'assistant_reply'
+  actor: string
+  client_message_id: string | null
+  artifact_id: string
+  artifact_rev: number
+  content_hash: string
+  intake_id: string | null
+  request_id: string | null
+  corrects_message_id: string | null
+  question_id: string | null
+  question_intent_version_id: string | null
+  run_id: string | null
+  summary: string
+  created_at: string
+  // **`stored` 만 접수 완료다.** 202 응답이나 중계는 접수가 아니다.
+  receipt: MessageReceipt
+  references: Record<string, unknown>[]
+  corrected_by: string[]
+}
+
+export interface ConversationRequest {
+  id: string
+  case_id: string
+  opened_by_message_id: string
+  state: RequestState
+  opened_at: string
+  settled_at: string | null
+  settled_by: string | null
+  outcome_reason: string | null
+  note_summary: string | null
+  locking: boolean
+  opening_receipt: MessageReceipt
+  runs: { run_id: string; purpose: string | null; status: string; outcome: string | null }[]
+  unfinished_runs: number
+  unknown_runs: number
+}
+
+export interface SendState {
+  allowed: boolean
+  refusal: string | null
+  detail: string
+  active_request_id: string | null
+}
+
+export interface ConversationView {
+  case_id: string
+  title: string
+  status: string
+  stage: 'discussion' | 'work'
+  stage_source: string
+  kind: string
+  profile: string | null
+  profile_version: string | null
+  profile_source: string | null
+  visibility: { archived: boolean; archived_at: string | null; history: unknown[] }
+  work_start: { request_message_id: string; profile: string; decided_by: string } | null
+  messages: ConversationMessage[]
+  requests: ConversationRequest[]
+  current_request: ConversationRequest | null
+  send: {
+    general: SendState
+    card_answer: { allowed: boolean; open_questions: number }
+    runner_connection_enforced: boolean
+  }
+  needs_response: boolean
+}
+
+export interface SubmittedMessage {
+  message: ConversationMessage
+  request: ConversationRequest | null
+  receipt: MessageReceipt
+  created: boolean
+}
+
+export const RECEIPT_LABEL: Record<MessageReceipt, string> = {
+  pending: '접수 대기 (PC 저장 전)',
+  stored: '접수됨',
+  lost_before_persist: '저장 전 유실 — 새로 보내야 한다',
+}
+
+export const REQUEST_STATE_LABEL: Record<RequestState, string> = {
+  processing: '처리 중',
+  completed: '완료',
+  failed: '실패',
+  unknown: '실행 상태 확인 필요',
+}
+
+export const CONVERSATION_REFUSAL_LABEL: Record<string, string> = {
+  case_already_closed: '종료된 업무다 — 실제 수정은 연결된 새 업무로 한다',
+  request_in_progress: '현재 요청을 처리하고 있다 — 초안은 편집할 수 있고 질문에는 답할 수 있다',
+  request_state_unknown: '현재 요청의 실행 상태를 확인하지 못했다 — 확인 전에는 새 요청을 받지 않는다',
+  client_message_id_conflict: '같은 전송 식별자로 다른 내용이 왔다',
+  correction_target_invalid: '정정 대상은 이 대화의 사용자 메시지여야 한다',
+  question_target_stale: '카드가 보인 의도 버전이 최신이 아니다',
+  question_already_answered: '이미 답한 질문이다',
+  question_not_open: '열려 있지 않은 질문이다',
+  card_answer_target_missing: '카드 답변의 대상 질문·버전이 없다',
+  reference_invalid: '참조한 자료가 이 업무·프로젝트의 것이 아니다',
+  case_in_discussion_stage: '아직 준비 단계 대화다 — 업무화가 먼저다',
+  case_not_in_discussion_stage: '이미 업무 단계다 — 목적·유형 변경은 다른 경로다',
+  work_request_invalid: '업무 요청은 이 대화의 사용자 메시지여야 한다',
+  work_request_not_stored: '업무 요청 메시지를 PC가 아직 저장하지 않았다',
+  work_request_not_current: '그 메시지가 연 요청은 이미 끝났다',
+  interpretation_run_invalid: 'AI 해석의 근거 실행이 같은 요청의 완료된 실행이 아니다',
+  request_runs_unfinished: '이 요청의 실행이 아직 끝나지 않았다 — 실행 사이에 잠금을 풀지 않는다',
+  request_original_not_stored: '요청을 연 메시지가 저장되지 않았다 — 완료로 적지 않는다',
+  request_already_settled: '이미 끝난 요청이다',
+}
+
+export const conversationApi = {
+  create: (projectId: string, title: string) =>
+    request<ConversationView>(`/api/projects/${projectId}/conversations`, {
+      method: 'POST',
+      body: JSON.stringify({ title }),
+    }),
+
+  get: (caseId: string) => request<ConversationView>(`/api/cases/${caseId}/conversation`),
+
+  // 202 는 **접수 대기**다. `receipt === 'stored'` 가 될 때까지 초안을 비우지 않는다.
+  send: (
+    caseId: string,
+    body: {
+      client_message_id: string
+      kind: 'general' | 'correction' | 'card_answer'
+      content: string
+      summary: string
+      target_runner_id: string
+      corrects_message_id?: string
+      question_id?: string
+      intent_version_id?: string
+    },
+  ) =>
+    request<SubmittedMessage>(`/api/cases/${caseId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  // 접수 불명 대조. 404 는 받은 적 없음이다.
+  findByClientId: (caseId: string, clientMessageId: string) =>
+    request<{ message: ConversationMessage; receipt: MessageReceipt }>(
+      `/api/cases/${caseId}/messages/by-client-id/${clientMessageId}`,
+    ),
+
+  settle: (caseId: string, requestId: string, outcome: 'completed' | 'failed') =>
+    request<ConversationRequest>(`/api/cases/${caseId}/requests/${requestId}/settle`, {
+      method: 'POST',
+      body: JSON.stringify({ outcome, actor: 'owner' }),
+    }),
+
+  startWork: (caseId: string, requestMessageId: string, profile: string, summary: string) =>
+    request<ConversationView>(`/api/cases/${caseId}/work-start`, {
+      method: 'POST',
+      body: JSON.stringify({
+        profile,
+        request_message_id: requestMessageId,
+        decided_by: 'person',
+        actor: 'owner',
+        summary,
+      }),
+    }),
+
+  archive: (caseId: string) =>
+    request<unknown>(`/api/cases/${caseId}/archive`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner' }),
+    }),
+
+  restore: (caseId: string) =>
+    request<unknown>(`/api/cases/${caseId}/restore`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner' }),
     }),
 }

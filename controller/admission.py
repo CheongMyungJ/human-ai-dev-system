@@ -49,10 +49,13 @@ from domain.models import (
     AdmissionRefusal,
     Availability,
     CaseKind,
+    CaseStage,
+    MessageReceipt,
     GateVerdict,
     IntentAgreementState,
     Permission,
     PreparationStage,
+    RequestState,
     ReviewMode,
     RunPurpose,
     RunRole,
@@ -91,6 +94,9 @@ ALLOWED_PERMISSIONS: dict[RunPurpose, frozenset[Permission]] = {
     RunPurpose.LOCAL_EXPERIMENT: frozenset(
         {Permission.READ_ONLY, Permission.WORKSPACE_WRITE}
     ),
+    # UI-01. 논의 응답은 **읽기 전용뿐이다.** 준비 단계에서 열리는 유일한 목적이므로
+    # 여기에 쓰기가 들어가면 목표·Profile 없이 코드를 바꾸는 문이 된다.
+    RunPurpose.DISCUSSION_REPLY: frozenset({Permission.READ_ONLY}),
 }
 
 #: 작업공간을 바꿀 수 있는 권한. 이 권한의 실행은 준비된 작업공간을 요구하고
@@ -110,6 +116,7 @@ EXPECTED_ROLE: dict[RunPurpose, RunRole] = {
     RunPurpose.FEATURE_IMPLEMENTATION: RunRole.AUTHOR,
     RunPurpose.VERIFICATION_RUN: RunRole.AUTHOR,
     RunPurpose.LOCAL_EXPERIMENT: RunRole.AUTHOR,
+    RunPurpose.DISCUSSION_REPLY: RunRole.AUTHOR,
 }
 
 #: 동의된 의도를 선행 조건으로 받는 목적들. 기능 개발 조건표를 적용한다.
@@ -144,6 +151,9 @@ NEEDS_CODING_CLI: frozenset[RunPurpose] = frozenset(
         # P3-R4. 실험도 마찬가지다. 골격 실행기는 계측 코드를 쓰지도 명령을 돌리지도
         # 않으면서 정상 종료하고, 그 실행이 "실험했다"로 기록된다.
         RunPurpose.LOCAL_EXPERIMENT,
+        # UI-01. 논의 응답도 마찬가지다. 골격 실행기는 답을 쓰지 않으면서 정상 종료하고,
+        # 그 출력이 AI 의 말로 대화에 붙는다.
+        RunPurpose.DISCUSSION_REPLY,
     }
 )
 
@@ -224,6 +234,17 @@ class AdmissionRequest:
     #: P4-02. 요청이 기대한 게이트 정책과 **지금의** 정책이 다른 목록. 비어 있으면
     #: 기대를 적지 않았거나 그대로다. 예약(`pending`)은 여기에 오지 않는다.
     quality_gate_policy_drift: list[dict[str, Any]] = field(default_factory=list)
+    #: UI-01. 이 Case 의 **유효** 단계. 기본값이 업무 단계인 이유는 P2 시절 호출(시험)이
+    #: 이 인자를 모르기 때문이며, 그 호출들은 전부 업무 단계 Case 다.
+    case_stage: str = CaseStage.WORK.value
+    #: UI-01. 이 실행이 **밝힌** 사용자 요청. 없으면 요청과 무관한 실행이다.
+    request_id: str | None = None
+    #: `Repository.request_admission_state()` 의 결과. 빈 dict 는 **그 요청을 모른다**
+    #: 이며 처리 중으로 읽지 않는다.
+    request_state: dict[str, Any] = field(default_factory=dict)
+    #: 이 실행의 지시 원문 `(artifact_id, revision)`. 논의 응답은 그 요청을 연 메시지를
+    #: 지시로 받아야 한다 — 응답이 실제로 받은 말에 대한 것이어야 하기 때문이다.
+    instruction_artifact: tuple[str, int] | None = None
 
 
 @dataclass
@@ -261,6 +282,9 @@ def choose_profile(request: AdmissionRequest) -> AdmissionProfile:
     """
     if request.purpose in (RunPurpose.INTENT_AUTHORING, RunPurpose.INTENT_GATE_REVIEW):
         return AdmissionProfile.INTENT_PRODUCTION
+    if request.purpose is RunPurpose.DISCUSSION_REPLY:
+        # UI-01. 의도·동의가 아니라 요청·원문 저장이 조건인 조건표다.
+        return AdmissionProfile.CONVERSATION
     has_intent = request.intent_state.get("latest_intent_version") is not None
     if has_intent or request.case_kind is CaseKind.FEATURE:
         return AdmissionProfile.FEATURE_INTENT
@@ -734,6 +758,11 @@ def _check_material_delta(request: AdmissionRequest, refuse: Callable[..., None]
     막는지 모른다**는 뜻이고, 모르는 것을 안전한 쪽으로 읽으면 연결하지 않는 것만으로
     차단이 사라진다(`controller/work_graph.py` 의 같은 규칙).
     """
+    if request.purpose is RunPurpose.DISCUSSION_REPLY:
+        # UI-01. **논의 응답은 막지 않는다.** 읽기 전용이라 어떤 기준·항목도 바꾸지
+        # 않고, 확인되지 않은 변경에 대해 **이야기하는 것**조차 막으면 사람이 그 변경을
+        # 논의할 수단이 없어진다. 변경에 의존하는 작업은 여전히 막힌다.
+        return
     state = request.material_delta_state or {}
     pending = state.get("pending") or []
     if not pending:
@@ -750,6 +779,59 @@ def _check_material_delta(request: AdmissionRequest, refuse: Callable[..., None]
     if blocks_all:
         detail += ". 어떤 작업을 막는지 연결되지 않은 변경이 있어 전부 막는다"
     refuse(AdmissionRefusal.MATERIAL_DELTA_UNCONFIRMED, detail)
+
+
+def _check_conversation(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """준비 단계와 사용자 요청의 조건(UI-01·D-69·D-70).
+
+    1. **준비 단계에서는 논의 응답만 연다.** 목표·Profile 이 없는 Case 에서 의도 초안·
+       검토·준비·구현·검증·실험을 열면 목적 없는 업무가 생긴다. 업무화가 먼저다.
+    2. **논의 응답은 요청에 묶인다.** 어떤 메시지에 대한 응답인지 없으면 대화의 어느
+       자리에도 붙을 수 없다.
+    3. **요청에 묶인 실행은 그 요청이 처리 중일 때만 연다.** 끝난 요청에 실행을 붙이면
+       잠금이 풀린 채 실행이 돈다. 요청을 모르면 처리 중으로 읽지 않는다.
+    4. **그 요청을 연 메시지가 PC 에 저장돼야 한다.** 받지 않은 말을 처리하지 않는다.
+    5. **논의 응답의 지시는 그 메시지 원문이다.** 다른 지시를 주면 응답이 받은 말이
+       아닌 것에 대한 것이 된다.
+    """
+    if (
+        request.case_stage == CaseStage.DISCUSSION.value
+        and request.purpose is not RunPurpose.DISCUSSION_REPLY
+    ):
+        refuse(
+            AdmissionRefusal.CASE_IN_DISCUSSION_STAGE,
+            "이 대화는 아직 준비 단계다(목표·Profile 미정). 논의 응답 말고는 배정하지"
+            f" 않는다 — {request.purpose.value} 는 업무화 뒤에 배정한다",
+        )
+    if request.purpose is RunPurpose.DISCUSSION_REPLY and request.request_id is None:
+        refuse(
+            AdmissionRefusal.REQUEST_REQUIRED,
+            "논의 응답은 어떤 요청에 대한 응답인지가 있어야 한다(request_id)",
+        )
+    if request.request_id is None:
+        return
+    state = request.request_state or {}
+    if not state.get("in_case") or state.get("state") != RequestState.PROCESSING.value:
+        refuse(
+            AdmissionRefusal.REQUEST_NOT_PROCESSING,
+            f"요청 {request.request_id} 은 처리 중이 아니다"
+            f"({state.get('state') or '이 업무의 요청이 아님'}). 끝난 요청에 실행을"
+            " 붙이지 않는다",
+        )
+        return
+    if state.get("opening_receipt") != MessageReceipt.STORED.value:
+        refuse(
+            AdmissionRefusal.REQUEST_ORIGINAL_NOT_STORED,
+            f"요청을 연 메시지가 {state.get('opening_receipt')} 상태다. PC 가 저장하기"
+            " 전에는 처리하지 않는다",
+        )
+    if request.purpose is RunPurpose.DISCUSSION_REPLY:
+        opening = (state.get("opening_artifact_id"), state.get("opening_artifact_rev"))
+        if request.instruction_artifact is None or tuple(request.instruction_artifact) != opening:
+            refuse(
+                AdmissionRefusal.REQUEST_INSTRUCTION_MISMATCH,
+                "논의 응답의 지시는 그 요청을 연 메시지 원문이어야 한다",
+            )
 
 
 def budget_refusal_reason(breaches: list[dict[str, Any]]) -> str:
@@ -829,6 +911,11 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     elif request.permission in WRITE_PERMISSIONS:
         # 권한이 열린 목적이어도 **작업공간과 경합 조건을 따로 본다.**
         _check_workspace(request, refuse)
+
+    # **준비 단계와 사용자 요청**(UI-01). 종료 다음에 본다 — 둘 다 "이 대화가 지금
+    # 이 실행을 받을 자리인가"이고, 사람이 할 일(업무화·요청 종료 대기)이 앞의 것들보다
+    # 먼저 알려져야 한다.
+    _check_conversation(request, refuse)
 
     # 대상 저장소는 **권한과 무관하게** 본다(P3-R2). 읽기 전용 검토도 어느 코드를
     # 보는지 정해져 있어야 한다.

@@ -22,10 +22,12 @@ from controller.relay import content_hash
 from controller.repository import (
     AcceptanceRefused,
     ConflictError,
+    ConversationRefused,
     NotFoundError,
     PolicyRefused,
     Repository,
 )
+from domain import conversation as convmod
 from domain import ids, intent_doc
 from domain import profiles as case_profiles
 from domain.models import (
@@ -56,17 +58,22 @@ from domain.models import (
     EvidenceKind,
     GateId,
     IntentField,
+    MessageKind,
+    MessageRefKind,
     Permission,
     PreparationStage,
     ReadRequestState,
     RepositorySelectionSource,
+    RequestSettleOutcome,
     ReviewMode,
     RunOutcome,
     RunPurpose,
     RunRole,
     SizingAxis,
     TaskKind,
+    VisibilityAction,
     WorkLevel,
+    WorkStartDecider,
 )
 
 router = APIRouter()
@@ -82,6 +89,16 @@ def _handle(exc: Exception) -> HTTPException:
     if isinstance(exc, AcceptanceRefused):
         # 사유 코드를 구조로 돌려준다. 화면과 직접 API 호출이 같은 코드를 받아야
         # "왜 종료가 확정되지 않았는가"를 같은 근거로 설명할 수 있다.
+        return HTTPException(
+            status_code=409,
+            detail={
+                "refusals": [r.value for r in exc.refusals],
+                "message": str(exc),
+            },
+        )
+    if isinstance(exc, ConversationRefused):
+        # UI-01. 대화 입력의 거절도 구조로 돌려준다. **화면의 비활성 버튼은 잠금이
+        # 아니다** — 직접 호출이 같은 코드를 받아야 서버가 잠근 것이다(FR-11).
         return HTTPException(
             status_code=409,
             detail={
@@ -185,6 +202,10 @@ class RunIn(BaseModel):
     #: 변경이 `quality_gate_policy_changed` 로 거부된다. 적지 않으면 이 검사는
     #: 만들어지지 않는다 — 기대를 말하지 않은 요청에 없는 기대를 지어내지 않는다.
     expected_gate_policy: dict[str, Any] | None = None
+    #: **어느 사용자 요청을 처리하는 실행인가**(UI-01). 적으면 그 요청이 처리 중이고
+    #: 원문이 저장됐을 때만 만들어지며, 요청이 끝나기 전 이 실행이 끝나지 않으면 요청
+    #: 종료 기록이 거부된다. 논의 응답(`discussion_reply`)은 필수다.
+    request_id: str | None = None
 
 
 class RunnerRegisterIn(BaseModel):
@@ -336,10 +357,12 @@ def create_case(
 
 
 @router.get("/api/projects/{project_id}/cases")
-def list_cases(request: Request, project_id: str) -> list[dict[str, Any]]:
+def list_cases(
+    request: Request, project_id: str, archived: str = "include"
+) -> list[dict[str, Any]]:
     try:
-        return _repo(request).list_cases(project_id)
-    except NotFoundError as exc:
+        return _repo(request).list_cases(project_id, archived)
+    except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
 
 
@@ -377,6 +400,9 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     # 정책·Profile·예산·저장소도 같은 응답에 담는다(P3-R1). "지금 어떤 확인 경계와
     # 한도로 진행하는가"와 "그 값이 실제로 강제되는가"를 한 화면에서 본다(FR-14).
     case["policy"] = repo.effective_policy(case_id)
+    # 대화·요청도 같은 응답에 담는다(UI-01). "지금 보낼 수 있는가와 왜 아닌가"를
+    # 서버가 말한다 — 화면이 스스로 판단하지 않는다(FR-11).
+    case["conversation"] = repo.conversation_view(case_id)
     return case
 
 
@@ -512,6 +538,7 @@ def create_run(
             session=payload.session,
             repository_id=payload.repository_id,
             expected_gate_policy=payload.expected_gate_policy,
+            request_id=payload.request_id,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -885,6 +912,11 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
     """
     repo = _repo(request)
     try:
+        # UI-01. **원문을 열기 전에** 본다. 준비 단계에는 의도 버전이 없고, 현재 요청이
+        # 처리 중이면 사람이 쓰는 초안도 일반 입력이므로 기다린다. 뒤에서 거부되면
+        # 원문만 접수된 고아 intake 가 남는다.
+        _guard_user_input(repo, case_id)
+        repo.guard_work_stage(case_id)
         # **P3-R1: 문서 형식은 Case 의 Profile 이 정한다.** 사람이 직접 입력한
         # 초안도 같은 항목 집합을 쓴다 — 경로에 따라 항목이 달라지면 같은 Case 의
         # 의도 버전들이 서로 다른 형식이 된다.
@@ -906,7 +938,7 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
                 else None
             ),
         )
-    except NotFoundError as exc:
+    except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
@@ -1056,6 +1088,9 @@ def submit_feedback(request: Request, case_id: str, payload: FeedbackIn) -> dict
     body = payload.content.encode("utf-8")
     digest = content_hash(body)
     try:
+        # UI-01. 피드백은 **일반 입력**이다. 현재 요청이 처리 중이면 받지 않는다 —
+        # 받으면 피드백 경로가 전송 잠금의 우회로가 된다(FR-11 수용 기준).
+        _guard_user_input(repo, case_id)
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -1156,6 +1191,10 @@ def answer_question(
         question = repo.get_question(question_id)
         if question["case_id"] != case_id:
             raise NotFoundError(f"question not in case {case_id}: {question_id}")
+        # UI-01. **원문을 열기 전에** 대상을 본다 — 이미 답한 질문·대체된 버전의 질문에
+        # 답하면 거부되는데, 그 전에 원문을 접수하면 고아 intake 가 남는다. 질문 답변은
+        # 요청 처리 중에도 받는다(카드 답변은 잠금 대상이 아니다).
+        repo.check_question_answerable(case_id, question_id)
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -1173,6 +1212,19 @@ def answer_question(
         "intake_id": intake["id"],
         "note": "answering a question does not agree to the intent draft",
     }
+
+
+def _guard_user_input(repo: Repository, case_id: str) -> None:
+    """사람의 **일반 입력**을 지금 받을 수 있는가(UI-01·D-70).
+
+    대화 메시지와 같은 판정(`domain.conversation.general_send_state`)을 쓴다. 한 곳만
+    잠그면 다른 입력 경로가 잠금의 우회로가 된다. 종료 Case 는 기존 guard 가 본다 —
+    여기서는 요청 잠금만 판단한다.
+    """
+    repo.get_case(case_id)
+    state = convmod.general_send_state(False, repo.active_request(case_id))
+    if not state.allowed:
+        raise ConversationRefused([state.refusal], state.detail)
 
 
 # ------------------------------------------------------- 원문 열람(일시중계)
@@ -3009,5 +3061,250 @@ def get_one_code_composition(
             raise NotFoundError(f"code composition not found in case: {composition_id}")
         composition["validity"] = repo.composition_validity(case_id, composition_id)
         return composition
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+# ===================================================================== UI-01
+#
+# 대화·요청 기반. **본문이 지나가는 경로는 여기서도 중계뿐이다.** 메시지 본문은 중계
+# 버퍼를 거쳐 소유 Runner 로 가고 제어부에는 순번·원문 참조·해시·짧은 요약만 남는다.
+#
+# **잠금은 서버가 한다**(FR-11). 화면은 `conversation.send` 를 보고 버튼을 비활성화할
+# 수 있지만 그것이 잠금이 아니다 — 아래 경로가 직접 호출에도 같은 거부를 돌려준다.
+
+
+class ConversationIn(BaseModel):
+    """새 대화. **목표·Profile 을 받지 않는다** — 준비 단계에서는 미정이 정상이다(D-69)."""
+
+    title: str = Field(default="새 대화", min_length=1, max_length=200)
+
+
+class MessageRefIn(BaseModel):
+    """메시지에 붙인 자료 참조(D-81). 산출물 또는 등록 저장소의 파일이다.
+
+    파일 본문·이미지·외부 업로드는 받지 않는다. 위치는 "12-18행" 같은 짧은 표시다.
+    """
+
+    kind: MessageRefKind
+    artifact_id: str | None = None
+    revision: int | None = None
+    repository_id: str | None = None
+    path: str | None = Field(default=None, max_length=512)
+    location: str | None = Field(default=None, max_length=200)
+    observed_hash: str | None = Field(default=None, max_length=128)
+
+
+class MessageIn(BaseModel):
+    """대화 메시지 전송(D-70·D-81·D-83).
+
+    `client_message_id` 가 **전송 식별자**다. 같은 값의 재전송은 새 메시지·요청을 만들지
+    않고 같은 결과를 돌려주며, 응답을 받지 못한 전송은 이 값으로 접수 여부를 대조한다.
+    `content` 는 서버에 저장되지 않는다.
+
+    `summary` 는 제어부에 **남는** 목록용 표시다. 본문 앞부분을 잘라 넣지 않는다 — 넣으면
+    PC 에만 있어야 할 원문이 서버에 복제되고, 오프라인 검색(D-84)이 본문을 찾게 된다.
+    """
+
+    client_message_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    kind: MessageKind = MessageKind.GENERAL
+    content: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=200)
+    target_runner_id: str
+    author: str = "owner"
+    #: 정정 대상. `kind = correction` 일 때만.
+    corrects_message_id: str | None = None
+    #: 카드 답변의 대상 질문과 **카드가 보인** 의도 버전. `kind = card_answer` 일 때만.
+    question_id: str | None = None
+    intent_version_id: str | None = None
+    references: list[MessageRefIn] = Field(default_factory=list, max_length=20)
+
+
+class SettleIn(BaseModel):
+    """요청 처리 종료 기록. **요청을 처리하는 쪽**이 적는다.
+
+    `unknown` 은 요청할 수 있는 값이 아니다. 결과를 모르는 실행이 있으면 서버가 그렇게
+    판정하고 잠금을 유지한다.
+    """
+
+    outcome: RequestSettleOutcome
+    actor: str = "system"
+    note: str | None = Field(default=None, max_length=200)
+
+
+class WorkStartIn(BaseModel):
+    """최초 업무화(D-69). 근거는 처리 중 요청을 연 사용자 메시지 하나다."""
+
+    profile: CaseProfile
+    request_message_id: str
+    decided_by: WorkStartDecider
+    interpretation_run_id: str | None = None
+    actor: str = "owner"
+    summary: str = Field(min_length=1, max_length=200)
+
+
+class VisibilityIn(BaseModel):
+    actor: str = "owner"
+
+
+@router.post("/api/projects/{project_id}/conversations", status_code=201)
+def create_conversation(
+    request: Request,
+    project_id: str,
+    payload: ConversationIn,
+    idempotency_key: str | None = Header(default=None),
+) -> Any:
+    """준비 단계의 새 대화(= Case). 목표·Profile 은 업무화 때 정한다."""
+    repo = _repo(request)
+
+    def produce():
+        try:
+            case = repo.create_conversation(project_id, payload.title)
+            return repo.conversation_view(case["id"]), 201
+        except (NotFoundError, ConflictError) as exc:
+            raise _handle(exc)
+
+    body, _status, _created = _idempotent(
+        request, idempotency_key, "create_conversation", produce
+    )
+    return body
+
+
+@router.get("/api/projects/{project_id}/conversations")
+def list_conversations(
+    request: Request, project_id: str, archived: str = "include"
+) -> list[dict[str, Any]]:
+    """대화 목록. **대화 하나가 Case 하나다**(D-69) — 같은 목록을 대화 관점으로 본다."""
+    try:
+        return _repo(request).list_cases(project_id, archived)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.get("/api/cases/{case_id}/conversation")
+def get_conversation(request: Request, case_id: str) -> dict[str, Any]:
+    try:
+        return _repo(request).conversation_view(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/messages", status_code=202)
+def submit_message(
+    request: Request, case_id: str, payload: MessageIn, response: Response
+) -> dict[str, Any]:
+    """메시지를 보낸다. **202 는 접수 대기다** — `receipt = stored` 가 접수 완료다.
+
+    본문은 **기록보다 먼저** 중계 버퍼에 넣는다. 커밋과 중계 사이에 Runner 폴링이 끼면
+    본문 없는 접수가 `lost_before_persist` 로 표시된다(P2 경로의 경합). 기록되지 않으면
+    버퍼에서 뺀다.
+
+    같은 `client_message_id` 의 재전송은 **200** 과 기존 결과다. 만들지 않은 것을 새
+    접수로 보고하지 않는다.
+    """
+    repo = _repo(request)
+    relay = request.app.state.relay
+    body = payload.content.encode("utf-8")
+    digest = content_hash(body)
+    intake_id = ids.new_intake_id()
+    relay.put(intake_id, body)
+    try:
+        result, created = repo.submit_message(
+            case_id,
+            client_message_id=payload.client_message_id,
+            kind=payload.kind,
+            expected_hash=digest,
+            byte_size=len(body),
+            summary=payload.summary,
+            target_runner_id=payload.target_runner_id,
+            actor=payload.author,
+            intake_id=intake_id,
+            corrects_message_id=payload.corrects_message_id,
+            question_id=payload.question_id,
+            intent_version_id=payload.intent_version_id,
+            references=[r.model_dump(mode="json") for r in payload.references],
+        )
+    except (NotFoundError, ConflictError) as exc:
+        relay.drop(intake_id)
+        raise _handle(exc)
+    except BaseException:
+        relay.drop(intake_id)
+        raise
+    if not created:
+        # 재전송이다. 미리 넣은 본문은 쓰이지 않는다 — 원래 접수의 본문은 그 접수의
+        # 키로 따로 있다.
+        relay.drop(intake_id)
+        response.status_code = 200
+    return {
+        **result,
+        "created": created,
+        "note": (
+            "relayed to the owning runner; the message is received only when"
+            " receipt is 'stored'"
+        ),
+    }
+
+
+@router.get("/api/cases/{case_id}/messages/by-client-id/{client_message_id}")
+def find_message(request: Request, case_id: str, client_message_id: str) -> dict[str, Any]:
+    """접수 불명 대조(D-83). **404 는 받은 적 없음**이다 — 그때만 같은 식별자로 다시 보낸다."""
+    repo = _repo(request)
+    try:
+        repo.get_case(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    message = repo.find_message_by_client_id(case_id, client_message_id)
+    if message is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"refusal": "not_received", "message": "no message with that client id"},
+        )
+    return {"message": message, "receipt": message["receipt"]}
+
+
+@router.post("/api/cases/{case_id}/requests/{request_id}/settle")
+def settle_request(
+    request: Request, case_id: str, request_id: str, payload: SettleIn
+) -> dict[str, Any]:
+    """요청 처리 종료를 기록한다. 연결 실행이 끝나지 않았으면 거부한다(D-70)."""
+    try:
+        return _repo(request).settle_request(
+            case_id, request_id, payload.outcome, payload.actor, payload.note
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/work-start", status_code=201)
+def start_work(request: Request, case_id: str, payload: WorkStartIn) -> dict[str, Any]:
+    """준비 단계 대화를 **같은 Case 에서** 업무로 전환한다(D-69)."""
+    try:
+        return _repo(request).start_work(
+            case_id,
+            profile=payload.profile,
+            request_message_id=payload.request_message_id,
+            decided_by=payload.decided_by,
+            actor=payload.actor,
+            summary=payload.summary,
+            interpretation_run_id=payload.interpretation_run_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/archive")
+def archive_case(request: Request, case_id: str, payload: VisibilityIn) -> dict[str, Any]:
+    """보관(D-69). **종료가 아니다** — 종료 상태·요청·실행은 그대로다."""
+    try:
+        return _repo(request).set_visibility(case_id, VisibilityAction.ARCHIVE, payload.actor)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/restore")
+def restore_case(request: Request, case_id: str, payload: VisibilityIn) -> dict[str, Any]:
+    """복원. 같은 대화를 그대로 이어간다."""
+    try:
+        return _repo(request).set_visibility(case_id, VisibilityAction.RESTORE, payload.actor)
     except NotFoundError as exc:
         raise _handle(exc)

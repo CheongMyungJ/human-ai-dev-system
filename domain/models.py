@@ -49,6 +49,14 @@ class CaseKind(str, Enum):
     RESEARCH = "research"
     REFACTORING = "refactoring"
     MAINTENANCE = "maintenance"
+    #: UI-01. **목적이 아직 정해지지 않은 준비 단계 Case**(D-69).
+    #:
+    #: `kind` 는 `NOT NULL` 이라 NULL 을 넣을 수 없고, 그 표를 재구성하면 40여 표가
+    #: 참조하는 중심 표를 다시 만들게 된다. 그래서 "정하지 않았다"를 값으로 남긴다.
+    #: **`feature` 로 채우지 않는다** — 그 값이 곧 기능 개발 조건표를 고르고
+    #: (`admission.choose_profile`), 사람이 고르지 않은 목적이 기록된다. 대응하는
+    #: Profile 이 없으므로 기존 생성 경로에서는 받지 않는다.
+    UNDECIDED = "undecided"
 
 
 class IntentStatus(str, Enum):
@@ -176,6 +184,9 @@ class ArtifactKind(str, Enum):
     RUN_OUTPUT = "run_output"
     DESIGN = "design"
     DEV_PLAN = "dev_plan"
+    #: UI-01. 사용자가 대화에 보낸 메시지(일반·정정·카드 답변). AI 응답은 실행 출력
+    #: (`RUN_OUTPUT`)을 그대로 가리킨다 — 같은 원문을 두 번 저장하지 않는다.
+    MESSAGE = "message"
 
 
 @dataclass(frozen=True)
@@ -413,6 +424,14 @@ class RunPurpose(str, Enum):
     #: 이 목적의 실행 효과는 `run.is_experiment` 로 표시되어 결과 후보에서 제품
     #: 변경과 구별된다. "증거와 임시 변경을 구분한다"(D-66).
     LOCAL_EXPERIMENT = "local_experiment"
+    #: UI-01. **대화의 논의 응답**(D-69·D-70).
+    #:
+    #: 목표·Profile 이 정해지지 않은 준비 단계에서도 대화할 수 있어야 하는데, 기존
+    #: 목적은 전부 의도 초안·동의·준비 흐름에 묶여 있었다. 이 목적은 **읽기 전용**이며
+    #: 한 요청(`conversation_request`)에 묶이고, 그 요청을 연 사용자 메시지를 지시로
+    #: 받는다. 의도·Profile 을 요구하지 않는 대신 **아무 것도 바꾸지 못한다** — 준비
+    #: 단계에서 열리는 목적은 이것 하나다.
+    DISCUSSION_REPLY = "discussion_reply"
 
 
 class AdmissionOutcome(str, Enum):
@@ -431,6 +450,9 @@ class AdmissionProfile(str, Enum):
     FEATURE_INTENT = "feature_intent"
     NON_FEATURE_MINIMAL = "non_feature_minimal"
     INTENT_PRODUCTION = "intent_production"
+    #: UI-01. 대화의 논의 응답. 의도 동의를 요구하지 않는 대신 읽기 전용·요청 연결·
+    #: 그 요청의 원문 저장을 요구한다. 어느 조건표였는지 검사 기록에 남기려고 나눈다.
+    CONVERSATION = "conversation"
 
 
 class AdmissionRefusal(str, Enum):
@@ -566,6 +588,22 @@ class AdmissionRefusal(str, Enum):
     # 차단도 아니다 — 그것까지 막으면 설정을 바꾸려는 사람이 진행 중 업무를 멈추게
     # 된다(D-30 은 정반대를 요구한다).
     QUALITY_GATE_POLICY_CHANGED = "quality_gate_policy_changed"
+
+    # --- UI-01 대화·요청 ---------------------------------------------------
+    #
+    # 준비 단계와 현재 요청은 **실행을 여는 조건**이기도 하다. 사람이 할 일이 서로
+    # 다르므로 하나로 합치지 않는다.
+    #
+    #   준비 단계다          업무화가 먼저다. 논의 응답 말고는 열지 않는다
+    #   요청이 없다          논의 응답은 어떤 메시지에 대한 응답인지가 있어야 한다
+    #   요청이 끝났다        끝난 요청에 새 실행을 붙이지 않는다
+    #   원문이 아직 없다     PC 가 그 메시지를 저장하기 전에는 처리하지 않는다
+    #   지시가 그 메시지가 아니다  응답이 실제로 받은 말에 대한 것이어야 한다
+    CASE_IN_DISCUSSION_STAGE = "case_in_discussion_stage"
+    REQUEST_REQUIRED = "request_required"
+    REQUEST_NOT_PROCESSING = "request_not_processing"
+    REQUEST_ORIGINAL_NOT_STORED = "request_original_not_stored"
+    REQUEST_INSTRUCTION_MISMATCH = "request_instruction_mismatch"
 
 
 class GateId(str, Enum):
@@ -933,6 +971,13 @@ class ContextRefRole(str, Enum):
     #: 만들었는가"가 시스템의 기록이 아니라 **호출자가 넣은 문자열**이 된다.
     #: 고정 컨텍스트 계약이 가장 필요한 단계에서 그 계약이 없던 셈이다.
     CURRENT_PLAN = "current_plan"
+    #: UI-01. **대화에서 사용자가 한 말**(D-69). 업무화 뒤에도 앞선 논의의 원문·결정·
+    #: 명시 금지가 입력에 이어져야 한다(review-context-contract 33행).
+    CONVERSATION_USER_MESSAGE = "conversation_user_message"
+    #: UI-01. **대화에서 AI 가 한 말.** 사용자 메시지와 역할을 나누는 이유는 출처가
+    #: 다르기 때문이다 — AI 의 이전 제안은 사용자의 요구가 아니며 위임 근거도 아니다
+    #: (D-60). 한 역할로 묶으면 다시 쓰는 AI 가 자기 제안을 사용자 요구로 적는다.
+    CONVERSATION_ASSISTANT_MESSAGE = "conversation_assistant_message"
 
 
 # --------------------------------------------------------------------- P3-02
@@ -1095,6 +1140,13 @@ class ProfileSource(str, Enum):
     EXPLICIT = "explicit"
     DERIVED_FROM_KIND = "derived_from_kind"
     NOT_RECORDED = "not_recorded"
+    #: UI-01. 준비 단계 대화의 **업무 요청에서 처음 정했다**(D-69). 누가 정했는지
+    #: (사람 / AI 해석)와 근거 메시지는 `case_work_start` 에 있다. 생성 시점의
+    #: `explicit` 과 나누는 이유는 정한 시점과 근거가 다르기 때문이다.
+    WORK_START = "work_start"
+    #: UI-01. **조회에서만 쓰는 도출값이다**(저장하지 않는다). 준비 단계 대화는 Profile 이
+    #: 아직 없다 — `not_recorded`(R1 이전의 기록되지 않은 과거)와 뜻이 반대다.
+    NOT_YET_DECIDED = "not_yet_decided"
 
 
 class Autonomy(str, Enum):
@@ -1564,3 +1616,169 @@ class CompositionEntrySource(str, Enum):
 
     RUN_EFFECT = "run_effect"
     WORKSPACE_BASE = "workspace_base"
+
+
+# --------------------------------------------------------------------- UI-01
+#
+# 대화·요청 기반. **Case 의 종료 상태·단계·보관은 서로 다른 축이다**(D-69).
+# 하나로 합치면 "보관하면 종료"나 "업무화하면 진행 중" 같은 뜻이 조용히 생긴다.
+
+
+class CaseStage(str, Enum):
+    """목표·Profile 이 정해졌는가(D-69).
+
+    `DISCUSSION` 준비 단계. 목표·Profile 없이 논의한다. 논의 응답 말고는 실행을 열지 않는다
+    `WORK`       업무 단계. Profile 이 정해졌고 기존 진입 조건이 그대로 적용된다
+
+    **`case.stage` 가 NULL 이면 UI-01 이전에 만든 Case** 이며 업무 단계로 도출한다.
+    그때는 kind 없이 Case 를 만들 경로가 없었다. 값을 채워 넣지 않는 이유는 이행이
+    데이터를 쓰지 않게 하기 위해서다 — 출처가 `created_before_stage` 로 드러난다.
+    """
+
+    DISCUSSION = "discussion"
+    WORK = "work"
+
+
+class StageSource(str, Enum):
+    """그 단계가 **어떻게** 정해졌는가. 저장하지 않고 도출한다."""
+
+    CREATED_AS_DISCUSSION = "created_as_discussion"
+    CREATED_AS_WORK = "created_as_work"
+    WORK_STARTED = "work_started"
+    CREATED_BEFORE_STAGE = "created_before_stage"
+
+
+class MessageAuthor(str, Enum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+class MessageKind(str, Enum):
+    """대화 메시지의 종류(D-70·D-71).
+
+    `GENERAL`         일반 전송. **요청을 연다**
+    `CORRECTION`      보낸 메시지의 정정. 원본을 덮지 않는 새 메시지이며 **새 요청을 연다**
+    `CARD_ANSWER`     질문 카드의 답. 요청을 열지도 닫지도 않는다 — 그 질문의 답일 뿐이다
+    `ASSISTANT_REPLY` AI 의 논의 응답. 실행 출력 원문을 가리킨다
+    """
+
+    GENERAL = "general"
+    CORRECTION = "correction"
+    CARD_ANSWER = "card_answer"
+    ASSISTANT_REPLY = "assistant_reply"
+
+
+#: 요청을 여는 메시지 종류. 카드 답변은 여기 없다 — 처리 중에도 받아야 하기 때문이다.
+OPENS_REQUEST: frozenset[MessageKind] = frozenset({MessageKind.GENERAL, MessageKind.CORRECTION})
+
+
+class MessageReceipt(str, Enum):
+    """메시지 원문이 **실제로 접수됐는가**(D-83·NFR-01). intake 에서 도출한다.
+
+    `PENDING`             중계됐지만 PC 가 저장했다는 보고가 없다. 접수가 아니다
+    `STORED`              PC 가 저장했고 서버 참조가 등록됐다. **이것만 접수 완료다**
+    `LOST_BEFORE_PERSIST` 저장 전에 중계 본문이 사라졌다. 새 전송이 필요하다
+    """
+
+    PENDING = "pending"
+    STORED = "stored"
+    LOST_BEFORE_PERSIST = "lost_before_persist"
+
+
+class RequestState(str, Enum):
+    """현재 요청의 처리 상태(D-70). Case 의 종료 상태와 다른 축이다.
+
+    `PROCESSING` 처리 중. 같은 Case 의 일반 전송을 잠근다
+    `COMPLETED`  응답·처리가 끝났다
+    `FAILED`     처리하지 못하고 끝났다. 부분 결과·소비는 그대로 남는다
+    `UNKNOWN`    연결된 실행의 결과를 모른다. **잠금을 풀지 않는다** — 실제 종료·잔류
+                 활동을 확인하는 경로는 UI-02 다(D-76)
+    """
+
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
+#: 일반 전송을 잠그는 요청 상태. DB 의 부분 유일 색인도 같은 집합을 쓴다.
+LOCKING_REQUEST_STATES: frozenset[RequestState] = frozenset(
+    {RequestState.PROCESSING, RequestState.UNKNOWN}
+)
+
+
+class RequestSettleOutcome(str, Enum):
+    """요청 종료 기록에서 **요청할 수 있는** 결과. `unknown` 은 요청하는 값이 아니다."""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class RequestOutcomeReason(str, Enum):
+    """요청이 그 상태로 끝난 이유. 사람이 적은 요약과 별도인 코드다."""
+
+    SETTLED = "settled"
+    RUN_OUTCOME_UNKNOWN = "run_outcome_unknown"
+    ORIGINAL_LOST_BEFORE_PERSIST = "original_lost_before_persist"
+
+
+class WorkStartDecider(str, Enum):
+    """최초 업무화의 Profile 을 누가 정했는가(D-69).
+
+    `PERSON`            사람이 골랐다
+    `AI_INTERPRETATION` AI 가 요청을 해석했다. 그 실행을 함께 기록한다
+    """
+
+    PERSON = "person"
+    AI_INTERPRETATION = "ai_interpretation"
+
+
+class VisibilityAction(str, Enum):
+    """보관·복원(D-69). **목록 가시성이며 종료·취소·삭제가 아니다.**"""
+
+    ARCHIVE = "archive"
+    RESTORE = "restore"
+
+
+class MessageRefKind(str, Enum):
+    """메시지에 붙인 자료 참조(D-81). 이미지·외부 파일은 없다."""
+
+    ARTIFACT = "artifact"
+    PROJECT_FILE = "project_file"
+
+
+class ConversationRefusal(str, Enum):
+    """대화·요청 입력을 받을 수 없는 이유(UI-01).
+
+    **다섯 번째 독립 목록이다.** 진입(`AdmissionRefusal`)·동의·종료·정책 거절과
+    합치지 않는다. 이쪽은 "이 입력을 대화에 접수해도 되는가"를 본다.
+    """
+
+    CASE_ALREADY_CLOSED = "case_already_closed"
+    #: 현재 요청이 처리 중이다. 일반 전송은 그 요청이 끝난 뒤에 한다 — 대기열은 없다.
+    REQUEST_IN_PROGRESS = "request_in_progress"
+    #: 현재 요청의 실행 상태를 모른다. 확인 전에는 새 일반 전송을 받지 않는다(D-76).
+    REQUEST_STATE_UNKNOWN = "request_state_unknown"
+    #: 같은 전송 식별자로 다른 내용이 왔다. 재전송이 아니라 다른 전송이다.
+    CLIENT_MESSAGE_ID_CONFLICT = "client_message_id_conflict"
+    CORRECTION_TARGET_INVALID = "correction_target_invalid"
+    #: 카드가 보인 의도 버전이 최신이 아니거나 그 질문이 그 버전의 것이 아니다.
+    QUESTION_TARGET_STALE = "question_target_stale"
+    QUESTION_ALREADY_ANSWERED = "question_already_answered"
+    QUESTION_NOT_OPEN = "question_not_open"
+    CARD_ANSWER_TARGET_MISSING = "card_answer_target_missing"
+    REFERENCE_INVALID = "reference_invalid"
+    #: 준비 단계에서 업무 산출물(의도 버전)을 만들려 했다. 업무화가 먼저다.
+    CASE_IN_DISCUSSION_STAGE = "case_in_discussion_stage"
+    #: 업무 단계 Case 를 다시 업무화하려 했다. 활성 Profile 이행(D-86)은 다른 작업이다.
+    CASE_NOT_IN_DISCUSSION_STAGE = "case_not_in_discussion_stage"
+    WORK_REQUEST_INVALID = "work_request_invalid"
+    WORK_REQUEST_NOT_STORED = "work_request_not_stored"
+    WORK_REQUEST_NOT_CURRENT = "work_request_not_current"
+    INTERPRETATION_RUN_INVALID = "interpretation_run_invalid"
+    #: 요청에 연결된 실행이 아직 끝나지 않았다. **Run 사이에 잠금을 풀지 않는다.**
+    REQUEST_RUNS_UNFINISHED = "request_runs_unfinished"
+    #: 요청을 연 메시지가 아직 저장되지 않았다. 받지 않은 말을 처리했다고 적지 않는다.
+    REQUEST_ORIGINAL_NOT_STORED = "request_original_not_stored"
+    #: 이미 다른 결과로 끝난 요청이다.
+    REQUEST_ALREADY_SETTLED = "request_already_settled"

@@ -1525,3 +1525,90 @@ def test_progression_records_survive_a_forced_kill(controller):
     assert policy["enforcement"]["autonomy"]["state"] == "enforced"
     assert policy["enforcement"]["controlled_checkpoint"]["state"] == "enforced"
     assert policy["enforcement"]["publish"]["state"] == "not_implemented"
+
+
+def test_conversation_requests_and_lock_survive_a_forced_kill(controller):
+    """UI-01 AC-17 — 준비 Case·메시지·요청·잠금·업무화·보관이 강제 종료 뒤 복원되고,
+    중계 중이던 메시지는 유실로 드러나 그 요청이 거짓 완료되지 않는다."""
+    base = controller.base_url
+    _register_runner(base)
+    project = httpx.post(
+        f"{base}/api/projects",
+        json={"name": "ui01-restart", "repo_path": "C:/tmp/demo", "default_tool_id": "codex"},
+        timeout=10.0,
+    ).json()
+
+    def conversation(title: str) -> str:
+        view = httpx.post(
+            f"{base}/api/projects/{project['id']}/conversations",
+            json={"title": title},
+            timeout=10.0,
+        ).json()
+        return view["case_id"]
+
+    def send(case_id: str, text: str, cid: str) -> httpx.Response:
+        return httpx.post(
+            f"{base}/api/cases/{case_id}/messages",
+            json={
+                "client_message_id": cid,
+                "content": text,
+                "summary": text[:20],
+                "target_runner_id": RUNNER_ID,
+            },
+            timeout=10.0,
+        )
+
+    kept = conversation("저장된 대화")
+    sent = send(kept, "이 범위로 구현해 주세요.", "c-restart-1").json()
+    # Runner 역할로 영속 저장을 보고한다 → 접수 완료.
+    intakes = httpx.get(f"{base}/api/runner/{RUNNER_ID}/intakes", timeout=10.0).json()
+    assert [i["intake_id"] for i in intakes] == [sent["message"]["intake_id"]]
+    httpx.post(
+        f"{base}/api/runner/intakes/{sent['message']['intake_id']}/stored",
+        json={"runner_id": RUNNER_ID, "content_hash": sent["message"]["content_hash"]},
+        timeout=10.0,
+    ).raise_for_status()
+    started = httpx.post(
+        f"{base}/api/cases/{kept}/work-start",
+        json={
+            "profile": "feature",
+            "request_message_id": sent["message"]["id"],
+            "decided_by": "person",
+            "summary": "구현 요청",
+        },
+        timeout=10.0,
+    )
+    assert started.status_code == 201, started.text
+    httpx.post(f"{base}/api/cases/{kept}/archive", json={"actor": "owner"}, timeout=10.0)
+
+    lost = conversation("중계 중인 대화")
+    pending = send(lost, "PC 가 아직 저장하지 않은 말", "c-restart-2").json()
+    assert pending["receipt"] == "pending"
+
+    # ---- 강제 종료 ----
+    controller.kill_hard()
+    controller.start()
+
+    view = httpx.get(f"{base}/api/cases/{kept}/conversation", timeout=10.0).json()
+    assert view["stage"] == "work" and view["stage_source"] == "work_started"
+    assert view["profile_version"] == "2"
+    assert view["work_start"]["request_message_id"] == sent["message"]["id"]
+    assert view["messages"][0]["receipt"] == "stored"
+    assert view["current_request"]["id"] == sent["request"]["id"]
+    assert view["current_request"]["state"] == "processing"
+    assert view["visibility"]["archived"] is True
+    # **잠금도 복원된다.** 메모리에 "처리 중"을 두지 않았기 때문이다.
+    again = send(kept, "재시작 뒤 새 요청", "c-restart-3")
+    assert again.status_code == 409
+    assert again.json()["detail"]["refusals"] == ["request_in_progress"]
+    # 같은 식별자의 재전송은 재시작 뒤에도 새 메시지를 만들지 않는다.
+    replay = send(kept, "이 범위로 구현해 주세요.", "c-restart-1")
+    assert replay.status_code == 200 and replay.json()["created"] is False
+
+    gone = httpx.get(f"{base}/api/cases/{lost}/conversation", timeout=10.0).json()
+    assert gone["messages"][0]["receipt"] == "lost_before_persist"
+    assert gone["requests"][0]["state"] == "failed"
+    assert gone["requests"][0]["outcome_reason"] == "original_lost_before_persist"
+    # 잠금이 풀려 새 식별자로 다시 보낼 수 있다. 자동으로 다시 보내지 않았다.
+    assert len(gone["messages"]) == 1
+    assert send(lost, "다시 보냅니다", "c-restart-4").status_code == 202

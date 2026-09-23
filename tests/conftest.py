@@ -293,6 +293,8 @@ class FakeCliExecutor:
         self.draft_response = FAKE_DRAFT_RESPONSE
         self.review_response = FAKE_REVIEW_CLEAN
         self.analysis_response = "저장소를 읽고 확인했습니다. 변경한 것은 없습니다."
+        #: UI-01. 논의 응답. 글이며 JSON 계약이 없다.
+        self.discussion_response = "좋은 질문입니다. 두 가지 방향이 있습니다. 어느 쪽이 맞을까요?"
         self.design_response = FAKE_DESIGN_FULL
         self.plan_response = FAKE_PLAN_FULL
         self.combined_response = FAKE_PLAN_FULL
@@ -338,6 +340,8 @@ class FakeCliExecutor:
             return self.implementation_response
         if prompt.startswith(prompt_templates.VERIFICATION_RUN_PROMPT[:40]):
             return self.verification_response
+        if prompt.startswith(prompt_templates.DISCUSSION_REPLY_PROMPT[:40]):
+            return self.discussion_response
         return self.analysis_response
 
     def count_effects(self, case_id: str) -> int:
@@ -1296,6 +1300,133 @@ class Harness:
 
     def run_commands(self, run_id: str) -> list[dict[str, Any]]:
         return self.client.get(f"/api/runs/{run_id}").json()["commands"]
+
+    # ------------------------------------------------------ UI-01 도우미
+
+    def create_conversation(self, project_id: str, title: str = "새 대화") -> dict[str, Any]:
+        """준비 단계 대화(= Case). 목표·Profile 없이 시작한다."""
+        response = self.client.post(
+            f"/api/projects/{project_id}/conversations", json={"title": title}
+        )
+        assert response.status_code == 201, response.text
+        return response.json()
+
+    def conversation(self, case_id: str) -> dict[str, Any]:
+        response = self.client.get(f"/api/cases/{case_id}/conversation")
+        assert response.status_code == 200, response.text
+        return response.json()
+
+    def post_message(
+        self,
+        case_id: str,
+        content: str,
+        client_message_id: str,
+        kind: str = "general",
+        summary: str | None = None,
+        **extra: Any,
+    ):
+        """메시지를 보낸다. **응답만 돌려준다** — 접수(Runner 저장)는 하지 않는다."""
+        body: dict[str, Any] = {
+            "client_message_id": client_message_id,
+            "kind": kind,
+            "content": content,
+            # 요약은 본문에서 잘라 내지 않는 표시 문구다(제어부에 남는다).
+            "summary": summary or f"메시지 {client_message_id}",
+            "target_runner_id": RUNNER_ID,
+        }
+        body.update(extra)
+        return self.client.post(f"/api/cases/{case_id}/messages", json=body)
+
+    def send_message(
+        self,
+        case_id: str,
+        content: str,
+        client_message_id: str,
+        kind: str = "general",
+        **extra: Any,
+    ) -> dict[str, Any]:
+        """메시지를 보내고 **Runner 가 저장할 때까지** 진행한다(접수 완료)."""
+        response = self.post_message(case_id, content, client_message_id, kind, **extra)
+        assert response.status_code == 202, response.text
+        self.agent.persist_pending_intakes()
+        found = self.client.get(
+            f"/api/cases/{case_id}/messages/by-client-id/{client_message_id}"
+        ).json()
+        assert found["receipt"] == "stored", found
+        return {**response.json(), "message": found["message"], "receipt": found["receipt"]}
+
+    def discussion_reply(
+        self,
+        case_id: str,
+        request_id: str,
+        run_id: str,
+        execute: bool = True,
+        instruction: dict[str, Any] | None = None,
+    ):
+        """그 요청에 대한 **논의 응답** 실행. 지시는 요청을 연 메시지 원문이다."""
+        request = self.client.get(f"/api/cases/{case_id}/conversation").json()
+        opening_id = next(
+            r["opened_by_message_id"] for r in request["requests"] if r["id"] == request_id
+        )
+        opening = next(m for m in request["messages"] if m["id"] == opening_id)
+        target = instruction or opening
+        response = self.client.post(
+            f"/api/cases/{case_id}/runs",
+            json={
+                "run_id": run_id,
+                "instruction_artifact_id": target["artifact_id"],
+                "instruction_artifact_rev": target["artifact_rev"],
+                "purpose": "discussion_reply",
+                "role": "author",
+                "tool_id": FAKE_TOOL_ID,
+                "mode": FAKE_TOOL_MODE,
+                "permission": "read_only",
+                "request_id": request_id,
+            },
+        )
+        if execute and response.status_code == 201:
+            self.agent.poll_once()
+        return response
+
+    def settle(
+        self, case_id: str, request_id: str, outcome: str = "completed", note: str | None = None
+    ):
+        body: dict[str, Any] = {"outcome": outcome, "actor": "system"}
+        if note is not None:
+            body["note"] = note
+        return self.client.post(
+            f"/api/cases/{case_id}/requests/{request_id}/settle", json=body
+        )
+
+    def start_work(
+        self,
+        case_id: str,
+        request_message_id: str,
+        profile: str = "feature",
+        decided_by: str = "person",
+        interpretation_run_id: str | None = None,
+        summary: str = "이 범위로 구현 요청",
+    ):
+        body: dict[str, Any] = {
+            "profile": profile,
+            "request_message_id": request_message_id,
+            "decided_by": decided_by,
+            "actor": "owner",
+            "summary": summary,
+        }
+        if interpretation_run_id is not None:
+            body["interpretation_run_id"] = interpretation_run_id
+        return self.client.post(f"/api/cases/{case_id}/work-start", json=body)
+
+    def intake_count(self) -> int:
+        """제어부에 있는 접수 행의 수. 거부된 전송이 고아 원문을 남기지 않았는지 본다."""
+        import sqlite3
+
+        conn = sqlite3.connect(self.controller_config.db_path)
+        try:
+            return conn.execute("SELECT COUNT(*) FROM intake").fetchone()[0]
+        finally:
+            conn.close()
 
 
 @pytest.fixture

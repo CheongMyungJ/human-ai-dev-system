@@ -1,0 +1,165 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 5,
+  "case_id": "case-eecedcfa3cd0db59",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-ui01-C-154607866",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "defect_fix",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "observed_behavior",
+    "expected_behavior",
+    "expectation_basis",
+    "occurrence_conditions",
+    "restore_scope"
+  ],
+  "fields": {
+    "goal": {
+      "text": "store.py에서 save() 이후 list_items()가 이전 값을 반환하는 결함을 수정하여 기대 동작을 복원한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "save() 직후 list_items()를 호출하면 새로 저장한 값이 조회된다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "store.py의 save() 이후 list_items() 조회 결과가 최신 저장 내용을 반영하도록 하는 수정과 필요한 검증.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "README 등을 포함한 문서 파일의 생성 및 수정.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "constraints": {
+      "text": "미재현만으로 해결을 선언하지 않는다. 아직 확인하지 않은 원인이나 수정 방법을 미리 확정하지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "캐시 방식에 영향을 줄 수 있는 실제 목록 규모, 조회 빈도 및 유지해야 할 읽기 성능 요구는 확인되지 않았다.",
+      "state": "proposed",
+      "origin": "ai_assumption"
+    },
+    "observed_behavior": {
+      "text": "사용자가 제시한 현상은 save() 이후에도 list_items()가 옛 값을 보여 주는 것이다. 이번 실행에서 코드를 직접 확인하거나 현상을 재현하지는 않았다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_behavior": {
+      "text": "save() 직후의 list_items() 조회 결과에 새로 저장한 값이 반영되어야 한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expectation_basis": {
+      "text": "사용자가 기대 동작을 “save() 직후 list_items()가 새 값을 보여야 합니다”라고 명시했다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "occurrence_conditions": {
+      "text": "사용자가 제시한 발생 시점은 save() 이후 list_items()를 호출할 때이며, 영향은 최신 저장 값 대신 이전 값을 조회하는 것이다. 구체적인 재현 입력과 실행 환경은 미확인이다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "restore_scope": {
+      "text": "save()로 저장한 내용과 그 직후 list_items()가 반환하는 값의 일치.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "캐시 처리 방식을 설계할 때 유지해야 할 읽기 성능 요구가 있나요? 실제 목록 규모와 조회 빈도에 대해 알려진 조건이 있다면 함께 확인해 주세요.",
+      "summary": "조회 성능 요구 확인",
+      "decide_at": "design",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "expected_behavior",
+      "text": "기존 값을 list_items()로 조회한 후 save()로 다른 값을 저장하면, 바로 이어지는 list_items() 조회가 이전 값 대신 새로 저장한 값을 반환한다.",
+      "method": "기존 인터페이스에 맞는 입력으로 선행 조회, 변경 값 저장, 즉시 재조회 순서의 회귀 검증을 구성한다. 수정 전후 결과를 비교하고 수정 후 반환값이 기대한 저장 내용과 일치하는지 단언한다. 수정 전 현상이 재현되지 않으면 발생 조건을 추가 확인하며, 미재현만으로 통과 처리하지 않는다.",
+      "summary": "저장 직후 최신 값 조회",
+      "method_summary": "선행 조회가 있는 저장·재조회 회귀 검증",
+      "obligation": "restoration"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "exclusions",
+      "text": "이 작업으로 README 등을 포함한 문서 파일이 생성되거나 수정되지 않는다.",
+      "method": "작업 시작 상태와 완료 상태의 파일 목록 및 변경 내용을 비교하여 이 작업에서 추가하거나 수정한 문서 파일이 없는지 확인한다.",
+      "summary": "문서 변경 금지 준수",
+      "method_summary": "작업 전후 문서 파일 변경 비교",
+      "obligation": "preservation"
+    }
+  ],
+  "objectives": [],
+  "sizing": {
+    "recommended_level": "standard",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "low",
+        "evidence": "사용자가 저장 직후 최신 값 조회라는 기대 동작과 문서 변경 금지를 명시했다.",
+        "judgement": "복원할 동작과 명시적 제외 범위가 분명하다.",
+        "unconfirmed": "성능 보존 요구의 유무."
+      },
+      {
+        "axis": "change_scope",
+        "weight": "insufficient_evidence",
+        "evidence": "store.py의 save()와 list_items()가 지목되었지만 현재 코드와 호출부를 직접 확인하지 않았다.",
+        "judgement": "수정 대상은 좁게 제시되었으나 실제 변경 범위와 의존 관계는 확정할 수 없다.",
+        "unconfirmed": "캐시 소유 범위, 호출부 의존성, 관련 테스트 구성."
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "저장 형식과 반환 데이터 계약에 관한 확정 자료가 없다.",
+        "judgement": "호환성과 데이터 처리에 미칠 영향을 판단할 근거가 부족하다.",
+        "unconfirmed": "저장 형식, 반환값 계약, 저장 실패 처리 및 외부 파일 변경 처리."
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "저장 데이터의 성격과 파일 접근 권한에 대한 정보가 없다.",
+        "judgement": "권한·보안·민감 데이터 영향은 미확인이다.",
+        "unconfirmed": "저장 데이터의 민감도와 관련 접근 권한."
+      },
+      {
+        "axis": "reversibility",
+        "weight": "insufficient_evidence",
+        "evidence": "구현 방식, 운영 환경, 복구 절차를 확인하지 않았다.",
+        "judgement": "수정의 가역성과 실패 비용을 아직 평가할 수 없다.",
+        "unconfirmed": "수정이 영속 데이터에 미치는 영향과 되돌리기 방법."
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "medium",
+        "evidence": "이전 AI가 캐시 제거를 제안했으나 사용자가 그 방법을 확정하지 않았고 현재 구현을 직접 검증하지 않았다.",
+        "judgement": "목표는 명확하지만 원인 검증과 수정 방식 선택이 남아 있다.",
+        "unconfirmed": "정확한 재현 조건, 실제 캐시 처리, 적합한 수정 방식."
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "insufficient_evidence",
+        "evidence": "저장 전후 조회 결과를 비교하는 검증은 제안할 수 있으나 실행 환경과 테스트 도구는 확인하지 않았다.",
+        "judgement": "검증 방향은 분명하지만 실제 검증 난도는 미확정이다.",
+        "unconfirmed": "재현 가능한 입력, 테스트 실행 방법, 파일 및 캐시 상태 격리 방법."
+      }
+    ]
+  }
+}

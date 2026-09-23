@@ -1275,11 +1275,14 @@ def test_a_v14_database_keeps_its_criteria_and_invents_no_obligation(tmp_path):
     # v1 Case 에는 완료 계약이 없다 — 조회가 그렇게 말한다.
     assert repo.completion_contract("case-1") is None
     assert repo.completion_meaning("case-1")["contract"] is None
+    # 이 시험의 뜻은 "v14 DB 가 **현재 판**으로 이행되고 그 사이 v15 규칙이 적용된다"다.
+    # P4-03 시점에는 현재 판이 15 였다. UI-01(v16)부터는 v16 까지 이어서 가며, v16 자체의
+    # 고정은 `test_a_v15_database_gets_no_conversation_it_never_had` 가 맡는다.
     assert (
         conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
         == db.SCHEMA_VERSION
-        == 15
     )
+    assert db.SCHEMA_VERSION >= 15
 
     # 새 컬럼의 값 제약. 본문이나 모르는 이름을 넣을 수 없다.
     with pytest.raises(sqlite3.IntegrityError):
@@ -1292,4 +1295,128 @@ def test_a_v14_database_keeps_its_criteria_and_invents_no_obligation(tmp_path):
     again = conn.execute("SELECT * FROM success_criterion WHERE id = 'crit-1'").fetchone()
     assert again["obligation"] is None
     assert conn.execute("SELECT COUNT(*) FROM success_criterion").fetchone()[0] == 1
+    conn.close()
+
+
+# ===================================================================== UI-01
+
+
+def _v15_schema() -> str:
+    """UI-01 표식이 없고 v15 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v15" in schema and "스키마 v16" not in schema:
+            return schema
+    pytest.skip("v15 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v15_database_gets_no_conversation_it_never_had(tmp_path):
+    """v15 → v16 (UI-01 AC-16).
+
+    **이 시험이 UI-01 의 소급 위험을 지킨다.** 옛 Case 에 단계·메시지·요청을 채우면
+    그 Case 가 "대화에서 업무화됐다"로 읽히고, 없던 위임 근거·잠금이 생긴다. 이행은
+    컬럼과 표만 더하고 값은 NULL 로 둬야 하며, 옛 Case 는 **업무 단계로 도출**된다.
+    """
+    path = tmp_path / "controller.sqlite3"
+    old = sqlite3.connect(path)
+    old.row_factory = sqlite3.Row
+    old.executescript(_v15_schema())
+    # 실제 v15 DB 에는 v8 이행이 붙인 Profile 컬럼이 있다(커밋된 `schema.sql` 에는 없다).
+    for column in ("profile", "profile_version", "profile_source"):
+        old.execute(f'ALTER TABLE "case" ADD COLUMN {column} TEXT')
+    now = utc_now()
+    old.execute("INSERT INTO schema_version (version, applied_at) VALUES (15, ?)", (now,))
+    old.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    old.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    # 정의판 1·2 Case 와 R1 이전 Case. **이행이 어느 것도 바꾸지 않는다.**
+    for case_id, kind, profile, version in (
+        ("case-v1", "bug", "defect_fix", "1"),
+        ("case-v2", "feature", "feature", "2"),
+        ("case-pre", "analysis", None, None),
+    ):
+        old.execute(
+            'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at,'
+            " profile, profile_version, profile_source)"
+            " VALUES (?, 'prj-1', ?, ?, 'received', ?, ?, ?, ?, ?)",
+            (case_id, case_id, kind, now, now, profile, version,
+             "explicit" if profile else None),
+        )
+    old.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at)"
+        " VALUES ('runner-1','old','old-host','registered',?)", (now,)
+    )
+    old.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
+        " content_hash, byte_size, summary, availability, created_at)"
+        " VALUES ('art-1',1,'case-v2','instruction','runner-1','h',10,'지시','available',?)",
+        (now,),
+    )
+    old.execute(
+        "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
+        " instruction_artifact_id, instruction_artifact_rev, status, assignment_generation,"
+        " created_at) VALUES ('run-1','case-v2','task-1','author','codex','exec','read_only',"
+        " 'art-1',1,'finished',1,?)",
+        (now,),
+    )
+    old.commit()
+    old.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+
+    rows = {
+        r["id"]: r for r in conn.execute('SELECT * FROM "case"').fetchall()
+    }
+    # **단계를 채워 넣지 않는다.** NULL 이 "UI-01 이전 Case" 다.
+    assert all(rows[c]["stage"] is None for c in rows)
+    assert rows["case-v1"]["profile_version"] == "1"
+    assert rows["case-v2"]["profile_version"] == "2"
+    assert rows["case-pre"]["profile"] is None
+    assert rows["case-v1"]["kind"] == "bug"
+    run = conn.execute("SELECT request_id FROM run WHERE run_id = 'run-1'").fetchone()
+    assert run["request_id"] is None
+    for table in (
+        "conversation_message",
+        "conversation_request",
+        "conversation_message_ref",
+        "case_work_start",
+        "case_visibility_event",
+    ):
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+    assert conn.execute("SELECT COUNT(*) FROM delegation_basis").fetchone()[0] == 0
+
+    repo = Repository(conn)
+    for case_id in rows:
+        view = repo.conversation_view(case_id)
+        # 옛 Case 는 업무 단계로 **도출**되며 그 출처가 드러난다.
+        assert view["stage"] == "work"
+        assert view["stage_source"] == "created_before_stage"
+        assert view["messages"] == [] and view["requests"] == []
+        assert view["send"]["general"]["allowed"] is True
+        assert view["visibility"]["archived"] is False
+    assert (
+        conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        == db.SCHEMA_VERSION
+        == 16
+    )
+
+    # 새 값의 제약. 모르는 단계·상태를 넣을 수 없다.
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("UPDATE \"case\" SET stage = 'chatting' WHERE id = 'case-v1'")
+
+    # 반복 이행이 멱등이다.
+    db.migrate(conn)
+    again = conn.execute('SELECT stage FROM "case" WHERE id = ?', ("case-v2",)).fetchone()
+    assert again["stage"] is None
+    assert conn.execute("SELECT COUNT(*) FROM conversation_request").fetchone()[0] == 0
     conn.close()

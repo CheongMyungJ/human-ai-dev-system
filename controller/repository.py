@@ -27,6 +27,7 @@ from controller.db import (
     utc_now,
 )
 from domain import completion_meaning as meaningmod
+from domain import conversation as convmod
 from domain import ids, prep_doc, profiles, quality
 from domain import progression
 from domain.progression import (
@@ -60,6 +61,8 @@ from domain.budget import (
 from domain.models import (
     BUDGET_MEASUREMENT,
     BUDGET_UNIT,
+    LOCKING_REQUEST_STATES,
+    OPENS_REQUEST,
     POLICY_VERSION,
     AcceptanceMode,
     AcceptanceRefusal,
@@ -81,6 +84,7 @@ from domain.models import (
     CaseKind,
     CaseProfile,
     CaseRelationKind,
+    CaseStage,
     CaseStatus,
     CheckpointState,
     ClosureKind,
@@ -90,6 +94,7 @@ from domain.models import (
     ConclusionRule,
     ConfirmationState,
     ConformanceMethod,
+    ConversationRefusal,
     ContentOrigin,
     ContextRefRole,
     ControlledCheckpoint,
@@ -114,6 +119,10 @@ from domain.models import (
     IntentField,
     IntentStatus,
     Materiality,
+    MessageAuthor,
+    MessageKind,
+    MessageReceipt,
+    MessageRefKind,
     Permission,
     PolicyRefusal,
     PolicyState,
@@ -124,6 +133,9 @@ from domain.models import (
     ReadRequestState,
     RepositorySelectionSource,
     RepositorySource,
+    RequestOutcomeReason,
+    RequestSettleOutcome,
+    RequestState,
     ReviewMode,
     RunOutcome,
     RunPurpose,
@@ -134,12 +146,15 @@ from domain.models import (
     SizingSource,
     SizingState,
     StageReviewState,
+    StageSource,
     TaskKind,
     TaskRelation,
     TaskState,
+    VisibilityAction,
     WorkGraphSource,
     WorkGraphState,
     WorkLevel,
+    WorkStartDecider,
     WorkspaceAllowanceSource,
     WorkspaceState,
 )
@@ -187,6 +202,27 @@ class PolicyRefused(ConflictError):
     def __init__(self, refusals: list[PolicyRefusal]) -> None:
         self.refusals = refusals
         super().__init__("policy refused: " + ", ".join(r.value for r in refusals))
+
+
+class ConversationRefused(ConflictError):
+    """대화·요청 입력을 접수할 수 없다(UI-01).
+
+    **다섯 번째 독립 거절 목록이다**(`ConversationRefusal`). 화면과 직접 API 호출이
+    같은 코드를 받아야 "왜 보낼 수 없는가"를 같은 근거로 설명할 수 있다 — 버튼을
+    비활성화하는 것만으로는 잠금이 아니다(FR-11 수용 기준).
+    """
+
+    def __init__(self, refusals: list[ConversationRefusal], message: str) -> None:
+        self.refusals = refusals
+        super().__init__(message)
+
+
+class RequestNotProcessing(ConflictError):
+    """Run 생성 트랜잭션 **안에서** 요청이 이미 끝난 것을 발견했다(UI-01).
+
+    진입 검사는 트랜잭션 밖에서 돌기 때문에 그 사이 요청 종료가 끼어들 수 있다. 예산의
+    `BudgetExhausted` 와 같은 자리다 — 검사만 두면 경합에서 끝난 요청에 실행이 붙는다.
+    """
 
 
 class BudgetExhausted(ConflictError):
@@ -464,6 +500,13 @@ class Repository:
         self.get_project(project_id)
         if profile is None and kind is None:
             raise ConflictError("case needs a profile or a kind")
+        if profile is None and CaseKind(kind) is CaseKind.UNDECIDED:
+            # UI-01. `undecided` 는 준비 단계 대화의 값이다. 이 경로로 받으면 Profile 을
+            # 유도할 대응이 없고, 목적 없는 **업무** Case 가 생긴다. 대화 생성으로 간다.
+            raise ConflictError(
+                "kind 'undecided' is only for a discussion-stage conversation;"
+                " create it through POST /api/projects/{project_id}/conversations"
+            )
         if profile is not None:
             resolved_profile = CaseProfile(profile)
             resolved_kind = profiles.KIND_FOR_PROFILE[resolved_profile]
@@ -477,8 +520,8 @@ class Repository:
         with transaction(self.conn):
             self.conn.execute(
                 'INSERT INTO "case" (id, project_id, title, kind, status, created_at,'
-                " updated_at, profile, profile_version, profile_source)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " updated_at, profile, profile_version, profile_source, stage)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     case_id,
                     project_id,
@@ -490,30 +533,56 @@ class Repository:
                     resolved_profile.value,
                     profiles.CURRENT_PROFILE_VERSION,
                     source.value,
+                    # UI-01. 목적을 갖고 만든 Case 는 처음부터 업무 단계다.
+                    CaseStage.WORK.value,
                 ),
             )
-            self.conn.execute(
-                "INSERT INTO case_policy"
-                " (id, case_id, revision, autonomy, autonomy_source, policy_version,"
-                "  set_by, reason_summary, state, created_at)"
-                " VALUES (?, ?, 1, ?, ?, ?, 'system', NULL, ?, ?)",
-                (
-                    ids.new_id("pol"),
-                    case_id,
-                    Autonomy.ASK_ON_DECISION.value,
-                    AutonomySource.SYSTEM_DEFAULT.value,
-                    POLICY_VERSION,
-                    PolicyState.CURRENT.value,
-                    now,
-                ),
-            )
+            self._insert_default_policy(case_id, now)
         return self.get_case(case_id)
 
-    def list_cases(self, project_id: str) -> list[dict[str, Any]]:
+    def _insert_default_policy(self, case_id: str, now: str) -> None:
+        """새 Case 의 기본 Autonomy 행. **트랜잭션 안에서 부른다.**
+
+        준비 단계 Case 도 같은 행을 받는다(UI-01) — 준비 단계는 Autonomy 와 별개이며
+        (D-69), 논의 중 정한 Autonomy·예산·저장소가 업무화 뒤에도 그대로 이어져야 한다.
+        """
+        self.conn.execute(
+            "INSERT INTO case_policy"
+            " (id, case_id, revision, autonomy, autonomy_source, policy_version,"
+            "  set_by, reason_summary, state, created_at)"
+            " VALUES (?, ?, 1, ?, ?, ?, 'system', NULL, ?, ?)",
+            (
+                ids.new_id("pol"),
+                case_id,
+                Autonomy.ASK_ON_DECISION.value,
+                AutonomySource.SYSTEM_DEFAULT.value,
+                POLICY_VERSION,
+                PolicyState.CURRENT.value,
+                now,
+            ),
+        )
+
+    def list_cases(self, project_id: str, archived: str = "include") -> list[dict[str, Any]]:
+        """Project 의 Case 목록.
+
+        **UI-01: 단계·보관·현재 요청을 함께 싣는다.** 기존 행의 키는 그대로이고 더하기만
+        한다. `archived` 는 `include`(기본, 기존 동작) | `exclude` | `only` 다 — 보관은
+        목록 가시성이며 종료가 아니다(D-69).
+        """
+        if archived not in ("include", "exclude", "only"):
+            raise ConflictError("archived must be include, exclude or only")
         rows = self.conn.execute(
             'SELECT * FROM "case" WHERE project_id = ? ORDER BY created_at DESC', (project_id,)
         ).fetchall()
-        return [dict(r) for r in rows]
+        out = []
+        for row in rows:
+            case = self._with_conversation_summary(dict(row))
+            if archived == "exclude" and case["archived"]:
+                continue
+            if archived == "only" and not case["archived"]:
+                continue
+            out.append(case)
+        return out
 
     def get_case(self, case_id: str) -> dict[str, Any]:
         row = self.conn.execute('SELECT * FROM "case" WHERE id = ?', (case_id,)).fetchone()
@@ -615,44 +684,76 @@ class Repository:
         self.get_runner(target_runner_id)
         artifact_id = artifact_id or ids.new_artifact_id()
         intake_id = ids.new_intake_id()
-        now = utc_now()
-        short = _summary(summary)
         with transaction(self.conn):
-            self.conn.execute(
-                "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
-                " byte_size, owner_runner_id, availability, summary, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    artifact_id,
-                    revision,
-                    case_id,
-                    kind.value,
-                    expected_hash,
-                    byte_size,
-                    target_runner_id,
-                    Availability.PENDING.value,
-                    short,
-                    now,
-                ),
-            )
-            self.conn.execute(
-                "INSERT INTO intake (id, case_id, kind, artifact_id, revision, target_runner_id,"
-                " state, expected_hash, byte_size, summary, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
-                (
-                    intake_id,
-                    case_id,
-                    kind.value,
-                    artifact_id,
-                    revision,
-                    target_runner_id,
-                    expected_hash,
-                    byte_size,
-                    short,
-                    now,
-                ),
+            self._insert_intake_rows(
+                intake_id=intake_id,
+                case_id=case_id,
+                kind=kind,
+                artifact_id=artifact_id,
+                revision=revision,
+                target_runner_id=target_runner_id,
+                expected_hash=expected_hash,
+                byte_size=byte_size,
+                summary=summary,
+                now=utc_now(),
             )
         return self.get_intake(intake_id)
+
+    def _insert_intake_rows(
+        self,
+        *,
+        intake_id: str,
+        case_id: str,
+        kind: ArtifactKind,
+        artifact_id: str,
+        revision: int,
+        target_runner_id: str,
+        expected_hash: str,
+        byte_size: int,
+        summary: str,
+        now: str,
+    ) -> None:
+        """`pending` 참조와 접수 행을 넣는다. **호출자의 트랜잭션 안에서 돈다.**
+
+        UI-01 의 메시지 접수가 메시지·요청과 **같은 트랜잭션**에 이것을 넣어야 해서
+        나눴다. 따로 커밋하면 접수는 있는데 메시지가 없거나, 메시지는 있는데 요청이 없는
+        중간 상태가 남는다.
+        """
+        short = _summary(summary)
+        self.conn.execute(
+            "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+            " byte_size, owner_runner_id, availability, summary, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                artifact_id,
+                revision,
+                case_id,
+                kind.value,
+                expected_hash,
+                byte_size,
+                target_runner_id,
+                Availability.PENDING.value,
+                short,
+                now,
+            ),
+        )
+        self.conn.execute(
+            "INSERT INTO intake (id, case_id, kind, artifact_id, revision, target_runner_id,"
+            " state, expected_hash, byte_size, summary, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+            (
+                intake_id,
+                case_id,
+                kind.value,
+                artifact_id,
+                revision,
+                target_runner_id,
+                expected_hash,
+                byte_size,
+                short,
+                now,
+            ),
+        )
 
     def get_intake(self, intake_id: str) -> dict[str, Any]:
         row = self.conn.execute("SELECT * FROM intake WHERE id = ?", (intake_id,)).fetchone()
@@ -705,7 +806,59 @@ class Repository:
                 "UPDATE artifact_ref SET availability = ? WHERE artifact_id = ? AND revision = ?",
                 (Availability.LOST_BEFORE_PERSIST.value, intake["artifact_id"], intake["revision"]),
             )
+            # UI-01. **유실이 거짓 완료로 남지 않게 한다.** 같은 트랜잭션이어야 유실은
+            # 적혔는데 그 결과가 반영되지 않은 중간 상태가 생기지 않는다.
+            self._after_intake_lost(intake)
         return self.get_intake(intake_id)
+
+    def _after_intake_lost(self, intake: dict[str, Any]) -> None:
+        """원문이 저장 전에 사라졌을 때 **그 원문에 기대던 기록**을 되돌린다(UI-01).
+
+        1. **답변이 유실되면 질문을 다시 연다.** 답했다고 기록된 질문의 원문이 PC 에
+           닿지 않았다면 다시 쓰는 AI 가 그 답을 읽을 수 없고(고정 컨텍스트에 "읽지
+           못함"으로 간다) 질문은 해결되지 않았다. 누가 언제 답하려 했는지는 대화
+           메시지에 남는다.
+        2. **요청을 연 메시지가 유실되고 연결 실행이 없으면 요청을 실패로 닫는다.**
+           받지 않은 말은 처리할 수 없고, 닫지 않으면 잠금이 영원히 남는다. 실행이
+           있으면 닫지 않는다 — 그 실행이 무엇을 했는지 처리하는 쪽이 적어야 한다.
+
+        **호출자의 트랜잭션 안에서 돈다.**
+        """
+        self.conn.execute(
+            "UPDATE intent_question SET state = ?, answered_by = NULL, answered_at = NULL,"
+            " answer_artifact_id = NULL WHERE answer_artifact_id = ? AND state = ?",
+            (
+                QuestionState.OPEN.value,
+                intake["artifact_id"],
+                QuestionState.ANSWERED.value,
+            ),
+        )
+        row = self.conn.execute(
+            "SELECT r.id, r.state FROM conversation_request r"
+            " JOIN conversation_message m ON m.id = r.opened_by_message_id"
+            " WHERE m.intake_id = ?",
+            (intake["id"],),
+        ).fetchone()
+        if row is None:
+            return
+        linked = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM run WHERE request_id = ?", (row["id"],)
+        ).fetchone()["n"]
+        if convmod.lost_original_fails_request(
+            row["state"], MessageReceipt.LOST_BEFORE_PERSIST, linked
+        ):
+            self.conn.execute(
+                "UPDATE conversation_request SET state = ?, settled_at = ?, settled_by = ?,"
+                " outcome_reason = ? WHERE id = ? AND state = ?",
+                (
+                    RequestState.FAILED.value,
+                    utc_now(),
+                    "system",
+                    RequestOutcomeReason.ORIGINAL_LOST_BEFORE_PERSIST.value,
+                    row["id"],
+                    RequestState.PROCESSING.value,
+                ),
+            )
 
     # --------------------------------------------------------- intent/decision
 
@@ -726,6 +879,10 @@ class Repository:
         """
         self.get_case(case_id)
         self.guard_open_case(case_id)
+        # UI-01. **준비 단계에는 의도 버전이 없다.** 의도 문서의 항목 집합은 Profile 이
+        # 정하는데 준비 Case 에는 Profile 이 없다 — 여기서 받으면 Profile 없는 공통 여섯
+        # 항목 문서가 생기고, 그것은 R1 이전 Case 의 모양이다. 업무화가 먼저다.
+        self.guard_work_stage(case_id)
         ref = self.get_artifact_ref(artifact_id, artifact_rev)
         if ref["kind"] != ArtifactKind.INTENT.value:
             raise ConflictError("artifact is not an intent artifact")
@@ -895,6 +1052,7 @@ class Repository:
         purpose: RunPurpose = RunPurpose.LIMITED_ANALYSIS,
         repository_id: str | None = None,
         context_refs: list[dict[str, Any]] | None = None,
+        request_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
@@ -943,12 +1101,25 @@ class Repository:
                 breaches = self._budget_breaches(case_id, want, now)
                 if breaches:
                     raise BudgetExhausted(breaches)
+                if request_id is not None:
+                    # UI-01. **요청이 아직 처리 중인가를 여기서 다시 본다.** 진입 검사는
+                    # 트랜잭션 밖이라 그 사이 요청 종료가 끼어들 수 있고, 그러면 끝난
+                    # 요청에 실행이 붙어 잠금이 풀린 채 실행이 돈다.
+                    live = self.conn.execute(
+                        "SELECT state FROM conversation_request WHERE id = ? AND case_id = ?",
+                        (request_id, case_id),
+                    ).fetchone()
+                    if live is None or live["state"] != RequestState.PROCESSING.value:
+                        raise RequestNotProcessing(
+                            f"request {request_id} is"
+                            f" {live['state'] if live else 'not in this case'}"
+                        )
                 self.conn.execute(
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
                     " assignment_generation, created_at, purpose, repository_id,"
-                    " is_experiment)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " is_experiment, request_id)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -971,6 +1142,9 @@ class Repository:
                         # 제품 변경과 구별되는 근거이고, 요청이 그 구별을 정하면
                         # 임시 변경을 실험으로 적어 검증을 건너뛸 수 있다.
                         1 if purpose is RunPurpose.LOCAL_EXPERIMENT else 0,
+                        # UI-01. 어느 사용자 요청을 처리하는 실행인가. NULL 은 요청과
+                        # 무관하게 만든 실행이다(관리 화면·옛 경로).
+                        request_id,
                     ),
                 )
                 self._insert_context_refs(run_id, refs)
@@ -1281,6 +1455,9 @@ class Repository:
             if run["outcome"] == outcome.value:
                 # **중복 청구가 생기지 않는 자리가 여기다.** 정산은 이 가드 뒤에
                 # 있으므로 같은 결과를 다시 보내도 예약이 두 번 정산되지 않는다.
+                # UI-01. 첫 보고 뒤 AI 메시지를 붙이지 못했다면 재전송이 그 자리를
+                # 채운다. 실행당 하나이므로 두 번 붙지 않는다.
+                self.record_assistant_reply(run_id)
                 return run  # 같은 결과의 재전송. 덮어쓰지 않는다
             raise ConflictError(
                 f"run already finished with outcome {run['outcome']}; refusing to overwrite"
@@ -1319,6 +1496,10 @@ class Repository:
                 usage,
                 finished_at,
             )
+        # UI-01. 끝난 논의 응답은 **AI 메시지로 대화에 붙는다.** 결과 기록과 다른
+        # 트랜잭션인 이유는 결과가 먼저 확정돼야 하기 때문이다 — 메시지를 붙이다 실패해도
+        # 실행 결과·정산은 남는다. 재전송은 실행당 하나 규칙이 막는다.
+        self.record_assistant_reply(run_id)
         # **실행이 끝나는 것도 마지막 조건일 수 있다**(P3-R4). 미정리 실행이 남아
         # 있으면 자동 완료가 보류되므로(completion-lifecycle 5절), 그 실행이 끝난
         # 순간이 조건이 갖춰지는 시점이다. 조건을 못 갖추면 아무 것도 하지 않는다.
@@ -3849,6 +4030,7 @@ class Repository:
         role: RunRole,
         instruction_artifact_id: str,
         instruction_artifact_rev: int,
+        request_id: str | None = None,
     ) -> dict[BudgetMetric, float | None]:
         """이 요청이 잡게 될 예산(P3-R3).
 
@@ -3863,7 +4045,12 @@ class Repository:
                 instruction_artifact_rev,
                 [
                     (r["artifact_id"], r["revision"])
-                    for r in self.compose_context_refs(case_id, purpose)
+                    for r in self.compose_context_refs(
+                        case_id,
+                        purpose,
+                        request_id=request_id,
+                        instruction=(instruction_artifact_id, instruction_artifact_rev),
+                    )
                 ],
             ),
         )
@@ -3883,6 +4070,7 @@ class Repository:
         target_intent_version_id: str | None = None,
         repository_id: str | None = None,
         expected_gate_policy: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> AdmissionResult:
         """진입 조건을 검사한다. **판단 근거를 전부 DB에서 다시 읽는다.**
 
@@ -3947,7 +4135,8 @@ class Repository:
             budget_breaches=self._budget_breaches(
                 case_id, self._planned_reservation_for(case_id, purpose, role,
                                                        instruction_artifact_id,
-                                                       instruction_artifact_rev)
+                                                       instruction_artifact_rev,
+                                                       request_id)
             ),
             # **Autonomy·목적·누적 변경도 지금 DB 에서 다시 읽는다**(P3-R4). 같은
             # 규칙이다 — 메모리에 "이 Case 는 시작 확인을 받았다"를 두면 재시작으로
@@ -3969,6 +4158,14 @@ class Repository:
             quality_gate_policy_drift=self.quality_gate_policy_drift(
                 case_id, expected_gate_policy
             ),
+            # **단계와 요청도 지금 DB 에서 다시 읽는다**(UI-01). 준비 단계는 논의 응답만
+            # 열고, 요청에 묶인 실행은 그 요청이 처리 중이고 원문이 저장됐을 때만 연다.
+            case_stage=convmod.derive_stage(case.get("stage"), False)[0].value,
+            request_id=request_id,
+            request_state=(
+                self.request_admission_state(case_id, request_id) if request_id else {}
+            ),
+            instruction_artifact=(instruction_artifact_id, instruction_artifact_rev),
         )
         return evaluate_admission(request)
 
@@ -4050,6 +4247,7 @@ class Repository:
         session: str = "new",
         repository_id: str | None = None,
         expected_gate_policy: dict[str, Any] | None = None,
+        request_id: str | None = None,
     ) -> tuple[dict[str, Any] | None, bool, AdmissionResult | None, dict[str, Any] | None]:
         """**Run을 만드는 유일한 경로.** 진입 검사를 통과해야 만들어진다.
 
@@ -4082,6 +4280,7 @@ class Repository:
             session=session,
             repository_id=repository_id,
             expected_gate_policy=expected_gate_policy,
+            request_id=request_id,
         )
         if not result.admitted:
             check = self.record_admission(
@@ -4107,8 +4306,34 @@ class Repository:
                 # 안 되기 때문이다(review-context-contract 2절). P3-R3 부터는 Run
                 # 행·예약과 **같은 트랜잭션**에 들어간다 — 예약한 `context_bytes` 가
                 # 실제 참조와 어긋나지 않게 하기 위해서다.
-                context_refs=self.compose_context_refs(case_id, purpose),
+                context_refs=self.compose_context_refs(
+                    case_id,
+                    purpose,
+                    request_id=request_id,
+                    instruction=(instruction_artifact_id, instruction_artifact_rev),
+                ),
+                request_id=request_id,
             )
+        except RequestNotProcessing as lost_race:
+            # UI-01. 진입 검사는 통과했는데 트랜잭션 안에서 요청이 이미 끝나 있었다 =
+            # **종료 기록과의 경쟁에서 졌다.** 예산 경쟁과 같은 모양으로 거부를 남긴다.
+            result = AdmissionResult(
+                outcome=AdmissionOutcome.REFUSED,
+                profile=result.profile,
+                refusals=[AdmissionRefusal.REQUEST_NOT_PROCESSING],
+                reasons={
+                    AdmissionRefusal.REQUEST_NOT_PROCESSING.value: (
+                        f"요청이 그 사이 끝났다({lost_race}). 끝난 요청에 실행을 붙이지 않는다"
+                    )
+                },
+                intent_version_id=result.intent_version_id,
+                intent_agreement_state=result.intent_agreement_state,
+                gate_verdict=result.gate_verdict,
+            )
+            check = self.record_admission(
+                case_id, run_id, task_id, purpose, role, permission, tool_id, result, None
+            )
+            return None, False, result, check
         except BudgetExhausted as exhausted:
             # 위의 진입 검사는 통과했는데 트랜잭션 안에서 막혔다 = **경쟁에서 졌다.**
             # 마지막 한 칸을 다른 요청이 먼저 가져갔다는 뜻이다. 이것도 거부로
@@ -6163,7 +6388,13 @@ class Repository:
         }
     )
 
-    def compose_context_refs(self, case_id: str, purpose: RunPurpose) -> list[dict[str, Any]]:
+    def compose_context_refs(
+        self,
+        case_id: str,
+        purpose: RunPurpose,
+        request_id: str | None = None,
+        instruction: tuple[str, int] | None = None,
+    ) -> list[dict[str, Any]]:
         """이 목적의 작성 실행에 고정할 참조 목록.
 
         **본문은 담지 않는다.** `(role, artifact_id, revision)` 만 담고 Runner가
@@ -6225,7 +6456,20 @@ class Repository:
             사람이 직접 입력한 초안(`author_run_id` 없음)에는 그런 실행이 없고,
             그때는 **참조를 만들지 않는다.** 없는 것을 아무 지시 원문으로 채우지
             않는다.
+
+            **UI-01: 대화에서 업무화한 Case 의 요청은 업무 요청 메시지다.** 첫 초안
+            실행의 지시는 처리하는 쪽이 만든 지시일 수 있고, 사용자가 실제로 한 말은
+            위임 근거로 기록된 그 메시지다. 업무화 기록이 없는 Case 는 위 규칙 그대로다.
             """
+            work_start = self.get_work_start(intent["case_id"])
+            if work_start is not None:
+                message = self.get_message(work_start["request_message_id"])
+                add(
+                    ContextRefRole.ORIGINAL_REQUEST,
+                    message["artifact_id"],
+                    message["artifact_rev"],
+                )
+                return
             author_run_id = None
             for version in self.list_intent_versions(intent["case_id"]):
                 if version.get("author_run_id"):
@@ -6242,8 +6486,53 @@ class Repository:
                 run["instruction_artifact_rev"],
             )
 
+        def add_conversation(before_seq: int | None = None) -> None:
+            """**대화의 말**을 순번대로 고정한다(UI-01·D-69).
+
+            업무화 뒤에도 앞선 논의의 원문·결정·명시 금지가 입력에 이어져야 한다
+            (review-context-contract 33행). 사용자와 AI 의 말은 **역할을 나눈다** —
+            AI 의 이전 제안은 사용자의 요구가 아니다(D-60).
+
+            **저장된 메시지만** 넣는다. 유실·미저장 메시지는 접수되지 않은 입력이다.
+            그 실행의 지시 원문은 빼고(같은 말을 두 번 주지 않는다), 논의 응답은 그
+            요청을 연 메시지 **이전**까지만 받는다.
+            """
+            for message in self.list_messages(case_id):
+                if before_seq is not None and message["seq"] >= before_seq:
+                    break
+                if message["receipt"] != MessageReceipt.STORED.value:
+                    continue
+                if any(
+                    r["artifact_id"] == message["artifact_id"]
+                    and r["revision"] == message["artifact_rev"]
+                    for r in refs
+                ):
+                    # 이미 다른 역할(업무 요청 원문)로 들어간 말을 두 번 주지 않는다.
+                    continue
+                if instruction is not None and (
+                    message["artifact_id"],
+                    message["artifact_rev"],
+                ) == tuple(instruction):
+                    continue
+                role = (
+                    ContextRefRole.CONVERSATION_ASSISTANT_MESSAGE
+                    if message["author"] == MessageAuthor.ASSISTANT.value
+                    else ContextRefRole.CONVERSATION_USER_MESSAGE
+                )
+                add(role, message["artifact_id"], message["artifact_rev"])
+
         latest = self.latest_intent_version(case_id)
-        if purpose is RunPurpose.INTENT_AUTHORING:
+        if purpose is RunPurpose.DISCUSSION_REPLY:
+            opening_seq: int | None = None
+            if request_id is not None:
+                try:
+                    opening = self.get_message(self.get_request(request_id)["opened_by_message_id"])
+                    opening_seq = opening["seq"]
+                except NotFoundError:
+                    opening_seq = None
+            add_conversation(before_seq=opening_seq)
+        elif purpose is RunPurpose.INTENT_AUTHORING:
+            add_conversation()
             if latest is not None:
                 add(ContextRefRole.PREVIOUS_INTENT, latest["artifact_id"], latest["artifact_rev"])
                 add_question_answers(latest["id"])
@@ -6256,6 +6545,10 @@ class Repository:
                 add_original_request(latest)
                 add_question_answers(latest["id"])
             add_unresolved_feedback()
+            # UI-01. 대화가 있으면 **논의에서 정한 것·금지한 것**도 대조 대상이다.
+            # 업무 요청 메시지 하나만 주면 앞선 금지를 검토자가 볼 수 없다. 대화가
+            # 없는 Case 에는 아무 것도 더해지지 않는다.
+            add_conversation()
         elif purpose is RunPurpose.QUALITY_GATE_REVIEW:
             # QG-02~07 검토에는 작성자의 완료 주장만 주지 않는다. 지시 원문이
             # 검토 대상이고, 아래 고정 참조가 그것을 대조할 요청·기준·현재 산출물이다.
@@ -7849,6 +8142,19 @@ class Repository:
         case = self.get_case(case_id)
         profile = case.get("profile")
         version = case.get("profile_version")
+        if case.get("stage") == CaseStage.DISCUSSION.value:
+            # UI-01. **준비 단계 대화는 R1 이전 Case 가 아니다.** 둘 다 Profile 이 없지만
+            # 뜻이 반대다 — 저쪽은 기록되지 않은 과거이고 이쪽은 아직 정하지 않은 현재다.
+            # 같은 문구로 보이면 "왜 이 Case 에 Profile 이 없는가"에 틀린 답을 준다.
+            return {
+                "profile": None,
+                "version": None,
+                "source": ProfileSource.NOT_YET_DECIDED.value,
+                "definition": None,
+                "required_fields": [],
+                "kind": case["kind"],
+                "detail": "준비 단계 대화다. 목표·Profile 은 업무화할 때 정한다",
+            }
         if profile is None or version is None:
             return {
                 "profile": None,
@@ -9884,3 +10190,942 @@ class Repository:
                 "publish": self.ENFORCEMENT["publish"],
             },
         }
+
+    # =================================================================== UI-01
+    #
+    # 대화·요청 기반(D-69·D-70·D-81). 아래 접근자에도 본문을 받는 인자가 없다. 메시지
+    # 본문은 소유 Runner 에 있고 여기에는 순번·종류·원문 참조·해시·짧은 요약·관계만 남는다.
+    #
+    # **세 축을 섞지 않는다.** Case 의 종료(`status`), 단계(`stage`), 보관(가시성 이력)은
+    # 서로를 바꾸지 않는다. 그리고 **현재 요청**이 네 번째 축이다 — 일반 전송을 잠그는
+    # 것은 Case 도 Run 도 아니고 요청이다.
+
+    #: 메시지 하나에 붙일 수 있는 자료 참조의 수. 참조가 본문을 대신 싣는 통로가 되지
+    #: 않게 하는 상한이며 정책 값이 아니다.
+    MESSAGE_REF_LIMIT = 20
+
+    # ----------------------------------------------------------- 대화 생성·단계
+
+    def create_conversation(self, project_id: str, title: str) -> dict[str, Any]:
+        """**목표·Profile 없이** 준비 단계 Case 를 만든다(D-69).
+
+        `kind` 는 `undecided` 이고 Profile·정의판·출처는 NULL 이다. **feature 로 채우지
+        않는다** — 그 값이 곧 기능 개발 조건표를 고르고, 사람이 고르지 않은 목적이
+        기록된다. 기본 Autonomy 행은 다른 Case 와 같게 만든다. 준비 단계는 Autonomy 와
+        별개이며(D-69) 논의 중 바꾼 정책이 업무화 뒤에도 이어져야 한다.
+        """
+        self.get_project(project_id)
+        case_id = ids.new_case_id()
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                'INSERT INTO "case" (id, project_id, title, kind, status, created_at,'
+                " updated_at, profile, profile_version, profile_source, stage)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?)",
+                (
+                    case_id,
+                    project_id,
+                    _summary(title),
+                    CaseKind.UNDECIDED.value,
+                    CaseStatus.RECEIVED.value,
+                    now,
+                    now,
+                    CaseStage.DISCUSSION.value,
+                ),
+            )
+            self._insert_default_policy(case_id, now)
+        return self.get_case(case_id)
+
+    def get_work_start(self, case_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM case_work_start WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def case_stage(self, case_id: str) -> tuple[CaseStage, StageSource]:
+        """유효 단계와 그 출처. NULL(UI-01 이전 Case)은 업무 단계로 도출한다."""
+        case = self.get_case(case_id)
+        return convmod.derive_stage(case.get("stage"), self.get_work_start(case_id) is not None)
+
+    def guard_work_stage(self, case_id: str) -> None:
+        """준비 단계에서 업무 산출물을 만들려는 시도를 막는다(UI-01).
+
+        의도 문서의 항목 집합은 Profile 이 정하고 준비 Case 에는 Profile 이 없다. 여기서
+        받으면 Profile 없는 공통 항목 문서가 생기는데 그것은 R1 이전 Case 의 모양이다.
+        """
+        stage, _source = self.case_stage(case_id)
+        if stage is CaseStage.DISCUSSION:
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_IN_DISCUSSION_STAGE],
+                "this conversation is still in the discussion stage (no goal or profile);"
+                " start the work first",
+            )
+
+    # ------------------------------------------------------------------- 요청
+
+    def get_request(self, request_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM conversation_request WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"request not found: {request_id}")
+        return dict(row)
+
+    def active_request(self, case_id: str) -> dict[str, Any] | None:
+        """일반 전송을 잠그는 요청. **많아야 하나다** — DB 의 부분 유일 색인이 보장한다."""
+        states = sorted(s.value for s in LOCKING_REQUEST_STATES)
+        row = self.conn.execute(
+            "SELECT * FROM conversation_request WHERE case_id = ?"
+            f" AND state IN ({','.join('?' * len(states))})",
+            (case_id, *states),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT run_id, purpose, status, outcome, task_id FROM run WHERE request_id = ?"
+            " ORDER BY created_at",
+            (request_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def request_view(self, request: dict[str, Any]) -> dict[str, Any]:
+        """요청과 그 실행들. **무엇이 잠금을 붙들고 있는지**를 함께 보인다(FR-14)."""
+        runs = self._request_runs(request["id"])
+        opening = self.get_message(request["opened_by_message_id"])
+        return {
+            **request,
+            "locking": convmod.is_locking(request["state"]),
+            "opening_receipt": opening["receipt"],
+            "runs": runs,
+            "unfinished_runs": sum(1 for r in runs if r["status"] != RunStatus.FINISHED.value),
+            "unknown_runs": sum(1 for r in runs if r["outcome"] == RunOutcome.UNKNOWN.value),
+        }
+
+    def request_admission_state(self, case_id: str, request_id: str) -> dict[str, Any]:
+        """진입 검사가 보는 요청 상태. 모르는 요청은 `in_case = False` 로 돌려준다."""
+        row = self.conn.execute(
+            "SELECT * FROM conversation_request WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            return {"id": request_id, "in_case": False, "state": None}
+        opening = self.get_message(row["opened_by_message_id"])
+        return {
+            "id": request_id,
+            "in_case": row["case_id"] == case_id,
+            "state": row["state"],
+            "opening_receipt": opening["receipt"],
+            "opening_artifact_id": opening["artifact_id"],
+            "opening_artifact_rev": opening["artifact_rev"],
+        }
+
+    def settle_request(
+        self,
+        case_id: str,
+        request_id: str,
+        outcome: RequestSettleOutcome,
+        actor: str,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """요청의 처리 종료를 **명시적으로** 기록한다(D-70).
+
+        판정은 `domain.conversation.decide_settle` 한 곳에 있다. 미종료 실행이 있으면
+        거부하고(Run 사이에 잠금을 풀지 않는다), 결과를 모르는 실행이 있으면 요청이
+        `unknown` 으로 남아 잠금을 유지한다.
+
+        **판정 입력을 트랜잭션 안에서 읽는다.** 밖에서 읽으면 그 사이 새 실행이 붙어도
+        요청이 닫힌다 — Run 생성도 같은 트랜잭션 규칙으로 처리 중을 다시 본다.
+        """
+        request = self.get_request(request_id)
+        if request["case_id"] != case_id:
+            raise NotFoundError(f"request not in case {case_id}: {request_id}")
+        if request["state"] == RequestState.UNKNOWN.value:
+            raise ConversationRefused(
+                [ConversationRefusal.REQUEST_STATE_UNKNOWN],
+                "this request's execution state is unknown; confirming the actual stop"
+                " and residual activity is UI-02, and the lock stays until then",
+            )
+        if request["state"] != RequestState.PROCESSING.value:
+            if request["state"] == outcome.value:
+                return self.request_view(request)  # 같은 종료의 재전송
+            raise ConversationRefused(
+                [ConversationRefusal.REQUEST_ALREADY_SETTLED],
+                f"request is already {request['state']}",
+            )
+        now = utc_now()
+        with transaction(self.conn):
+            live = self.conn.execute(
+                "SELECT state FROM conversation_request WHERE id = ?", (request_id,)
+            ).fetchone()
+            if live["state"] != RequestState.PROCESSING.value:
+                raise ConversationRefused(
+                    [ConversationRefusal.REQUEST_ALREADY_SETTLED],
+                    f"request became {live['state']} while settling",
+                )
+            runs = self.conn.execute(
+                "SELECT run_id, status, outcome FROM run WHERE request_id = ?", (request_id,)
+            ).fetchall()
+            opening = self.conn.execute(
+                "SELECT i.state AS intake_state FROM conversation_message m"
+                " JOIN intake i ON i.id = m.intake_id WHERE m.id = ?",
+                (request["opened_by_message_id"],),
+            ).fetchone()
+            decision = convmod.decide_settle(
+                outcome,
+                convmod.receipt_for_intake(opening["intake_state"] if opening else None),
+                [dict(r) for r in runs],
+            )
+            if decision.refusal is not None:
+                raise ConversationRefused([decision.refusal], decision.detail)
+            self.conn.execute(
+                "UPDATE conversation_request SET state = ?, settled_at = ?, settled_by = ?,"
+                " outcome_reason = ?, note_summary = ? WHERE id = ? AND state = ?",
+                (
+                    decision.state.value,
+                    now,
+                    actor,
+                    decision.reason.value,
+                    _summary(note) if note else None,
+                    request_id,
+                    RequestState.PROCESSING.value,
+                ),
+            )
+        return self.request_view(self.get_request(request_id))
+
+    # ---------------------------------------------------------------- 메시지
+
+    def _message_views(self, rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+        """메시지 행을 조회 모양으로. **접수 상태는 intake 에서 도출한다.**"""
+        messages = [dict(r) for r in rows]
+        if not messages:
+            return []
+        ids_ = [m["id"] for m in messages]
+        marks = ",".join("?" * len(ids_))
+        refs: dict[str, list[dict[str, Any]]] = {}
+        for ref in self.conn.execute(
+            f"SELECT * FROM conversation_message_ref WHERE message_id IN ({marks})"
+            " ORDER BY message_id, ordinal",
+            ids_,
+        ).fetchall():
+            item = {k: ref[k] for k in ref.keys() if ref[k] is not None and k != "message_id"}
+            refs.setdefault(ref["message_id"], []).append(item)
+        corrected_by: dict[str, list[str]] = {}
+        for row in self.conn.execute(
+            f"SELECT id, corrects_message_id FROM conversation_message"
+            f" WHERE corrects_message_id IN ({marks}) ORDER BY seq",
+            ids_,
+        ).fetchall():
+            corrected_by.setdefault(row["corrects_message_id"], []).append(row["id"])
+        out = []
+        for message in messages:
+            intake_state = message.pop("intake_state", None)
+            if message["author"] == MessageAuthor.ASSISTANT.value:
+                # AI 응답은 Runner 가 이미 저장한 실행 출력이다.
+                receipt = MessageReceipt.STORED
+            else:
+                receipt = convmod.receipt_for_intake(intake_state)
+            message["receipt"] = receipt.value
+            message["references"] = refs.get(message["id"], [])
+            message["corrected_by"] = corrected_by.get(message["id"], [])
+            out.append(message)
+        return out
+
+    _MESSAGE_SELECT = (
+        "SELECT m.*, i.state AS intake_state FROM conversation_message m"
+        " LEFT JOIN intake i ON i.id = m.intake_id"
+    )
+
+    def get_message(self, message_id: str) -> dict[str, Any]:
+        rows = self.conn.execute(
+            self._MESSAGE_SELECT + " WHERE m.id = ?", (message_id,)
+        ).fetchall()
+        if not rows:
+            raise NotFoundError(f"message not found: {message_id}")
+        return self._message_views(rows)[0]
+
+    def list_messages(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            self._MESSAGE_SELECT + " WHERE m.case_id = ? ORDER BY m.seq", (case_id,)
+        ).fetchall()
+        return self._message_views(rows)
+
+    def find_message_by_client_id(
+        self, case_id: str, client_message_id: str
+    ) -> dict[str, Any] | None:
+        """접수 불명 대조(D-83). 받은 적이 없으면 `None` 이다 — 그때만 같은 식별자로
+        다시 보내도 새 전송이 된다."""
+        rows = self.conn.execute(
+            self._MESSAGE_SELECT + " WHERE m.case_id = ? AND m.client_message_id = ?",
+            (case_id, client_message_id),
+        ).fetchall()
+        return self._message_views(rows)[0] if rows else None
+
+    def _message_result(self, message: dict[str, Any]) -> dict[str, Any]:
+        request = (
+            self.request_view(self.get_request(message["request_id"]))
+            if message.get("request_id") and message["message_kind"] in {k.value for k in OPENS_REQUEST}
+            else None
+        )
+        return {"message": message, "request": request, "receipt": message["receipt"]}
+
+    def _replay(
+        self, existing: dict[str, Any], kind: MessageKind, expected_hash: str
+    ) -> tuple[dict[str, Any], bool]:
+        """같은 전송 식별자의 재전송. **같은 내용이면 같은 결과, 다르면 거부한다.**"""
+        if existing["content_hash"] != expected_hash or existing["message_kind"] != kind.value:
+            raise ConversationRefused(
+                [ConversationRefusal.CLIENT_MESSAGE_ID_CONFLICT],
+                "this client_message_id was already used for a different message;"
+                " a new message needs a new id",
+            )
+        return self._message_result(existing), False
+
+    def _check_correction_target(self, case_id: str, target_id: str | None) -> None:
+        """정정의 대상은 같은 Case 의 **사용자 일반·정정 메시지**다."""
+        try:
+            target = self.get_message(target_id) if target_id else None
+        except NotFoundError:
+            target = None
+        if (
+            target is None
+            or target["case_id"] != case_id
+            or target["author"] != MessageAuthor.USER.value
+            or target["message_kind"] not in {k.value for k in OPENS_REQUEST}
+        ):
+            raise ConversationRefused(
+                [ConversationRefusal.CORRECTION_TARGET_INVALID],
+                "a correction must name an earlier user message of this conversation",
+            )
+
+    def check_question_answerable(
+        self, case_id: str, question_id: str, intent_version_id: str | None = None
+    ) -> dict[str, Any]:
+        """이 질문에 **지금** 답할 수 있는가(UI-01·D-70).
+
+        답은 그 질문과 그 의도 버전에 한정된다. 대체된 버전의 질문에 답해도 새 버전의
+        질문은 열린 채이고, 다시 쓰는 AI 는 최신 버전의 답만 받는다 — 받아 두면 답했다는
+        기록만 남고 아무 데도 쓰이지 않는다. **원문을 열기 전에** 부른다 — 거부될
+        답변의 원문을 접수해 고아 intake 를 남기지 않는다.
+        """
+        question = self.get_question(question_id)
+        if question["case_id"] != case_id:
+            raise NotFoundError(f"question not in case {case_id}: {question_id}")
+        if question["state"] == QuestionState.ANSWERED.value:
+            raise ConversationRefused(
+                [ConversationRefusal.QUESTION_ALREADY_ANSWERED], "question is answered"
+            )
+        if question["state"] != QuestionState.OPEN.value:
+            raise ConversationRefused(
+                [ConversationRefusal.QUESTION_NOT_OPEN], f"question is {question['state']}"
+            )
+        latest = self.latest_intent_version(case_id)
+        if latest is None or question["intent_version_id"] != latest["id"]:
+            raise ConversationRefused(
+                [ConversationRefusal.QUESTION_TARGET_STALE],
+                "the question belongs to an intent version that is no longer the latest",
+            )
+        if intent_version_id is not None and intent_version_id != question["intent_version_id"]:
+            raise ConversationRefused(
+                [ConversationRefusal.QUESTION_TARGET_STALE],
+                "the card showed a different intent version than the question's",
+            )
+        return question
+
+    def _normalize_references(
+        self, case: dict[str, Any], references: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """자료 참조를 검사하고 **그 시점의 버전·해시를 고정한다**(D-81).
+
+        산출물은 이 Case 의 것이어야 하고, 파일은 이 Project 의 등록 저장소여야 한다.
+        없는 대상을 참조로 받으면 의견의 대상이 무엇인지 아무도 답할 수 없다.
+        """
+        if len(references) > self.MESSAGE_REF_LIMIT:
+            raise ConversationRefused(
+                [ConversationRefusal.REFERENCE_INVALID],
+                f"at most {self.MESSAGE_REF_LIMIT} references per message",
+            )
+        out: list[dict[str, Any]] = []
+        for ref in references:
+            kind = MessageRefKind(ref["kind"])
+            location = ref.get("location")
+            if location is not None and len(location) > MAX_SUMMARY:
+                raise ConversationRefused(
+                    [ConversationRefusal.REFERENCE_INVALID], "location is too long"
+                )
+            if kind is MessageRefKind.ARTIFACT:
+                try:
+                    artifact = self.get_artifact_ref(ref["artifact_id"], int(ref["revision"]))
+                except (NotFoundError, KeyError, TypeError, ValueError):
+                    artifact = None
+                if artifact is None or artifact["case_id"] != case["id"]:
+                    raise ConversationRefused(
+                        [ConversationRefusal.REFERENCE_INVALID],
+                        "the referenced artifact is not a version of this case",
+                    )
+                out.append(
+                    {
+                        "ref_kind": kind.value,
+                        "artifact_id": artifact["artifact_id"],
+                        "artifact_rev": artifact["revision"],
+                        "artifact_hash": artifact["content_hash"],
+                        "location": location,
+                    }
+                )
+            else:
+                row = self.conn.execute(
+                    "SELECT id FROM project_repository WHERE id = ? AND project_id = ?",
+                    (ref.get("repository_id"), case["project_id"]),
+                ).fetchone()
+                path = ref.get("path") or ""
+                observed = ref.get("observed_hash")
+                if (
+                    row is None
+                    or not path.strip()
+                    or len(path) > 512
+                    or "\x00" in path
+                    or (observed is not None and len(observed) > 128)
+                ):
+                    raise ConversationRefused(
+                        [ConversationRefusal.REFERENCE_INVALID],
+                        "a file reference needs a repository registered in this project"
+                        " and a path",
+                    )
+                out.append(
+                    {
+                        "ref_kind": kind.value,
+                        "repository_id": row["id"],
+                        "path": path,
+                        "location": location,
+                        "observed_hash": observed,
+                    }
+                )
+        return out
+
+    def submit_message(
+        self,
+        case_id: str,
+        *,
+        client_message_id: str,
+        kind: MessageKind,
+        expected_hash: str,
+        byte_size: int,
+        summary: str,
+        target_runner_id: str,
+        actor: str,
+        intake_id: str,
+        corrects_message_id: str | None = None,
+        question_id: str | None = None,
+        intent_version_id: str | None = None,
+        references: list[dict[str, Any]] | None = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """사용자 메시지를 **접수 대기**로 기록한다(D-70·D-81·D-83).
+
+        반환: (메시지·요청·접수 상태, 이번에 새로 만들었는지)
+
+        순서가 규칙이다.
+
+        1. **같은 전송 식별자의 재전송을 먼저 본다.** 잠금보다 먼저다 — 이미 요청을 연
+           메시지의 재전송이 자기 요청 때문에 거부되면 안 된다.
+        2. **검사를 전부 끝낸 뒤 원문을 연다.** 거부될 전송이 intake 를 남기지 않는다.
+        3. **접수·메시지·요청은 한 트랜잭션이다.** 잠금을 트랜잭션 안에서 다시 보고,
+           DB 의 부분 유일 색인이 마지막 방어선이다.
+
+        본문은 호출자가 **이 호출 전에** 중계 버퍼에 `intake_id` 로 넣어 둔다. 커밋과
+        중계 사이에 Runner 폴링이 끼면 본문 없는 접수가 유실로 표시되기 때문이다.
+        """
+        case = self.get_case(case_id)
+        existing = self.find_message_by_client_id(case_id, client_message_id)
+        if existing is not None:
+            return self._replay(existing, kind, expected_hash)
+        if kind is MessageKind.ASSISTANT_REPLY:
+            raise ConflictError("assistant replies come from runs, not from this path")
+        if self.case_is_closed(case_id):
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_ALREADY_CLOSED],
+                "this case is closed; a real change goes to a linked follow-up case",
+            )
+        self.get_runner(target_runner_id)
+        opens_request = kind in OPENS_REQUEST
+        if opens_request:
+            state = convmod.general_send_state(False, self.active_request(case_id))
+            if not state.allowed:
+                raise ConversationRefused([state.refusal], state.detail)
+        if kind is MessageKind.CORRECTION:
+            self._check_correction_target(case_id, corrects_message_id)
+        elif corrects_message_id is not None:
+            raise ConversationRefused(
+                [ConversationRefusal.CORRECTION_TARGET_INVALID],
+                "only a correction names the message it corrects",
+            )
+        if kind is MessageKind.CARD_ANSWER:
+            if not question_id or not intent_version_id:
+                raise ConversationRefused(
+                    [ConversationRefusal.CARD_ANSWER_TARGET_MISSING],
+                    "a card answer names the question and the intent version on the card",
+                )
+            self.check_question_answerable(case_id, question_id, intent_version_id)
+        elif question_id is not None or intent_version_id is not None:
+            raise ConversationRefused(
+                [ConversationRefusal.CARD_ANSWER_TARGET_MISSING],
+                "only a card answer names a question",
+            )
+        refs = self._normalize_references(case, references or [])
+
+        message_id = ids.new_id("msg")
+        artifact_id = ids.new_artifact_id()
+        now = utc_now()
+        try:
+            with transaction(self.conn):
+                active = self.active_request(case_id)
+                request_id: str | None = None
+                if opens_request:
+                    if active is not None:
+                        state = convmod.general_send_state(False, active)
+                        raise ConversationRefused([state.refusal], state.detail)
+                    request_id = ids.new_id("req")
+                else:
+                    live = self.conn.execute(
+                        "SELECT state, intent_version_id FROM intent_question WHERE id = ?",
+                        (question_id,),
+                    ).fetchone()
+                    latest = self.conn.execute(
+                        "SELECT id FROM intent_version WHERE case_id = ?"
+                        " ORDER BY revision DESC LIMIT 1",
+                        (case_id,),
+                    ).fetchone()
+                    if live["state"] != QuestionState.OPEN.value:
+                        raise ConversationRefused(
+                            [ConversationRefusal.QUESTION_ALREADY_ANSWERED],
+                            f"question became {live['state']}",
+                        )
+                    if latest is None or latest["id"] != live["intent_version_id"]:
+                        raise ConversationRefused(
+                            [ConversationRefusal.QUESTION_TARGET_STALE],
+                            "a newer intent version appeared",
+                        )
+                    # 카드 답변은 요청을 열지 않는다. 그때 처리 중이던 요청을 **맥락으로만**
+                    # 가리킨다 — 그 요청을 닫거나 잠금을 풀지 않는다.
+                    request_id = active["id"] if active is not None else None
+                self._insert_intake_rows(
+                    intake_id=intake_id,
+                    case_id=case_id,
+                    kind=ArtifactKind.MESSAGE,
+                    artifact_id=artifact_id,
+                    revision=1,
+                    target_runner_id=target_runner_id,
+                    expected_hash=expected_hash,
+                    byte_size=byte_size,
+                    summary=summary,
+                    now=now,
+                )
+                seq = self.conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM conversation_message"
+                    " WHERE case_id = ?",
+                    (case_id,),
+                ).fetchone()["n"]
+                if opens_request:
+                    self.conn.execute(
+                        "INSERT INTO conversation_request"
+                        " (id, case_id, opened_by_message_id, state, opened_at)"
+                        " VALUES (?, ?, ?, ?, ?)",
+                        (request_id, case_id, message_id, RequestState.PROCESSING.value, now),
+                    )
+                self.conn.execute(
+                    "INSERT INTO conversation_message"
+                    " (id, case_id, seq, author, message_kind, actor, client_message_id,"
+                    "  artifact_id, artifact_rev, content_hash, intake_id, request_id,"
+                    "  corrects_message_id, question_id, question_intent_version_id,"
+                    "  run_id, summary, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, NULL, ?, ?)",
+                    (
+                        message_id,
+                        case_id,
+                        seq,
+                        MessageAuthor.USER.value,
+                        kind.value,
+                        actor,
+                        client_message_id,
+                        artifact_id,
+                        expected_hash,
+                        intake_id,
+                        request_id,
+                        corrects_message_id,
+                        question_id,
+                        intent_version_id,
+                        _summary(summary),
+                        now,
+                    ),
+                )
+                for ordinal, ref in enumerate(refs, start=1):
+                    self.conn.execute(
+                        "INSERT INTO conversation_message_ref"
+                        " (message_id, ordinal, ref_kind, artifact_id, artifact_rev,"
+                        "  artifact_hash, repository_id, path, location, observed_hash)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            message_id,
+                            ordinal,
+                            ref["ref_kind"],
+                            ref.get("artifact_id"),
+                            ref.get("artifact_rev"),
+                            ref.get("artifact_hash"),
+                            ref.get("repository_id"),
+                            ref.get("path"),
+                            ref.get("location"),
+                            ref.get("observed_hash"),
+                        ),
+                    )
+                if kind is MessageKind.CARD_ANSWER:
+                    # **동의가 아니다.** decision·위임 근거를 만들지 않는다(FR-03).
+                    self.conn.execute(
+                        "UPDATE intent_question SET state = ?, answered_by = ?,"
+                        " answered_at = ?, answer_artifact_id = ? WHERE id = ? AND state = ?",
+                        (
+                            QuestionState.ANSWERED.value,
+                            actor,
+                            now,
+                            artifact_id,
+                            question_id,
+                            QuestionState.OPEN.value,
+                        ),
+                    )
+        except sqlite3.IntegrityError:
+            # 경쟁에서 졌다. 같은 식별자가 먼저 들어왔으면 재전송으로, 다른 전송이 요청을
+            # 먼저 열었으면 잠금으로 답한다. 그 밖은 숨기지 않는다.
+            existing = self.find_message_by_client_id(case_id, client_message_id)
+            if existing is not None:
+                return self._replay(existing, kind, expected_hash)
+            active = self.active_request(case_id)
+            if opens_request and active is not None:
+                state = convmod.general_send_state(False, active)
+                raise ConversationRefused([state.refusal], state.detail)
+            raise
+        return self._message_result(self.get_message(message_id)), True
+
+    def record_assistant_reply(self, run_id: str) -> dict[str, Any] | None:
+        """끝난 논의 응답 실행의 출력을 **AI 메시지**로 대화에 붙인다(UI-01).
+
+        실행 출력은 Runner 가 이미 저장했다 — 같은 원문을 두 번 저장하지 않고 참조만
+        붙인다. **실행당 하나다**(부분 유일 색인). 결과 재전송이 메시지를 늘리지 않는다.
+        완료되지 않은 실행은 붙이지 않는다 — 실패한 응답을 AI 의 말로 보이지 않는다.
+        """
+        run = self.get_run(run_id)
+        if (
+            run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value
+            or run.get("outcome") != RunOutcome.COMPLETED.value
+            or not run.get("output_artifact_id")
+            or not run.get("request_id")
+        ):
+            return None
+        row = self.conn.execute(
+            "SELECT id FROM conversation_message WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is not None:
+            return self.get_message(row["id"])
+        artifact = self.get_artifact_ref(run["output_artifact_id"], run["output_artifact_rev"])
+        message_id = ids.new_id("msg")
+        try:
+            with transaction(self.conn):
+                seq = self.conn.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM conversation_message"
+                    " WHERE case_id = ?",
+                    (run["case_id"],),
+                ).fetchone()["n"]
+                self.conn.execute(
+                    "INSERT INTO conversation_message"
+                    " (id, case_id, seq, author, message_kind, actor, client_message_id,"
+                    "  artifact_id, artifact_rev, content_hash, intake_id, request_id,"
+                    "  corrects_message_id, question_id, question_intent_version_id,"
+                    "  run_id, summary, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, NULL, NULL, NULL,"
+                    "  ?, ?, ?)",
+                    (
+                        message_id,
+                        run["case_id"],
+                        seq,
+                        MessageAuthor.ASSISTANT.value,
+                        MessageKind.ASSISTANT_REPLY.value,
+                        f"ai:{run['tool_id']}",
+                        artifact["artifact_id"],
+                        artifact["revision"],
+                        artifact["content_hash"],
+                        run["request_id"],
+                        run_id,
+                        _summary(f"AI 응답 · {run_id}"),
+                        utc_now(),
+                    ),
+                )
+        except sqlite3.IntegrityError:
+            row = self.conn.execute(
+                "SELECT id FROM conversation_message WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None:
+                raise
+            message_id = row["id"]
+        return self.get_message(message_id)
+
+    # ------------------------------------------------------------- 최초 업무화
+
+    def start_work(
+        self,
+        case_id: str,
+        *,
+        profile: CaseProfile,
+        request_message_id: str,
+        decided_by: WorkStartDecider,
+        actor: str,
+        summary: str,
+        interpretation_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """준비 단계 Case 를 **같은 Case 에서** 업무로 전환한다(D-69).
+
+        최초 Profile 배정이다. 업무 단계 Case 의 Profile 변경(D-86)과 섞지 않는다.
+
+        **위임 근거는 업무 요청 메시지 하나다.** 앞선 논의·선택 동의는 문맥이지 실행
+        위임이 아니다(D-60·D-69). 사용자 결정(`user_decision`)을 만들지 않으므로 조사
+        Profile 의 제품 수정 차단(D-66)이 업무화로 풀리지 않는다.
+
+        **옮기는 것이 없다.** 같은 Case ID 이므로 메시지·요청·실행·예산 예약과 정산·
+        예산 한도·Autonomy·저장소 선택·확인 지점이 그대로다. 정의판은 **지금의** 것을
+        받는다(v2) — 업무가 시작되는 시점에 처음 Profile 이 붙기 때문이다.
+        """
+        self.get_case(case_id)
+        if self.case_is_closed(case_id):
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_ALREADY_CLOSED], "this case is closed"
+            )
+        stage, _source = self.case_stage(case_id)
+        if stage is not CaseStage.DISCUSSION:
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_NOT_IN_DISCUSSION_STAGE],
+                "this case already has a profile; changing an active case's purpose or"
+                " profile is a separate path (D-86)",
+            )
+        try:
+            message = self.get_message(request_message_id)
+        except NotFoundError:
+            message = None
+        if (
+            message is None
+            or message["case_id"] != case_id
+            or message["author"] != MessageAuthor.USER.value
+            or message["message_kind"] not in {k.value for k in OPENS_REQUEST}
+        ):
+            raise ConversationRefused(
+                [ConversationRefusal.WORK_REQUEST_INVALID],
+                "the work request must be a user message of this conversation",
+            )
+        if message["receipt"] != MessageReceipt.STORED.value:
+            raise ConversationRefused(
+                [ConversationRefusal.WORK_REQUEST_NOT_STORED],
+                f"the work request is {message['receipt']}; the PC has not stored it",
+            )
+        request = self.get_request(message["request_id"])
+        if request["state"] != RequestState.PROCESSING.value:
+            raise ConversationRefused(
+                [ConversationRefusal.WORK_REQUEST_NOT_CURRENT],
+                f"the request opened by that message is {request['state']};"
+                " work starts while its request is being processed",
+            )
+        if decided_by is WorkStartDecider.AI_INTERPRETATION:
+            try:
+                run = self.get_run(interpretation_run_id) if interpretation_run_id else None
+            except NotFoundError:
+                run = None
+            if (
+                run is None
+                or run["case_id"] != case_id
+                or run.get("request_id") != request["id"]
+                or run.get("outcome") != RunOutcome.COMPLETED.value
+            ):
+                raise ConversationRefused(
+                    [ConversationRefusal.INTERPRETATION_RUN_INVALID],
+                    "an AI interpretation names a completed run of the same request",
+                )
+        elif interpretation_run_id is not None:
+            raise ConversationRefused(
+                [ConversationRefusal.INTERPRETATION_RUN_INVALID],
+                "a person's choice does not name an interpretation run",
+            )
+        resolved = CaseProfile(profile)
+        kind = profiles.KIND_FOR_PROFILE[resolved]
+        version = profiles.CURRENT_PROFILE_VERSION
+        now = utc_now()
+        basis_id = ids.new_id("deleg")
+        short = _summary(summary)
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                'UPDATE "case" SET stage = ?, kind = ?, profile = ?, profile_version = ?,'
+                " profile_source = ?, updated_at = ? WHERE id = ? AND stage = ?",
+                (
+                    CaseStage.WORK.value,
+                    kind.value,
+                    resolved.value,
+                    version,
+                    ProfileSource.WORK_START.value,
+                    now,
+                    case_id,
+                    CaseStage.DISCUSSION.value,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise ConversationRefused(
+                    [ConversationRefusal.CASE_NOT_IN_DISCUSSION_STAGE],
+                    "the case left the discussion stage while starting work",
+                )
+            # 위임 근거. `record_delegation_basis` 와 같은 규칙을 **같은 트랜잭션**에
+            # 적는다 — 단계는 바뀌었는데 근거가 없는 중간 상태를 남기지 않는다.
+            row = self.conn.execute(
+                "SELECT MAX(revision) AS r FROM delegation_basis WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()
+            revision = (row["r"] or 0) + 1
+            self.conn.execute(
+                "UPDATE delegation_basis SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND state = ?",
+                (PolicyState.SUPERSEDED.value, now, case_id, PolicyState.CURRENT.value),
+            )
+            self.conn.execute(
+                "INSERT INTO delegation_basis"
+                " (id, case_id, revision, basis_kind, artifact_id, artifact_rev,"
+                "  content_hash, decision_id, summary, state, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+                (
+                    basis_id,
+                    case_id,
+                    revision,
+                    DelegationBasisKind.ORIGINAL_REQUEST.value,
+                    message["artifact_id"],
+                    message["artifact_rev"],
+                    message["content_hash"],
+                    short,
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO case_work_start"
+                " (case_id, request_message_id, request_id, profile, profile_version, kind,"
+                "  decided_by, interpretation_run_id, actor, delegation_basis_id, summary,"
+                "  started_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    case_id,
+                    message["id"],
+                    request["id"],
+                    resolved.value,
+                    version,
+                    kind.value,
+                    decided_by.value,
+                    interpretation_run_id,
+                    actor,
+                    basis_id,
+                    short,
+                    now,
+                ),
+            )
+        return self.conversation_view(case_id)
+
+    # ------------------------------------------------------------------ 보관
+
+    def visibility_state(self, case_id: str) -> dict[str, Any]:
+        rows = self.conn.execute(
+            "SELECT * FROM case_visibility_event WHERE case_id = ? ORDER BY seq", (case_id,)
+        ).fetchall()
+        history = [dict(r) for r in rows]
+        last = history[-1] if history else None
+        archived = last is not None and last["action"] == VisibilityAction.ARCHIVE.value
+        return {
+            "archived": archived,
+            "archived_at": last["recorded_at"] if archived else None,
+            "history": history,
+            "detail": "보관은 목록 가시성이다. 종료·취소·삭제가 아니며 요청·실행을 멈추지 않는다",
+        }
+
+    def set_visibility(self, case_id: str, action: VisibilityAction, actor: str) -> dict[str, Any]:
+        """보관·복원(D-69). **종료 상태·요청·실행을 바꾸지 않는다.**
+
+        이미 그 상태면 새 이력을 만들지 않는다 — 같은 동작의 재전송이 이력을 늘리지
+        않는다. 종료된 Case 도 보관할 수 있다(목록 정리이지 기록 변경이 아니다).
+        """
+        self.get_case(case_id)
+        current = self.visibility_state(case_id)
+        if current["archived"] == (action is VisibilityAction.ARCHIVE):
+            return current
+        with transaction(self.conn):
+            seq = self.conn.execute(
+                "SELECT COALESCE(MAX(seq), 0) + 1 AS n FROM case_visibility_event"
+                " WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()["n"]
+            self.conn.execute(
+                "INSERT INTO case_visibility_event (id, case_id, seq, action, actor, recorded_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (ids.new_id("vis"), case_id, seq, action.value, actor, utc_now()),
+            )
+        return self.visibility_state(case_id)
+
+    # ------------------------------------------------------------------ 조회
+
+    def _open_question_count(self, case_id: str) -> int:
+        latest = self.latest_intent_version(case_id)
+        if latest is None:
+            return 0
+        return len(self.list_questions(latest["id"], QuestionState.OPEN))
+
+    def conversation_view(self, case_id: str) -> dict[str, Any]:
+        """대화 한 벌. **화면이 무엇을 비활성화할지를 서버가 말한다**(FR-11).
+
+        `send` 는 표시용이 아니라 서버가 실제로 적용하는 판정과 같은 함수의 결과다.
+        "답변 필요"는 열린 질문에서만 나온다 — 질문 없는 휴식을 답변 필요로 표시하지
+        않는다(D-69).
+        """
+        case = self.get_case(case_id)
+        stage, source = self.case_stage(case_id)
+        closed = self.case_is_closed(case_id)
+        active = self.active_request(case_id)
+        rows = self.conn.execute(
+            "SELECT * FROM conversation_request WHERE case_id = ? ORDER BY opened_at",
+            (case_id,),
+        ).fetchall()
+        open_questions = self._open_question_count(case_id)
+        return {
+            "case_id": case_id,
+            "title": case["title"],
+            "status": case["status"],
+            "stage": stage.value,
+            "stage_source": source.value,
+            "kind": case["kind"],
+            "profile": case.get("profile"),
+            "profile_version": case.get("profile_version"),
+            "profile_source": case.get("profile_source"),
+            "visibility": self.visibility_state(case_id),
+            "work_start": self.get_work_start(case_id),
+            "messages": self.list_messages(case_id),
+            "requests": [self.request_view(dict(r)) for r in rows],
+            "current_request": self.request_view(active) if active is not None else None,
+            "send": {
+                "general": convmod.general_send_state(closed, active).to_dict(),
+                "card_answer": {
+                    "allowed": (not closed) and open_questions > 0,
+                    "open_questions": open_questions,
+                },
+                # PC 연결 상태에 따른 전송 차단과 재연결 대조는 UI-02 다. 지금 heartbeat 는
+                # Runner 의 동기 루프가 긴 실행 중 멈추므로 연결 판정의 근거가 되지 못한다.
+                "runner_connection_enforced": False,
+            },
+            "needs_response": open_questions > 0,
+        }
+
+    def _with_conversation_summary(self, case: dict[str, Any]) -> dict[str, Any]:
+        """목록 행에 단계·보관·현재 요청을 더한다. 기존 키는 그대로다."""
+        stage, source = convmod.derive_stage(
+            case.get("stage"), self.get_work_start(case["id"]) is not None
+        )
+        active = self.active_request(case["id"])
+        case["effective_stage"] = stage.value
+        case["stage_source"] = source.value
+        case["archived"] = self.visibility_state(case["id"])["archived"]
+        case["current_request_state"] = active["state"] if active is not None else None
+        case["needs_response"] = self._open_question_count(case["id"]) > 0
+        return case

@@ -12,6 +12,7 @@ import {
   api,
   ApiError,
   codingCliTools,
+  conversationApi,
   gateApi,
   GATE_VERDICT_LABEL,
   REFUSAL_LABEL,
@@ -24,6 +25,7 @@ import {
   type RunnerInfo,
   type RunPurpose,
 } from './api'
+import { ConversationPanel } from './ConversationPanel'
 import { IntentPanel } from './IntentPanel'
 import { PolicyPanel } from './PolicyPanel'
 import { PreparationPanel } from './PreparationPanel'
@@ -264,6 +266,11 @@ function CasePanel(props: {
               <strong>{item.title}</strong>
               <span className="muted">
                 {item.kind} · {item.status}
+                {/* UI-01. 준비 단계·보관·현재 요청은 종료 상태와 다른 축이다. */}
+                {item.stage === 'discussion' && ' · 준비 단계'}
+                {(item as { archived?: boolean }).archived && ' · 보관됨'}
+                {(item as { current_request_state?: string | null }).current_request_state &&
+                  ` · 요청 ${(item as { current_request_state?: string | null }).current_request_state}`}
               </span>
             </button>
           </li>
@@ -289,6 +296,17 @@ function CasePanel(props: {
         </select>
         <button type="submit">Case 추가</button>
       </form>
+      {/* UI-01. 목표·Profile 없이 시작하는 대화. 업무화는 대화 안에서 한다. */}
+      <button
+        type="button"
+        onClick={async () => {
+          await conversationApi.create(props.project.id, title.trim() || '새 대화')
+          setTitle('')
+          props.onCreated()
+        }}
+      >
+        새 대화 (준비 단계)
+      </button>
     </section>
   )
 }
@@ -339,6 +357,9 @@ function CaseDetailPanel(props: {
         {detail.id} · {detail.kind} · {detail.status}
       </p>
       {notice && <div className="notice">{notice}</div>}
+
+      {/* UI-01. 대화와 현재 요청. 전송 가능 여부는 서버가 판정한다. */}
+      <ConversationPanel detail={detail} runners={props.runners} onChanged={props.onChanged} />
 
       <h3>원문 참조</h3>
       <p className="muted small">

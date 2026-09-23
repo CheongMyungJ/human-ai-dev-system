@@ -1480,3 +1480,141 @@ CREATE INDEX IF NOT EXISTS idx_quality_revalidation_run
 -- 값은 전부 열거형이고 `CHECK` 로 묶는다. 본문 자리는 없다.
 -- 옛 행은 NULL 이며 그것은 "Profile 정의 v1 로 만들어졌다"이다. 도출해 채우지 않는다.
 -- ===================================================================
+
+-- ===================================================================
+-- 스키마 v16 (UI-01) — 대화·요청 기반
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. 아래 표에도 **본문 컬럼은 없다.**
+-- 사용자 메시지·AI 응답의 본문은 소유 Runner 에 있고 여기에는 순번·종류·원문 참조·
+-- 해시·짧은 요약·관계만 남는다. 자료 참조의 경로·위치는 식별 정보이며 파일 본문이
+-- 아니다.
+--
+-- **Case 의 종료 상태·단계·보관은 서로 다른 축이다**(D-69). 단계는 `case.stage`
+-- (db.py 가 붙인다), 보관은 `case_visibility_event` 의 최신 행이다. 둘 다
+-- `case.status` 를 바꾸지 않는다.
+--
+-- **현재 요청이 일반 전송을 잠근다**(D-70). 활성 요청(`processing`·`unknown`)은 Case 당
+-- 하나이며 부분 유일 색인이 그것을 DB 에서 보장한다 — 화면의 비활성 버튼도, 제어부의
+-- 검사도 마지막 방어선이 아니다.
+--
+-- 옛 Case 에는 아무 행도 만들지 않는다. 없던 대화·요청을 지어내지 않는다.
+-- ===================================================================
+
+-- 한 사용자 요청의 처리 단위. **Case 의 종료와 다른 축이다.** 한 요청이 여러 Task·Run
+-- 을 포함하고(`run.request_id`), 종료는 처리하는 쪽이 명시적으로 적는다 — 연결된 실행이
+-- 전부 끝났다는 사실만으로는 다음 실행을 만들기 직전인지 알 수 없다.
+CREATE TABLE IF NOT EXISTS conversation_request (
+    id                   TEXT PRIMARY KEY,
+    case_id              TEXT NOT NULL REFERENCES "case"(id),
+    -- 요청을 연 메시지. 메시지도 이 요청을 가리키므로 순환하고, 그래서 지연 검사다.
+    opened_by_message_id TEXT NOT NULL
+        REFERENCES conversation_message(id) DEFERRABLE INITIALLY DEFERRED,
+    state                TEXT NOT NULL
+        CHECK (state IN ('processing', 'completed', 'failed', 'unknown')),
+    opened_at            TEXT NOT NULL,
+    settled_at           TEXT,
+    settled_by           TEXT,
+    outcome_reason       TEXT CHECK (outcome_reason IS NULL OR outcome_reason IN
+                             ('settled', 'run_outcome_unknown', 'original_lost_before_persist')),
+    note_summary         TEXT,
+    CHECK (note_summary IS NULL OR length(note_summary) <= 200),
+    CHECK ((state = 'processing') = (settled_at IS NULL))
+);
+
+-- **잠금의 마지막 방어선.** 같은 Case 에 활성 요청이 둘 생기지 않는다.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_request_active
+    ON conversation_request(case_id) WHERE state IN ('processing', 'unknown');
+
+-- 대화 메시지. **본문 컬럼이 없다** — 원문은 `artifact_ref` 가 가리키는 Runner 에 있다.
+-- 접수 상태는 저장하지 않고 `intake` 에서 도출한다(두 곳에 적으면 어긋난다).
+CREATE TABLE IF NOT EXISTS conversation_message (
+    id                   TEXT PRIMARY KEY,
+    case_id              TEXT NOT NULL REFERENCES "case"(id),
+    seq                  INTEGER NOT NULL,
+    author               TEXT NOT NULL CHECK (author IN ('user', 'assistant')),
+    message_kind         TEXT NOT NULL CHECK (message_kind IN
+                             ('general', 'correction', 'card_answer', 'assistant_reply')),
+    actor                TEXT NOT NULL,
+    -- 사용자 전송 식별자. 같은 값의 재전송은 새 메시지를 만들지 않는다.
+    client_message_id    TEXT,
+    artifact_id          TEXT NOT NULL,
+    artifact_rev         INTEGER NOT NULL,
+    content_hash         TEXT NOT NULL,
+    intake_id            TEXT REFERENCES intake(id),
+    request_id           TEXT REFERENCES conversation_request(id),
+    corrects_message_id  TEXT REFERENCES conversation_message(id),
+    question_id          TEXT REFERENCES intent_question(id),
+    question_intent_version_id TEXT REFERENCES intent_version(id),
+    run_id               TEXT REFERENCES run(run_id),
+    summary              TEXT NOT NULL,
+    created_at           TEXT NOT NULL,
+    UNIQUE (case_id, seq),
+    UNIQUE (case_id, client_message_id),
+    FOREIGN KEY (artifact_id, artifact_rev) REFERENCES artifact_ref(artifact_id, revision),
+    CHECK (length(summary) <= 200),
+    CHECK (client_message_id IS NULL OR length(client_message_id) <= 64),
+    CHECK ((author = 'user') = (client_message_id IS NOT NULL)),
+    CHECK ((author = 'user') = (intake_id IS NOT NULL)),
+    CHECK ((message_kind = 'assistant_reply') = (author = 'assistant')),
+    CHECK ((message_kind = 'assistant_reply') = (run_id IS NOT NULL)),
+    CHECK ((message_kind = 'correction') = (corrects_message_id IS NOT NULL)),
+    CHECK ((message_kind = 'card_answer') = (question_id IS NOT NULL))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_conversation_message_run
+    ON conversation_message(run_id) WHERE run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_conversation_message_request
+    ON conversation_message(request_id);
+
+-- 메시지에 붙인 자료 참조(D-81). **의견의 대상을 고정한다** — 산출물은 id·버전·그
+-- 시점 해시, 프로젝트 파일은 등록 저장소·경로·위치·관측 해시다. 파일 본문은 없다.
+CREATE TABLE IF NOT EXISTS conversation_message_ref (
+    message_id     TEXT NOT NULL REFERENCES conversation_message(id),
+    ordinal        INTEGER NOT NULL,
+    ref_kind       TEXT NOT NULL CHECK (ref_kind IN ('artifact', 'project_file')),
+    artifact_id    TEXT,
+    artifact_rev   INTEGER,
+    artifact_hash  TEXT,
+    repository_id  TEXT REFERENCES project_repository(id),
+    path           TEXT,
+    location       TEXT,
+    observed_hash  TEXT,
+    PRIMARY KEY (message_id, ordinal),
+    CHECK (location IS NULL OR length(location) <= 200),
+    CHECK (path IS NULL OR length(path) <= 512),
+    CHECK (observed_hash IS NULL OR length(observed_hash) <= 128),
+    CHECK ((ref_kind = 'artifact') = (artifact_id IS NOT NULL AND artifact_rev IS NOT NULL)),
+    CHECK ((ref_kind = 'project_file') = (repository_id IS NOT NULL AND path IS NOT NULL))
+);
+
+-- 최초 업무화(D-69). **Case 당 한 번이다** — 업무 단계 Case 의 Profile 변경은 활성
+-- 이행(D-86)이며 이 표가 아니다. 위임 근거(`original_request`)는 근거 메시지 하나다.
+-- 앞선 논의·동의는 문맥이지 위임이 아니다(D-60).
+CREATE TABLE IF NOT EXISTS case_work_start (
+    case_id               TEXT PRIMARY KEY REFERENCES "case"(id),
+    request_message_id    TEXT NOT NULL REFERENCES conversation_message(id),
+    request_id            TEXT NOT NULL REFERENCES conversation_request(id),
+    profile               TEXT NOT NULL,
+    profile_version       TEXT NOT NULL,
+    kind                  TEXT NOT NULL,
+    decided_by            TEXT NOT NULL CHECK (decided_by IN ('person', 'ai_interpretation')),
+    interpretation_run_id TEXT REFERENCES run(run_id),
+    actor                 TEXT NOT NULL,
+    delegation_basis_id   TEXT REFERENCES delegation_basis(id),
+    summary               TEXT NOT NULL,
+    started_at            TEXT NOT NULL,
+    CHECK (length(summary) <= 200),
+    CHECK ((decided_by = 'ai_interpretation') = (interpretation_run_id IS NOT NULL))
+);
+
+-- 보관·복원 이력(D-69). **목록 가시성이다** — 종료·취소·삭제가 아니며 요청·실행을
+-- 멈추거나 재개하지 않는다. 현재 상태는 최신 행이다. 지우지 않고 쌓는다.
+CREATE TABLE IF NOT EXISTS case_visibility_event (
+    id           TEXT PRIMARY KEY,
+    case_id      TEXT NOT NULL REFERENCES "case"(id),
+    seq          INTEGER NOT NULL,
+    action       TEXT NOT NULL CHECK (action IN ('archive', 'restore')),
+    actor        TEXT NOT NULL,
+    recorded_at  TEXT NOT NULL,
+    UNIQUE (case_id, seq)
+);

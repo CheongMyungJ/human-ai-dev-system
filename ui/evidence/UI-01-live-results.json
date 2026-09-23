@@ -1,0 +1,144 @@
+{
+  "tag": "154607866",
+  "data_root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-ui-01-live\\154607866",
+  "case_id": "case-eecedcfa3cd0db59",
+  "product_checks": [
+    {
+      "check": "discussion_stage",
+      "ok": true,
+      "detail": "stage=discussion profile=None"
+    },
+    {
+      "check": "send_is_pending_first",
+      "ok": true,
+      "detail": "전송 응답의 접수 상태 pending"
+    },
+    {
+      "check": "general_send_locked",
+      "ok": true,
+      "detail": "처리 중 일반 전송 409 ['request_in_progress']"
+    },
+    {
+      "check": "A_completed",
+      "ok": true,
+      "detail": "논의 응답 outcome=completed"
+    },
+    {
+      "check": "A_read_only",
+      "ok": true,
+      "detail": "read_only"
+    },
+    {
+      "check": "A_one_assistant_message",
+      "ok": true,
+      "detail": "이 실행의 AI 메시지 1건"
+    },
+    {
+      "check": "settled",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "check": "send_is_pending_first",
+      "ok": true,
+      "detail": "전송 응답의 접수 상태 pending"
+    },
+    {
+      "check": "B_completed",
+      "ok": true,
+      "detail": "논의 응답 outcome=completed"
+    },
+    {
+      "check": "B_read_only",
+      "ok": true,
+      "detail": "read_only"
+    },
+    {
+      "check": "B_one_assistant_message",
+      "ok": true,
+      "detail": "이 실행의 AI 메시지 1건"
+    },
+    {
+      "check": "B_context_has_conversation",
+      "ok": true,
+      "detail": "고정 참조 역할 ['conversation_user_message', 'conversation_assistant_message']"
+    },
+    {
+      "check": "settled",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "check": "send_is_pending_first",
+      "ok": true,
+      "detail": "전송 응답의 접수 상태 pending"
+    },
+    {
+      "check": "work_started_same_case",
+      "ok": true,
+      "detail": "stage=work profile=defect_fix v2"
+    },
+    {
+      "check": "basis_is_work_request",
+      "ok": true,
+      "detail": "위임 근거 original_request art-1cedd75cf41bd1bc"
+    },
+    {
+      "check": "C_completed",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "check": "C_context_has_conversation",
+      "ok": true,
+      "detail": "고정 참조 역할 ['conversation_user_message', 'conversation_assistant_message', 'conversation_user_message', 'conversation_assistant_message']"
+    },
+    {
+      "check": "settled",
+      "ok": true,
+      "detail": "completed"
+    },
+    {
+      "check": "history_kept",
+      "ok": true,
+      "detail": "메시지 ['user', 'assistant', 'user', 'assistant', 'user']"
+    }
+  ],
+  "observations": [
+    {
+      "check": "A_repository_unchanged",
+      "ok": true,
+      "detail": "HEAD·작업 트리 같음"
+    },
+    {
+      "check": "A_nonempty",
+      "ok": true,
+      "detail": "응답 길이 682"
+    },
+    {
+      "check": "A_no_work_claim",
+      "ok": true,
+      "detail": "작업 주장 표현 없음"
+    },
+    {
+      "check": "B_repository_unchanged",
+      "ok": true,
+      "detail": "HEAD·작업 트리 같음"
+    },
+    {
+      "check": "B_recalls_prohibition",
+      "ok": true,
+      "detail": "앞선 금지(코드·문서 수정 금지)를 언급했는가"
+    },
+    {
+      "check": "C_carries_document_prohibition",
+      "ok": true,
+      "detail": "논의의 '문서 만들지 말 것'이 제약·제외·범위에 옮겨졌는가"
+    },
+    {
+      "check": "C_prohibition_is_user_requirement",
+      "ok": true,
+      "detail": "제약·제외의 origin {'constraints': 'user_requirement', 'exclusions': 'user_requirement'}"
+    }
+  ]
+}
