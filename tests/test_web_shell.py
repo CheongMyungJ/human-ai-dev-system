@@ -628,3 +628,95 @@ def test_the_work_stage_runs_by_itself_and_stops_only_at_the_cards(stack):
     expect(page.locator('[data-testid="work-start-card"]')).to_be_visible(timeout=60_000)
     assert stack.http.get(f"/api/cases/{relation['case_id']}/policy").json()["delegation_basis"]["current"] is not None
     page.context.close()
+
+
+def test_a_limit_card_raises_the_limit_and_goes_once_more(stack):
+    """P4-05b AC-10 — 재시도 상한에 걸린 카드가 "재시도 1/1" 을 보이고, "한도를 올리고 계속" 을 누르면
+    한 번 더 가서 새 한도에서 다시 멈춘다(재시도 2/2). 누른 것은 이력으로 남는다.
+    """
+    project = stack.project("상한")
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_IMPL_NOCHANGE 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    card = page.locator('[data-testid="wait-card-task_failed"]')
+    expect(card).to_be_visible(timeout=120_000)
+    expect(card).to_have_attribute("data-limit-key", "task_retry_limit")
+    expect(card.locator('[data-testid="limit-usage"]')).to_contain_text("재시도 1/1")
+    expect(card.locator('[data-testid="limit-usage"]')).to_contain_text("시스템 기본값")
+    # 상한 대기에서는 아무 것도 하지 않던 "다시 시도" 가 없다.
+    expect(card.locator('[data-testid="wait-retry"]')).to_have_count(0)
+
+    def impl_runs() -> int:
+        runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+        return len([r for r in runs if r["purpose"] == "feature_implementation"])
+
+    assert impl_runs() == 2
+    card.locator('[data-testid="limit-raise"]').click()
+    # 한 번 더 가서(구현 3회) 새 한도에서 다시 멈춘다.
+    expect(page.locator('[data-testid="wait-card-task_failed"] [data-testid="limit-usage"]')).to_contain_text(
+        "재시도 2/2", timeout=120_000
+    )
+    expect(page.locator('[data-testid="wait-card-task_failed"] [data-testid="limit-usage"]')).to_contain_text(
+        "이 업무에서 정함"
+    )
+    assert impl_runs() == 3
+    limits = stack.http.get(f"/api/cases/{case_id}/progress").json()["limits"]
+    assert [(r["limit_key"], r["limit_value"], r["reason_summary"]) for r in limits["history"]] == [
+        ("task_retry_limit", 2, "대기 카드에서 한도를 올림")
+    ]
+    page.context.close()
+
+
+def test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated(stack):
+    """P4-06 AC-10·17 — 대화에서 프로젝트 규칙을 말하면 응답 아래에 "프로젝트 규칙으로 등록됨" 카드가
+    뜨고(글에는 블록이 없다), 카드에서 무효로 할 수 있다. 관리 화면의 지식 패널에서 사람이 등록한다.
+    """
+    project = stack.project("지식")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_RULE 이 프로젝트에서는 앞으로 로그에 비밀값을 남기지 마")
+    card = page.locator('[data-testid="knowledge-card"]')
+    expect(card).to_be_visible(timeout=60_000)
+    expect(card).to_contain_text("K-001 v1")
+    expect(card).to_contain_text("필수")
+    expect(card).to_have_attribute("data-state", "active")
+    expect(page.locator('article[data-author="assistant"]').last).not_to_contain_text("hads-knowledge")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    current = view["items"][0]["current"]
+    assert (current["authority_kind"], current["state"]) == ("user_statement", "active")
+
+    card.locator('[data-testid="knowledge-invalidate"]').click()
+    card.locator('[data-testid="knowledge-invalidate-reason"]').fill("옮긴 내용이 내 말과 다르다")
+    card.locator('[data-testid="knowledge-invalidate-confirm"]').click()
+    expect(card).to_have_attribute("data-state", "invalid", timeout=15_000)
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    assert view["items"][0]["current"]["invalid_reason"] == "옮긴 내용이 내 말과 다르다"
+
+    # 관리 화면 — 사람이 이 대화에서 등록한다(재승인 없이 활성).
+    page.goto(f"{stack.base}/?view=admin&project={project['id']}&case={case_id}")
+    panel = page.locator('[data-testid="knowledge-panel"]')
+    expect(panel).to_be_visible(timeout=30_000)
+    expect(panel.locator('[data-testid="knowledge-K-001"]')).to_contain_text("무효")
+    panel.locator('[data-testid="knowledge-content"]').fill("배포 전에는 반드시 시험을 돌린다. 예외: 문서만 바뀐 경우")
+    panel.locator('[data-testid="knowledge-summary"]').fill("배포 전 시험")
+    panel.locator('[data-testid="knowledge-register"]').click()
+    expect(panel.locator('[data-testid="knowledge-K-002"]')).to_contain_text("활성", timeout=15_000)
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    second = view["items"][1]["current"]
+    assert (second["authority_kind"], second["obligation"]) == ("user_registration", "required")
+    page.context.close()

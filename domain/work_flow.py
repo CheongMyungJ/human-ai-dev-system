@@ -57,11 +57,49 @@ WORK_PROGRESSOR_ACTOR = "work-progressor"
 #: 기준 판정을 제품이 적을 때의 주체(`criterion_result.recorded_by`).
 CRITERIA_RECORDER = "policy:work_progressor"
 
-#: 같은 대상을 다시 쓰는 상한(D-29 기본값과 같은 수). 넘으면 사람에게 넘긴다.
-REPAIR_LIMIT = 2
+#: P4-05b. 초안·준비 산출물을 **다시 쓰는** 횟수의 기본값(D-29 기본값과 같은 수). 첫 작성은 세지
+#: 않는다. 넘으면 사람에게 넘긴다.
+DEFAULT_REPAIR_LIMIT = 2
 
-#: 실패한 Task 실행을 다시 시도하는 상한(D-79 "제한 자동 복구"). 두 번째 실패는 사람 대기다.
-TASK_ATTEMPT_LIMIT = 2
+#: P4-05b. 실패한 구현·검증·분석 작업을 **다시 시도하는** 횟수의 기본값(D-79 "제한 자동 복구").
+#: 첫 시도는 세지 않는다 — 기본값에서 두 번째 실패가 사람 대기다.
+DEFAULT_TASK_RETRY_LIMIT = 1
+
+#: 상한 설정의 범위. **무제한은 없다** — "통과할 때까지 돌리지 않는다"가 이 파일의 약속이다.
+#: 0 은 "자동으로 다시 하지 않고 바로 사람에게"다.
+LIMIT_MIN = 0
+LIMIT_MAX = 10
+
+#: 상한 설정의 이름. 결함 수정과 환경·작업 재시도를 나눈다(D-29).
+LIMIT_KEYS: tuple[str, ...] = ("repair_limit", "task_retry_limit")
+
+
+def check_limit(key: str, value: Any) -> int:
+    """상한 값 하나를 검사한다. 모르는 이름·정수가 아닌 값·범위 밖은 `ValueError`."""
+    if key not in LIMIT_KEYS:
+        raise ValueError(f"unknown progress limit {key!r}")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{key} must be an integer")
+    if not LIMIT_MIN <= value <= LIMIT_MAX:
+        raise ValueError(f"{key} must be between {LIMIT_MIN} and {LIMIT_MAX}")
+    return value
+
+
+@dataclass(frozen=True)
+class ProgressLimits:
+    """진행기의 재작성·재시도 상한(P4-05b). 판정은 값만 본다 — 출처는 저장 계층이 안다."""
+
+    repair_limit: int = DEFAULT_REPAIR_LIMIT
+    task_retry_limit: int = DEFAULT_TASK_RETRY_LIMIT
+    #: 어디서 온 값인가(키 → `case_setting`·`system_default`). 대기 사유에 싣는다.
+    sources: tuple[tuple[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        check_limit("repair_limit", self.repair_limit)
+        check_limit("task_retry_limit", self.task_retry_limit)
+
+    def source(self, key: str) -> str:
+        return dict(self.sources).get(key, "system_default")
 
 
 # ================================================================ 진행 상태 값
@@ -95,6 +133,8 @@ class WaitReason(str):
     CRITERIA_UNRESOLVED = "criteria_unresolved"
     OBJECTIVE_WITHOUT_CRITERIA = "objective_without_criteria"
     QUALITY_GATE = "quality_gate"
+    #: P4-06. 이 작업에 적용되는 필수 지식이 서로 충돌한다.
+    KNOWLEDGE_CONFLICT = "knowledge_conflict"
     ADMISSION_REFUSED = "admission_refused"
 
 
@@ -127,6 +167,7 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.CRITERIA_UNRESOLVED: "미충족·미검증 기준이 남았다. 예외를 수용해 종료하거나 수정을 요청한다",
     WaitReason.OBJECTIVE_WITHOUT_CRITERIA: "요구된 목적 의무에 기준이 없다. 의도·기준을 바꿔야 한다",
     WaitReason.QUALITY_GATE: "명시한 품질 게이트가 통과하지 않았다(관리 화면에서 진행)",
+    WaitReason.KNOWLEDGE_CONFLICT: "이 작업에 적용되는 필수 지식이 서로 충돌한다. 해소하거나 한쪽을 무효로 한다(관리 화면)",
     WaitReason.ADMISSION_REFUSED: "진입 검사가 사람의 조치를 요구했다",
 }
 
@@ -161,6 +202,7 @@ HUMAN_ADMISSION_REFUSALS: frozenset[str] = frozenset(
         AdmissionRefusal.PROFILE_NOT_RECORDED.value,
         AdmissionRefusal.INTENT_VERSION_NOT_LATEST.value,
         AdmissionRefusal.INTENT_VERSION_MISSING.value,
+        AdmissionRefusal.KNOWLEDGE_CONFLICT_UNRESOLVED.value,
     }
 )
 
@@ -236,6 +278,7 @@ def wait_reason_for(codes: list[str]) -> str:
         AdmissionRefusal.SIZING_NOT_DECIDED.value: WaitReason.SIZING_NOT_DECIDED,
         AdmissionRefusal.TASK_REPOSITORY_NOT_RECORDED.value: WaitReason.REPOSITORY_SELECTION,
         AdmissionRefusal.WORKSPACE_TARGET_NOT_RECORDED.value: WaitReason.REPOSITORY_SELECTION,
+        AdmissionRefusal.KNOWLEDGE_CONFLICT_UNRESOLVED.value: WaitReason.KNOWLEDGE_CONFLICT,
     }
     for code in codes:
         if code in table:
@@ -360,6 +403,27 @@ class FlowState:
     review_pending: bool = False
     #: 이 Case 의 실행 중 마지막으로 끝난 것(요약: run_id·purpose·task_id·outcome). 실패 재시도 판단.
     finished_runs: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-05b. 이 판정 시점의 유효 상한. 걸음마다 다시 읽는다 — 시도 수는 초기화하지 않는다.
+    limits: ProgressLimits = field(default_factory=ProgressLimits)
+
+
+def _limit_wait(
+    state: FlowState, code: str, key: str, used: int, **subject: Any
+) -> Step:
+    """상한에 걸린 사람 대기. 카드가 "재작성 2/2" 를 그리고 어떤 한도를 올릴지 알게 한다."""
+    return _wait(
+        code,
+        limit_key=key,
+        limit=getattr(state.limits, key),
+        used=used,
+        limit_source=state.limits.source(key),
+        **subject,
+    )
+
+
+def _retries_used(state: FlowState, key: str) -> int:
+    """모든 시도를 세는 키에서 **다시 한** 횟수. 첫 시도는 세지 않는다."""
+    return max(state.attempts.get(key, 0) - 1, 0)
 
 
 def _latest(state: FlowState) -> dict[str, Any] | None:
@@ -478,8 +542,11 @@ def _gate_phase(state: FlowState, latest: dict[str, Any]) -> Step | None:
     ai = gate.get("ai_verdict")
     if rule is not None and rule != GateVerdict.PASS.value:
         # 규칙 검사가 막았다(필수 항목·참조·버전). 지적을 실어 다시 쓴다.
-        if repairs >= REPAIR_LIMIT:
-            return _wait(WaitReason.GATE_REPAIR_EXHAUSTED, verdict=gate.get("verdict"), repairs=repairs)
+        if repairs >= state.limits.repair_limit:
+            return _limit_wait(
+                state, WaitReason.GATE_REPAIR_EXHAUSTED, "repair_limit", repairs,
+                verdict=gate.get("verdict"), repairs=repairs,
+            )
         return Step(
             "run",
             "intent_repair",
@@ -502,8 +569,11 @@ def _gate_phase(state: FlowState, latest: dict[str, Any]) -> Step | None:
             attempt_key="intent_gate_review",
         )
     if ai in (GateVerdict.FAIL.value, GateVerdict.HOLD.value):
-        if repairs >= REPAIR_LIMIT:
-            return _wait(WaitReason.GATE_REPAIR_EXHAUSTED, verdict=gate.get("verdict"), repairs=repairs)
+        if repairs >= state.limits.repair_limit:
+            return _limit_wait(
+                state, WaitReason.GATE_REPAIR_EXHAUSTED, "repair_limit", repairs,
+                verdict=gate.get("verdict"), repairs=repairs,
+            )
         return Step(
             "run",
             "intent_repair",
@@ -541,7 +611,7 @@ def _analysis_phase(state: FlowState) -> Step:
         for r in state.finished_runs
     )
     if not completed:
-        if state.attempts.get("analysis", 0) < TASK_ATTEMPT_LIMIT:
+        if _retries_used(state, "analysis") < state.limits.task_retry_limit:
             return Step(
                 "run",
                 "analysis_retry",
@@ -550,8 +620,11 @@ def _analysis_phase(state: FlowState) -> Step:
                 task_id="analysis",
                 attempt_key="analysis",
             )
-        return _wait(
+        return _limit_wait(
+            state,
             WaitReason.TASK_FAILED,
+            "task_retry_limit",
+            _retries_used(state, "analysis"),
             task_key="analysis",
             failures=[r["run_id"] for r in failed],
         )
@@ -590,9 +663,13 @@ def _stage_step(state: FlowState, stage: PreparationStage, purpose: RunPurpose) 
         )
     # 자동 진행 설정인데 조건 기록이 없다 = 필수 항목이 미정이거나 원문을 읽을 수 없다.
     missing = info.get("missing_required_sections") or []
-    if state.attempts.get(key, 0) >= REPAIR_LIMIT:
-        return _wait(
-            WaitReason.PREPARATION_REPAIR_EXHAUSTED, stage=stage.value, missing_sections=missing
+    # 이 키는 첫 작성도 센다. 상한은 **다시 쓴** 횟수다(P4-05b — P4-05 는 첫 작성까지 세어 plan 의
+    # "재작성 2" 보다 한 번 적게 갔다).
+    rewrites = _retries_used(state, key)
+    if rewrites >= state.limits.repair_limit:
+        return _limit_wait(
+            state, WaitReason.PREPARATION_REPAIR_EXHAUSTED, "repair_limit", rewrites,
+            stage=stage.value, missing_sections=missing,
         )
     return Step(
         "run",
@@ -676,9 +753,14 @@ def _graph_phase(state: FlowState) -> Step | None:
         for r in state.finished_runs
         if r.get("task_id") == key and r.get("outcome") != RunOutcome.COMPLETED.value
     ]
-    if state.attempts.get(attempt_key, 0) >= TASK_ATTEMPT_LIMIT:
-        return _wait(
+    if state.attempts.get(attempt_key, 0) and (
+        _retries_used(state, attempt_key) >= state.limits.task_retry_limit
+    ):
+        return _limit_wait(
+            state,
             WaitReason.TASK_FAILED,
+            "task_retry_limit",
+            _retries_used(state, attempt_key),
             task_key=key,
             failures=[r["run_id"] for r in failures],
         )

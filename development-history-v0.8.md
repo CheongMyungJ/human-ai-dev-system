@@ -46,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -130,6 +130,42 @@ UI-04 하위 plan), 사용자가 **P4-05 와 함께**를 골랐다. 그래서 P4
   `controller/admission.py`, `web/src/shell/*`, 관리 화면 `IntentPanel`·`PreparationPanel`·
   `WorkGraphPanel`·`WorkspacePanel`·`ResultPanel`.
 
+### 1.7 P4-06의 경계와 시작점 (완료 — 당시 인계로 보존, S-025 에 옮김)
+
+**목표:** 지식 관리·적용의 첫 버전(D-67·D-80, [프로젝트 지식](project-knowledge.md)) — 원본 참조·짧은 적용 내용·조건·필수/참고·버전·상태, Runner 보관, 활동+범위에 따른 자동 주입·Manifest. 기존 확정 지식의 수동/자동 등록 경로, 규칙의 권위 승계, 주입과 준수 구분(6절 P4-06 행).
+
+- **P4-05가 넘긴 것:** 업무 단계의 실행은 진행기가 만들고 고정 문맥은 `compose_context_refs` 가 정한다 — 지식 주입은 그 문맥 계획(P4-04 등급·인라인 한도)에 한 역할로 더하는 자리다. 진행 이력(`case_progress_event`)은 지식 후보의 출처가 될 수 있다(P4-07). 종료 Case 의 설명 응답은 같은 문맥 규칙을 쓴다.
+- **plan 에서 정할 것:** 지식 표와 원문 경계(상세 원문은 Runner), 활동·범위 대응, 필수 내용의 실제 제공과 불가·충돌 시 보류, 화면(결정 사항 패널·프로젝트 규칙은 UI-04 와 접점). P4-07·UI-04 로 자동 확대하지 않는다.
+- 코드 대조 시작점: `controller/repository.py` 의 `compose_context_refs`·`plan_context_package`, `domain/context.py`, `runner/prompts.py` 의 `CONTEXT_LABEL`·`build`, `controller/work_progressor.py`, 관리 화면 `PolicyPanel`.
+
+### 1.8 P4-05b — 진행 상한 설정 (완료 — 당시 인계로 보존, S-025 에 옮김)
+
+P4-05 의 재작성·재시도 상한을 **설정으로 바꾼다**. 사용자가 P4-05 보고 뒤 "3번은 제안대로 하되 지금 하지
+말고 다음 작업이 같이 하게 하자" 고 정했다. 작은 별도 plan(`plans/P4-PLAN-05b.md`)으로 기록하고 **P4-06 보다
+먼저**(반나절 규모, 스키마 v21) 같은 세션에서 한다. 설계는 아래 제안을 따르며, 기존 설정 방식(운영 기본값은
+환경 변수, 업무별 정책은 Case 에 이력, 우선순위 `Case 명시 → 시스템 기본값`)을 그대로 쓴다.
+
+- **설정 둘, 이름을 나눈다**(D-29 의 결함 수정 횟수·환경 장애 재시도 구분): `repair_limit` — 검토 지적을
+  받아 초안·준비 산출물을 다시 쓰는 횟수, 기본 2. `task_retry_limit` — 구현·검증·분석 작업이 실패했을 때
+  다시 시도하는 횟수, 기본 1. 범위 0~10, 0 은 "자동으로 다시 하지 않고 바로 사람에게".
+- **시스템 기본값** — 환경 변수 `HADS_REPAIR_LIMIT`·`HADS_TASK_RETRY_LIMIT`. 기동 때 읽고 검증하며(이상한
+  값이면 기동 실패) 기동 로그에 남긴다. `HADS_AUTO_PROGRESS_WORK` 와 같은 자리. 파일 설정은 만들지 않는다.
+- **Case 별 조정** — 예산 한도와 같은 방식으로 DB 에 이력(누가·언제·왜 짧은 요약, 이전 값은 대체 상태로
+  보존). 종료된 Case 는 바꿀 수 없다(예산만 예외인 현재 규칙 유지). **Project 단위는 넣지 않는다** — Project
+  정책 층이 아직 없고 "없는 설정 화면을 찾게 만들지 말라"(`effective_policy`)는 규칙이 있다. UI-04 의 Project
+  상세 설정이 생길 때 그 층을 더한다.
+- **동작** — 진행기는 걸음을 정할 때마다 그 시점의 유효 한도를 읽고(`FlowState` 에 값으로 넣어 순수 판정은
+  그대로), 시도 횟수는 초기화하지 않는다. 상한에 걸려 멈춘 뒤 한도를 올리면 "계속 진행" 이 한 번 더 가고
+  새 한도에서 다시 멈춘다. 조회 `GET /api/cases/{id}/progress` 가 유효 한도와 출처(시스템 기본값/Case 명시)를
+  주고, 변경은 `PUT /api/cases/{id}/progress/limits`(값·사유 요약) 하나다.
+- **화면** — 상한에 걸린 대기 카드("재작성 2/2, 사람 확인 필요")에 **"한도를 올리고 계속"**. 관리 화면 정책
+  패널에 현재 한도·출처 표시와 변경. 새 화면의 상세 설정은 UI-04 몫.
+- **검증** — 기본값·환경 변수·Case 조정의 우선순위와 이력, 올린 뒤 한 번 더 가고 다시 멈춤, 0 의 뜻, 종료
+  Case 거부, 이행(v20 → v21, 옛 Case 는 시스템 기본값 출처). 상한 자체를 없애는 값(무제한)은 두지 않는다.
+- 코드 대조 시작점: `domain/work_flow.py` 의 `REPAIR_LIMIT`·`TASK_ATTEMPT_LIMIT`·`FlowState`,
+  `controller/work_progressor.py` 의 `advance`·`_wait`, `controller/repository.py` 의 `flow_state`·
+  `set_budget_limit`(이력 방식), `controller/config.py`, `web/src/shell/ProgressCards.tsx` 의 `GenericWaitCard`.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -167,6 +203,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-023 / 2026-09-23 / UI-03 기본 대화 화면 (**완료**)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘." 다음 단계는 D-90·1.5절의 **UI-03** 이었다.
+- **수행:** 시작 상태(`main`/`ede35d7`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → pytest **575** + unittest **18**, 5분 20초)을 직접 확인한 뒤 [UI-PLAN-03](plans/UI-PLAN-03.md)을 **구현 전에 기록·공유**하고 구현·검증했다. 상세 근거는 [UI-03 결과](ui/evidence/UI-03-results.md)다. **plan 을 공유하면서 경계를 알렸다** — 업무화 뒤의 업무 단계 자동 진행은 제품에 없고 1.1절 UI-03 정의에도 없어 넣지 않았고, 미지원으로 표시했다(인계에서 물었고 사용자가 P4-05 로 정했다 — 1.6절). 새 제품 판단은 하지 않았다 — AI 해석에 의한 업무화는 D-69 의 확정 동작이다.
+- **서버:** 요청 처리기(`controller/request_processor.py` — 저장 보고 뒤 읽기 전용 논의 응답 하나, 결과 뒤 요청 종료, 기동 복구, `HADS_AUTO_PROCESS_REQUESTS` 기본 켜짐), 준비 단계 응답의 해석 규칙(Runner 지시문)·블록 분리·결과 보고의 `interpretation`, 해석 기록 표(스키마 **v19**, 본문 없음)와 `ai_interpretation` 업무화(위임 근거 = 사용자 메시지), 조회 보강(목록 활동·주의 수·Runner 연결·처리기 여부), 기존 접수 네 경로의 기록 전 중계.
+- **화면:** `web/src/shell`(기본 `/`) — 왼쪽 목록·가운데 대화·검토 패널, 라이트 기본·다크·시스템, 패널·폭·마지막 대화·읽던 위치 기억, 본문(열람 중계·탭 메모리·"연결 필요"), 진행·중단·다시 확인, 질문 카드, 초안 복구(`web/src/lib/drafts.ts`), 결과물 목록·열람 버전 고정·줄 비교·`대화에 참조`, 기본값 요약, 업무 단계 미지원 안내. 관리 화면은 `?view=admin`(스타일 분리).
+- **구현 중 찾아 고친 결함(범위 밖이었다):** 제어부가 요청 스레드들과 연결 하나를 공유하면서 **쓰기 트랜잭션만** 잠가, 같은 SQL 을 두 스레드가 동시에 실행하면 파이썬 sqlite3 의 준비된 문장 캐시를 함께 써 매개변수가 섞였다 — 방금 만든 열람 요청이 404, `InterfaceError`. P2 부터의 구조이며 새 화면이 조회를 겹쳐 보내며 드러났다(브라우저 시험의 간헐 실패 → 부하 재현 25초 367건 틀림·1,663 오류). `SerializedConnection` 으로 문장 하나(실행·결과 읽기)를 같은 잠금 안에서 끝내게 했다(같은 부하 0건). 회귀 시험이 고치기 전 코드에서 실패함을 확인했다. plan 10절에 적었다.
+- **기존 시험의 의미 검토:** 둘을 고쳤고 검사를 지우지 않았다 — v17→v18 이행의 `== 18` → `>= 18`(v19 고정은 새 시험, UI-01·P4-04·UI-02 와 같은 판단), 공통 하네스는 처리기를 끈다(`auto_process_requests=False` — 기존 시험은 UI-01 명시 계약을 본다, 처리기 시험은 `processing_harness`). 옛 라이브 하네스(`p3/live/driver.py`·`ui/live/ui02_control.py`)와 `tests/test_restart_recovery.py` 의 제어부도 처리기를 끈다(스스로 요청을 처리한다).
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **18**, pytest **614**(기준선 575 → +39), P1 계약 unittest **18** 통과(6분 30초). 새 pytest 39건(`test_request_processor` 26, `test_intake_order` 5, `test_web_shell` 5 — 실제 uvicorn·실제 Runner 프로세스·가짜 codex·설치된 Edge, `test_shared_connection` 2, v18→v19 이행 1). 그 뒤 화면의 사소한 두 곳을 고쳐 웹 빌드·웹 단위 18·브라우저 5·연결 2 를 다시 돌려 통과했다. 알려진 deprecation warning 외 실패 없음. 구현 중 브라우저 시험이 두 번 흔들렸고 둘 다 원인을 찾아 고쳤다 — 하나는 위 공유 연결 결함, 하나는 초안 표시가 앞선 저장을 보인 화면 결함(결과 4절).
+- **실제 CLI·실제 브라우저:** **수행.** `ui/live/ui03_shell.py` 로 실제 `codex-cli 0.156.1`(UI-02 의 0.154.0 에서 바뀜)과 설치된 Edge 를 썼다. **두 번 돌렸고 두 번 모두 제품 규칙 24/24 통과**(2회차 `215304164` 가 최종 코드이며 증거 사본 — 로그·결과 JSON·화면 8장). 새 대화 → 논의(처리 중 서버 사유로 전송 잠금·초안 편집 가능, 실제 AI 응답이 붙고 해석 블록은 안 보임) → 새로 고침 뒤 초안 복구(자동 전송 없음, 저장소에 본문 없음) → 분석 요청 → **AI 가 `research` 업무 요청으로 해석해 같은 Case 업무화**(위임 근거 = 사용자 메시지, 실행 추가 없음, 업무 단계 미지원 안내) → 화면 중단으로 codex 셸 대기(`Start-Sleep 93`)가 OS 목록에서 사라짐 → 질문 카드(동의 아님) → 의도 v1 을 읽는 동안 v2(본문 유지·줄 비교·사람이 전환) → Runner 만 내림(불러온 본문 유지·전송 비활성·새 열람 요청 0) → 재기동(본문 다시 불러옴·자동 전송 없음). 첫 응답 약 50초. codex 는 Markdown 으로 답하고 화면은 글 그대로 보인다. 표본은 회차마다 대화 하나·해석 둘. claude 로는 돌리지 않았다.
+- **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 처리기·해석·업무화가 권한·동의·위임을 만들지 않는다. 업무 단계 자동 진행·확인 카드·검색·알림·상세 설정·작업 PC 열기·미커밋 포함 시작·활성 Case 목적 변경(UI-04)·종료 후 설명(P4-05)·코드 diff 열람·이미지 첨부·네 경로 멱등 키는 하지 않았다. 9절에 배정했다.
+- **다음 행동:** **P4-05(업무 단계 자동 진행 + 완료·예외·후속)** 를 새 plan 으로 시작한다(1.6절). 완료된 P4-PLAN-01~04·UI-PLAN-01~03 을 다시 열지 않는다.
+- **사람에게 물어야 할 것:** 없다. 인계에서 물은 하나(업무 단계 자동 진행의 자리)는 사용자가 답했다 — "P4-05에 포함해줘."(2026-09-23). 1.6절·6절·1.1절 4행에 반영했다.
+- **사용자 지시로 한 일:** 작업 보고 뒤 사용자 지시("P4-05에 포함해줘. 마치면 커밋,푸시해줘.")로 (1) 업무 단계 자동 진행을 P4-05 에 포함한다는 결정을 이 문서(머리·1절 표·1.1절 4행·1.6절·6절·9절)·README·UI 설계·UI-03 결과·plan 에 기록하고, (2) UI-03 변경을 **`d51fc02`** 으로 커밋한 뒤 이 인계 기록을 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 원격을 fetch 해 앞서 간 커밋이 없음을 확인). 커밋 뒤 이행 시험을 다시 돌려 `_v18_schema()` 가 `592eb39` 의 v18 스키마를 찾는 것을 확인했다(15건 통과, 건너뜀 없음). P4-05 자체는 시작하지 않았다. 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`ede35d7` clean. 이 세션이 그 위에 UI-03 커밋 `d51fc02` 과 인계 기록 커밋을 올렸다 — 새 파일 `controller/request_processor.py`, `plans/UI-PLAN-03.md`, `tests/{test_request_processor,test_intake_order,test_web_shell,test_shared_connection}.py`, `ui/live/ui03_shell.py`, `ui/evidence/UI-03-*`(결과·라이브 로그·결과 JSON·화면 8장), `web/src/AdminEntry.tsx`, `web/src/lib/*`(모듈 5·단위 시험 3), `web/src/shell/*`(구성 요소·스타일). 수정 파일 `controller/{api,app,config,db,repository,schema.sql}`, `domain/{conversation,models}.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_migration,test_restart_recovery}.py`, `tests/fake_cli/fake_codex.py`, `p3/live/driver.py`, `ui/live/ui02_control.py`, `requirements.txt`·`requirements.lock.txt`(playwright), `scripts/run-tests.ps1`, `web/{package.json,tsconfig.app.json}`, `web/src/{main.tsx,api.ts,ConversationPanel.tsx}`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`·`README.md`·`ui-conversation-design.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 커밋은 `git log --oneline ede35d7..HEAD`, 원격 반영은 로컬/원격 ref, 작업 트리는 `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner·codex·Edge 는 스크립트가 내렸고 종료 뒤 그 라이브의 남은 프로세스는 0 이었다. 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-ui-03-live\{213304202,215304164}`(두 회차)에 남아 있고 저장소 `var\` 는 건드리지 않았다. `.venv` 에 `playwright`·`greenlet`·`pyee` 가 설치됐다.
+- **다음 세션이 이어서 할 때:** 처리기를 켠 하네스는 `processing_harness` 다(기존 `harness` 는 꺼짐). 가짜 CLI 의 논의 응답은 `harness.agent.cli_executor.discussion_response` 로 바꾸고, 해석 블록은 `WORK_BLOCK`(tests/test_request_processor.py) 모양이다. 실제 프로세스 가짜 `codex` 는 지시문의 `HADS_FAKE_WORK=<Profile>` 로 업무 요청 블록을 낸다. 브라우저 시험은 `web/dist` 가 최신이어야 돈다(`npm run build`) — Playwright 동기 API 의 `page.url` 은 늦게 갱신되니 `location.href` 를 묻는다(시험의 `_case_in_url`).
 
 ### 이전 개발 인계 — S-022 / 2026-09-23 / UI-02 입력·실행 제어 (**완료**)
 

@@ -33,6 +33,7 @@ from domain import ids, prep_doc, profiles, quality
 from domain import progression
 from domain import run_control as runctl
 from domain import work_flow as workflow
+from domain import knowledge as knowmod
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
     NEEDS_CONTROLLED_START,
@@ -366,8 +367,12 @@ class Repository:
         context_inline_limit: int = ctxmod.DEFAULT_INLINE_LIMIT_BYTES,
         runner_stale_seconds: float = runctl.DEFAULT_RUNNER_STALE_SECONDS,
         auto_process_requests: bool = False,
+        progress_limits: workflow.ProgressLimits | None = None,
     ) -> None:
         self.conn = conn
+        #: P4-05b. 진행기 상한의 **시스템 기본값**(제어부 환경 변수 → 코드 기본값). Case 별 조정이
+        #: 앞선다(`effective_progress_limits`).
+        self.progress_limits = progress_limits or workflow.ProgressLimits()
         #: P4-04. 한 실행의 지시 + 인라인 고정 참조의 한도(바이트). 제어부 설정에서 온다.
         #: 생성 때 적용한 값이 실행에 기록된다(`run.context_inline_limit`).
         self.context_inline_limit = int(context_inline_limit)
@@ -1117,6 +1122,8 @@ class Repository:
         context_refs: list[dict[str, Any]] | None = None,
         request_id: str | None = None,
         context_inline_limit: int | None = None,
+        knowledge: list[dict[str, Any]] | None = None,
+        activity: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Run을 만든다. 같은 `run_id` 의 재전송은 기존 Run을 그대로 돌려준다.
 
@@ -1229,6 +1236,10 @@ class Repository:
                     ),
                 )
                 self._insert_context_refs(run_id, refs)
+                if knowledge is not None:
+                    self._insert_run_knowledge(
+                        run_id, refs, knowledge, activity or knowmod.activity_for(purpose)
+                    )
                 self._reserve_budget(
                     case_id, run_id, 1, role, purpose, want, now
                 )
@@ -1444,6 +1455,13 @@ class Repository:
         run["closed_case"] = (
             purpose == RunPurpose.DISCUSSION_REPLY.value and self.case_is_closed(run["case_id"])
         )
+        # P4-06. 논의 응답이 대화의 프로젝트 규칙을 등록 블록으로 옮길 때 쓰는 **현재 지식 목록과
+        # 등록 저장소 이름**. 대체할 키·저장소 이름을 지어내지 않게 한다. 요약·메타데이터뿐이다.
+        run["knowledge_index"] = (
+            self.knowledge_index_for_assignment(case["project_id"])
+            if purpose == RunPurpose.DISCUSSION_REPLY.value
+            else None
+        )
         return run
 
     def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
@@ -1594,6 +1612,7 @@ class Repository:
         reporter: str = "runner",
         interpretation: dict[str, Any] | None = None,
         criteria_report: list[dict[str, Any]] | None = None,
+        knowledge_report: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
@@ -1649,6 +1668,16 @@ class Repository:
                 )
             parsed = workflow.parse_criteria_report(criteria_report)
             criteria_json = json.dumps(parsed, ensure_ascii=False)[:8000] if parsed else None
+        knowledge_json: str | None = None
+        if knowledge_report is not None:
+            # P4-06. 등록 블록은 **요청에 대한 논의 응답**에만 붙는다. 적용(등록)은 처리기가 응답이
+            # 완료된 뒤에 한다 — 여기서 적으면 보고가 곧 등록이 된다.
+            if run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value or not run.get("request_id"):
+                raise ConflictError("a knowledge report belongs only to a discussion reply of a request")
+            items = list(knowledge_report)[: knowmod.MAX_REPORT_ITEMS + 5]
+            knowledge_json = json.dumps(items, ensure_ascii=False)
+            if len(knowledge_json) > 8000:
+                raise ConflictError("the knowledge report is too large")
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
                 # **중복 청구가 생기지 않는 자리가 여기다.** 정산은 이 가드 뒤에
@@ -1673,7 +1702,7 @@ class Repository:
                 " output_artifact_rev = ?, session_ref = ?, usage_json = ?,"
                 " workspace_effect_json = ?, residual_activity = ?, observed_tool_version = ?,"
                 " finished_at = ?, not_started_reason = ?, context_freshness_json = ?,"
-                " criteria_report_json = ?"
+                " criteria_report_json = ?, knowledge_report_json = ?"
                 " WHERE run_id = ?",
                 (
                     RunStatus.FINISHED.value,
@@ -1690,6 +1719,7 @@ class Repository:
                     not_started_reason.value if not_started_reason else None,
                     json.dumps(freshness, ensure_ascii=False) if freshness else None,
                     criteria_json,
+                    knowledge_json,
                     run_id,
                 ),
             )
@@ -4326,6 +4356,7 @@ class Repository:
                 purpose,
                 request_id,
                 (instruction_artifact_id, instruction_artifact_rev),
+                repository_id,
             )
         try:
             ref = self.get_artifact_ref(instruction_artifact_id, instruction_artifact_rev)
@@ -4420,6 +4451,15 @@ class Repository:
             # 세운다 — 같은 규칙이다.
             context_plan=context_plan.summary(),
             context_unavailable=self._unavailable_core(context_plan),
+            # P4-06. 이 실행에 적용되는 필수 지식 사이의 미해결 충돌.
+            knowledge_conflicts=[
+                {
+                    "id": c["id"],
+                    "knowledge_a": c.get("key_a") or c["knowledge_a"],
+                    "knowledge_b": c.get("key_b") or c["knowledge_b"],
+                }
+                for c in context_plan.knowledge_conflicts
+            ],
             # P4-05. **종료 뒤 설명 전용 진입**(D-87). 요청에 묶인 읽기 전용 논의 응답만이다 —
             # 다른 모든 목적은 종료 Case 에서 그대로 거부된다.
             explanation_entry=(
@@ -4528,7 +4568,11 @@ class Repository:
         # **입력 패키지 계획을 한 번 세워 검사와 생성이 함께 쓴다**(P4-04). 두 번 세우면
         # 그 사이 들어온 입력 때문에 "검사한 패키지"와 "만든 패키지"가 달라질 수 있다.
         plan = self.plan_context_package(
-            case_id, purpose, request_id, (instruction_artifact_id, instruction_artifact_rev)
+            case_id,
+            purpose,
+            request_id,
+            (instruction_artifact_id, instruction_artifact_rev),
+            repository_id,
         )
 
         # 종료된 Case 도 **진입 검사를 거쳐** 거부된다(`case_already_closed`).
@@ -4578,6 +4622,9 @@ class Repository:
                 context_refs=plan.refs,
                 request_id=request_id,
                 context_inline_limit=plan.limit,
+                # P4-06. 지식 Manifest 도 같은 계획·같은 트랜잭션이다.
+                knowledge=plan.knowledge,
+                activity=knowmod.activity_for(purpose),
             )
         except RequestNotProcessing as lost_race:
             # UI-01. 진입 검사는 통과했는데 트랜잭션 안에서 요청이 이미 끝나 있었다 =
@@ -6690,8 +6737,41 @@ class Repository:
         purpose: RunPurpose,
         request_id: str | None = None,
         instruction: tuple[str, int] | None = None,
+        repository_id: str | None = None,
     ) -> list[dict[str, Any]]:
-        """이 목적의 작성 실행에 고정할 참조 목록.
+        """이 목적의 실행에 고정할 참조 목록(P4-06 부터 적용 지식 포함). 본문은 없다."""
+        refs, _decisions, _conflicts = self.compose_context(
+            case_id, purpose, request_id, instruction, repository_id
+        )
+        return refs
+
+    def compose_context(
+        self,
+        case_id: str,
+        purpose: RunPurpose,
+        request_id: str | None = None,
+        instruction: tuple[str, int] | None = None,
+        repository_id: str | None = None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+        """(참조, 지식 결정, 막는 충돌). **지식 참조는 기존 참조 뒤에 온다**(P4-06).
+
+        뒤에 두는 이유는 한도 생략이 보조를 **앞에서부터** 빼기 때문이다 — 오래된 AI 발언이 참고
+        지식보다 먼저 빠진다. 필수 지식은 핵심이라 빠지지 않는다.
+        """
+        refs = self._compose_base_refs(case_id, purpose, request_id, instruction)
+        decisions, conflicts = self._add_knowledge_refs(
+            refs, case_id, RunPurpose(purpose), repository_id, instruction
+        )
+        return refs, decisions, conflicts
+
+    def _compose_base_refs(
+        self,
+        case_id: str,
+        purpose: RunPurpose,
+        request_id: str | None = None,
+        instruction: tuple[str, int] | None = None,
+    ) -> list[dict[str, Any]]:
+        """이 목적의 작성 실행에 고정할 참조 목록(지식 제외).
 
         **본문은 담지 않는다.** `(role, artifact_id, revision)` 만 담고 Runner가
         자기 저장소에서 읽는다(review-context-contract 2절).
@@ -6957,6 +7037,7 @@ class Repository:
             "SELECT * FROM run_context_ref WHERE run_id = ? ORDER BY seq", (run_id,)
         ).fetchall()
         receipt = {r["seq"]: r["status"] for r in self.context_receipt(run_id)}
+        knowledge_meta = self._knowledge_meta_by_seq(run_id)
         out: list[dict[str, Any]] = []
         for row in rows:
             item = dict(row)
@@ -6973,6 +7054,10 @@ class Repository:
                 item["byte_size"] = ref["byte_size"]
             # Runner 가 **실제로** 읽었는가. 영수증이 없으면 `None` 이며 읽음이 아니다.
             item["receipt_status"] = receipt.get(item["seq"])
+            # P4-06. 지식 참조면 어느 항목·버전·효력·범위인가(지시문 머리에 적힌다).
+            meta = knowledge_meta.get(item["seq"])
+            if meta is not None:
+                item["knowledge"] = meta
             out.append(item)
         return out
 
@@ -6984,6 +7069,7 @@ class Repository:
         purpose: RunPurpose,
         request_id: str | None,
         instruction: tuple[str, int],
+        repository_id: str | None = None,
     ) -> ctxmod.ContextPlan:
         """이 실행의 입력 패키지 — 무엇을 넣고 무엇을 드러내어 생략하는가(P4-04).
 
@@ -6991,8 +7077,8 @@ class Repository:
         다른 패키지가 만들어지는" 상태가 조용히 생긴다(P3-R3 의 예약과 같은 이유).
         크기는 제어부가 아는 `artifact_ref.byte_size` 다 — 본문을 읽지 않는다.
         """
-        refs = self.compose_context_refs(
-            case_id, purpose, request_id=request_id, instruction=instruction
+        refs, knowledge, conflicts = self.compose_context(
+            case_id, purpose, request_id, instruction, repository_id
         )
         sized: list[dict[str, Any]] = []
         for ref in refs:
@@ -7004,7 +7090,12 @@ class Repository:
             instruction_bytes = int(self.get_artifact_ref(*instruction)["byte_size"])
         except NotFoundError:
             instruction_bytes = 0
-        return ctxmod.plan_inline(instruction_bytes, sized, self.context_inline_limit)
+        plan = ctxmod.plan_inline(instruction_bytes, sized, self.context_inline_limit)
+        # P4-06. 지식 결정과 막는 충돌을 **같은 계획에** 싣는다 — 진입 검사·생성·Manifest 가 한
+        # 목록을 쓴다. 제공 항목의 인라인/한도 생략은 위 계획이 정했다.
+        plan.knowledge = knowledge
+        plan.knowledge_conflicts = conflicts
+        return plan
 
     @staticmethod
     def _unavailable_core(plan: ctxmod.ContextPlan) -> list[dict[str, Any]]:
@@ -7137,6 +7228,7 @@ class Repository:
                 RunPurpose(purpose),
                 request_id=run.get("request_id"),
                 instruction=(run["instruction_artifact_id"], run["instruction_artifact_rev"]),
+                repository_id=run.get("repository_id"),
             )
         except (NotFoundError, ValueError):
             return None
@@ -7148,6 +7240,44 @@ class Repository:
         ).fetchall()
         added = ctxmod.drift([dict(p) for p in pinned], current, own)
         return ctxmod.freshness(added, measured_at, basis)
+
+    def run_knowledge_view(self, run_id: str) -> dict[str, Any]:
+        """한 실행의 지식 Manifest. **옛 실행은 기록 전**이다 — "지식 없음"으로 적지 않는다."""
+        run = self.get_run(run_id)
+        rows = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT rk.*, ki.knowledge_key, kv.version, kv.summary, kv.kind, kv.authority_kind"
+                " FROM run_knowledge rk JOIN knowledge_version kv ON kv.id = rk.version_id"
+                " JOIN knowledge_item ki ON ki.id = rk.knowledge_id WHERE rk.run_id = ?"
+                " ORDER BY rk.context_seq IS NULL, rk.context_seq, ki.knowledge_key",
+                (run_id,),
+            ).fetchall()
+        ]
+        recorded = bool(rows) or self._run_knowledge_recorded(run)
+        return {
+            "run_id": run_id,
+            "recorded": recorded,
+            "items": rows,
+            "note": (
+                "주입은 제공 기록이며 준수의 증거가 아니다. 등록된 적용 관계 중 이 실행의 범위·활동에"
+                " 해당하는 것만이며 모든 관련 지식을 찾았다는 뜻이 아니다"
+                if recorded
+                else "P4-06 이전 실행이라 지식 Manifest 가 기록되지 않았다(지식 없음이 아니다)"
+            ),
+        }
+
+    def _run_knowledge_recorded(self, run: dict[str, Any]) -> bool:
+        """Manifest 가 비어 있는 실행이 **기록 전**인가 **고를 것이 없었는가.**
+
+        v22 이후에 만든 실행은 고를 것이 없어도 기록된 것이다 — 그 시점의 Project 에 현재 버전이
+        없었다. v22 적용 시각보다 앞선 실행만 기록 전이다.
+        """
+        row = self.conn.execute(
+            "SELECT MIN(applied_at) AS at FROM schema_version WHERE version >= 22"
+        ).fetchone()
+        applied = row["at"] if row else None
+        return bool(applied and run.get("created_at") and run["created_at"] >= applied)
 
     def run_context_view(self, run_id: str) -> dict[str, Any]:
         """한 실행의 문맥: 계획·영수증·상태·최신성(P4-04).
@@ -7195,6 +7325,8 @@ class Repository:
             "unread": unread,
             "not_started_reason": run.get("not_started_reason"),
             "freshness": freshness,
+            # P4-06. 이 실행의 지식 Manifest(제공·생략·비적용·범위 미확정). 준수 판정이 아니다.
+            "knowledge": self.run_knowledge_view(run_id),
         }
 
     def result_view(self, case_id: str) -> dict[str, Any]:
@@ -8850,6 +8982,8 @@ class Repository:
             "profile": self.case_profile(case_id),
             "checkpoints": self.list_checkpoints(case_id),
             "budget": self.budget_state(case_id),
+            # P4-05b. 진행기의 재작성·재시도 상한과 출처(Case 명시 → 시스템 기본값).
+            "progress_limits": self.progress_limits_view(case_id),
             "delegation_basis": self.list_delegation_basis(case_id),
             "repositories": self.case_repository_state(case_id),
             "enforcement": self.ENFORCEMENT,
@@ -11832,6 +11966,8 @@ class Repository:
             "progress": self.progress_view(case_id),
             "relations": self.case_relations_view(case_id),
             "closure": self.get_closure(case_id),
+            # P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식. 요약·키·상태뿐이다.
+            "knowledge_registrations": self.knowledge_registrations_view(case_id),
         }
 
     def _with_conversation_summary(self, case: dict[str, Any]) -> dict[str, Any]:
@@ -12397,6 +12533,764 @@ class Repository:
         return counts
 
 
+    # ================================================================== P4-06
+    #
+    # 프로젝트 지식 관리·적용. **판정(활동·선택·충돌·권위)은 `domain.knowledge` 에 있고** 여기서는
+    # 사실을 모아 넘기고 기록한다. 원문(적용 내용·조건·예외)은 소유 Runner 에 있다 — 여기에는
+    # 요약·메타데이터·참조뿐이다(D-67·data-boundary 5절). 등록·활성화는 실행 권한을 만들지 않고,
+    # 주입은 준수의 증거가 아니다.
+
+    KNOWLEDGE_KEY_PREFIX = "K-"
+
+    @staticmethod
+    def _knowledge_version_row(row: Any) -> dict[str, Any]:
+        item = dict(row)
+        item["paths"] = json.loads(item.pop("paths_json", None) or "[]")
+        item["activities"] = json.loads(item.pop("activities_json", None) or "[]")
+        return item
+
+    def get_knowledge_item(self, knowledge_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM knowledge_item WHERE id = ?", (knowledge_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        return dict(row)
+
+    def find_knowledge_by_key(self, project_id: str, key: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM knowledge_item WHERE project_id = ? AND knowledge_key = ?",
+            (project_id, key.strip().upper()),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_knowledge_version(self, version_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT kv.*, ki.knowledge_key, ki.project_id FROM knowledge_version kv"
+            " JOIN knowledge_item ki ON ki.id = kv.knowledge_id WHERE kv.id = ?",
+            (version_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"knowledge version not found: {version_id}")
+        return self._knowledge_version_row(row)
+
+    def knowledge_versions(self, knowledge_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT kv.*, ki.knowledge_key, ki.project_id FROM knowledge_version kv"
+            " JOIN knowledge_item ki ON ki.id = kv.knowledge_id WHERE kv.knowledge_id = ?"
+            " ORDER BY kv.version",
+            (knowledge_id,),
+        ).fetchall()
+        return [self._knowledge_version_row(r) for r in rows]
+
+    def current_knowledge_version(self, knowledge_id: str) -> dict[str, Any] | None:
+        """가장 최근 버전. 대체된 버전은 현재가 될 수 없다(대체한 버전이 더 뒤에 있다)."""
+        versions = self.knowledge_versions(knowledge_id)
+        return versions[-1] if versions else None
+
+    def _current_knowledge_versions(self, project_id: str) -> list[dict[str, Any]]:
+        """이 Project 의 항목별 현재 버전(상태 무관). 선택은 `domain.knowledge.select` 가 한다."""
+        rows = self.conn.execute(
+            "SELECT kv.*, ki.knowledge_key, ki.project_id FROM knowledge_version kv"
+            " JOIN knowledge_item ki ON ki.id = kv.knowledge_id"
+            " WHERE ki.project_id = ? AND kv.version ="
+            " (SELECT MAX(v2.version) FROM knowledge_version v2 WHERE v2.knowledge_id = kv.knowledge_id)"
+            " ORDER BY ki.knowledge_key",
+            (project_id,),
+        ).fetchall()
+        return [self._knowledge_version_row(r) for r in rows]
+
+    def _next_knowledge_key(self, project_id: str) -> str:
+        rows = self.conn.execute(
+            "SELECT knowledge_key FROM knowledge_item WHERE project_id = ?", (project_id,)
+        ).fetchall()
+        highest = 0
+        for row in rows:
+            tail = str(row["knowledge_key"])[len(self.KNOWLEDGE_KEY_PREFIX):]
+            if tail.isdigit():
+                highest = max(highest, int(tail))
+        return f"{self.KNOWLEDGE_KEY_PREFIX}{highest + 1:03d}"
+
+    def _run_repositories(self, case_id: str, repository_id: str | None) -> list[str] | None:
+        """이 실행의 저장소 집합. **모르면 `None`** 이다 — 비적용으로 읽지 않는다.
+
+        실행의 저장소가 있으면 그것, 없으면 Case 가 고른 코드 저장소, 고른 것이 없고 등록 저장소가
+        하나뿐이면 그 암묵 단일 저장소(P3-R2 규칙, `flow_state` 와 같다).
+        """
+        if repository_id:
+            return [repository_id]
+        chosen = [r["id"] for r in self.code_repository_choices(case_id)]
+        if chosen:
+            return chosen
+        case = self.get_case(case_id)
+        registered = self.list_project_repositories(case["project_id"])
+        project = self.get_project(case["project_id"])
+        selections = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM case_repository WHERE case_id = ? AND state = ?",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchone()["n"]
+        if not selections and len(registered) == 1 and (
+            project.get("journal_repository_id") != registered[0]["id"]
+        ):
+            return [registered[0]["id"]]
+        return None
+
+    def _open_knowledge_conflicts(self, project_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT kc.*, a.knowledge_key AS key_a, b.knowledge_key AS key_b"
+            " FROM knowledge_conflict kc"
+            " JOIN knowledge_item a ON a.id = kc.knowledge_a"
+            " JOIN knowledge_item b ON b.id = kc.knowledge_b"
+            " WHERE kc.project_id = ? AND kc.state = 'open' ORDER BY kc.created_at",
+            (project_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _add_knowledge_refs(
+        self,
+        refs: list[dict[str, Any]],
+        case_id: str,
+        purpose: RunPurpose,
+        repository_id: str | None,
+        instruction: tuple[str, int] | None,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """적용되는 지식을 `refs` **뒤에** 더한다. (결정 목록, 막는 충돌)
+
+        필수 → (권위 메시지) → 참고 → 후보 순서다. 자동 등록된 필수 규칙은 **옮긴 글과 함께 원래
+        사용자 메시지**를 준다(사용자 결정 2026-09-24). 그 말이 이미 대화 참조나 지시로 들어갔으면
+        다시 넣지 않는다 — 같은 말을 두 번 주지 않는다.
+        """
+        case = self.get_case(case_id)
+        versions = self._current_knowledge_versions(case["project_id"])
+        if not versions:
+            return [], []
+        selection = knowmod.select(
+            versions, knowmod.activity_for(purpose), self._run_repositories(case_id, repository_id)
+        )
+        by_id = {v["id"]: v for v in versions}
+        seen = {(r["artifact_id"], int(r["revision"])) for r in refs}
+        if instruction is not None:
+            seen.add((instruction[0], int(instruction[1])))
+        decisions: list[dict[str, Any]] = []
+        for applied in selection.applied:
+            version = by_id[applied["version_id"]]
+            item = dict(applied, ref_index=len(refs), source_index=None)
+            refs.append(
+                {
+                    "role": applied["role"],
+                    "artifact_id": version["artifact_id"],
+                    "revision": int(version["artifact_rev"]),
+                }
+            )
+            seen.add((version["artifact_id"], int(version["artifact_rev"])))
+            if applied["role"] == knowmod.ROLE_REQUIRED and version.get("source_message_id"):
+                try:
+                    message = self.get_message(version["source_message_id"])
+                except NotFoundError:
+                    message = None
+                if message is not None:
+                    key = (message["artifact_id"], int(message["artifact_rev"]))
+                    if key not in seen:
+                        item["source_index"] = len(refs)
+                        refs.append(
+                            {"role": knowmod.ROLE_SOURCE, "artifact_id": key[0], "revision": key[1]}
+                        )
+                        seen.add(key)
+            decisions.append(item)
+        decisions.extend(dict(d, ref_index=None, source_index=None) for d in selection.skipped)
+        conflicts = knowmod.blocking_conflicts(
+            self._open_knowledge_conflicts(case["project_id"]), selection.applied
+        )
+        return decisions, conflicts
+
+    def _insert_run_knowledge(
+        self,
+        run_id: str,
+        refs: list[dict[str, Any]],
+        decisions: list[dict[str, Any]],
+        activity: str,
+    ) -> None:
+        """Manifest 를 넣는다. **호출자의 트랜잭션 안에서 돈다**(참조·예약과 같은 트랜잭션).
+
+        제공 항목의 인라인/한도 생략은 계획이 정한 그대로 적는다 — 생략한 참고 지식을 "제공"으로
+        적지 않는다.
+        """
+        for d in decisions:
+            decision = d["decision"]
+            context_seq = None
+            index = d.get("ref_index")
+            if index is not None:
+                context_seq = int(index) + 1
+                if (
+                    ctxmod.effective_inclusion(refs[int(index)].get("inclusion"))
+                    == ContextInclusion.OMITTED_SIZE_LIMIT.value
+                ):
+                    decision = knowmod.Decision.OMITTED_SIZE_LIMIT.value
+            source = d.get("source_index")
+            self.conn.execute(
+                "INSERT INTO run_knowledge (run_id, version_id, knowledge_id, activity, obligation,"
+                " state, decision, scope_resolution, context_seq, source_seq)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(run_id, version_id) DO NOTHING",
+                (
+                    run_id,
+                    d["version_id"],
+                    d["knowledge_id"],
+                    activity,
+                    d["obligation"],
+                    d["state"],
+                    decision,
+                    d.get("scope_resolution"),
+                    context_seq,
+                    int(source) + 1 if source is not None else None,
+                ),
+            )
+
+    def _knowledge_meta_by_seq(self, run_id: str) -> dict[int, dict[str, Any]]:
+        """배정·조회의 지식 참조에 붙이는 메타데이터(순번 → 항목·버전·효력·범위). 본문 없음."""
+        rows = self.conn.execute(
+            "SELECT rk.*, ki.knowledge_key, kv.version, kv.kind, kv.summary, kv.scope_kind,"
+            " kv.paths_json, kv.activities_json, kv.authority_kind, pr.name AS repository_name"
+            " FROM run_knowledge rk JOIN knowledge_version kv ON kv.id = rk.version_id"
+            " JOIN knowledge_item ki ON ki.id = rk.knowledge_id"
+            " LEFT JOIN project_repository pr ON pr.id = kv.repository_id"
+            " WHERE rk.run_id = ?",
+            (run_id,),
+        ).fetchall()
+        out: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            meta = {
+                "knowledge_id": row["knowledge_id"],
+                "key": row["knowledge_key"],
+                "version": row["version"],
+                "version_id": row["version_id"],
+                "kind": row["kind"],
+                "obligation": row["obligation"],
+                "state": row["state"],
+                "summary": row["summary"],
+                "scope": row["scope_kind"],
+                "repository": row["repository_name"],
+                "paths": json.loads(row["paths_json"] or "[]"),
+                "activities": json.loads(row["activities_json"] or "[]"),
+                "authority": row["authority_kind"],
+                "scope_resolution": row["scope_resolution"],
+            }
+            if row["context_seq"] is not None:
+                out[int(row["context_seq"])] = meta
+            if row["source_seq"] is not None:
+                out[int(row["source_seq"])] = {**meta, "source_of": row["knowledge_key"]}
+        return out
+
+    def knowledge_index_for_assignment(self, project_id: str) -> dict[str, Any]:
+        """논의 응답의 등록 규칙이 쓰는 목록: 현재 지식(키·요약·효력·범위)과 등록 저장소 이름."""
+        repos = {r["id"]: r["name"] for r in self.list_project_repositories(project_id)}
+        items = [
+            {
+                "key": v["knowledge_key"],
+                "summary": v["summary"],
+                "kind": v["kind"],
+                "obligation": v["obligation"],
+                "state": v["state"],
+                "repository": repos.get(v.get("repository_id")) if v.get("repository_id") else None,
+                "paths": v["paths"],
+            }
+            for v in self._current_knowledge_versions(project_id)
+            if v["state"] in knowmod.PROVIDED_STATES
+        ]
+        return {"items": items, "repositories": sorted(repos.values())}
+
+    # ------------------------------------------------------------- 등록·변경
+
+    def register_knowledge(
+        self,
+        case_id: str,
+        *,
+        artifact_id: str,
+        artifact_rev: int,
+        kind: str,
+        obligation: str,
+        summary: str,
+        created_by: str,
+        state: str = knowmod.KnowledgeState.ACTIVE.value,
+        scope_kind: str = knowmod.ScopeKind.PROJECT.value,
+        repository_id: str | None = None,
+        paths: Iterable[str] = (),
+        activities: Iterable[str] = (),
+        authority: str = knowmod.KnowledgeAuthority.USER_REGISTRATION.value,
+        source_message_id: str | None = None,
+        source_run_id: str | None = None,
+        source_report_index: int | None = None,
+        reason_summary: str | None = None,
+        knowledge_id: str | None = None,
+    ) -> dict[str, Any]:
+        """지식 버전 하나를 기록한다. `knowledge_id` 가 없으면 새 항목(K-NNN)이다.
+
+        **원문은 이 Case 의 지식 원문이어야 한다**(종류 `knowledge`) — 출처가 곧 그 Case 다.
+        새 버전은 이전 현재 버전을 `superseded` 로 바꾸고 대체 관계를 남긴다. 무효였던 버전은 무효
+        그대로 두고 대체 관계만 적는다. 권위 규칙은 `domain.knowledge.check_authority` 가 본다 —
+        AI 제안은 후보로만 들어온다.
+        """
+        case = self.get_case(case_id)
+        project_id = case["project_id"]
+        ref = self.get_artifact_ref(artifact_id, int(artifact_rev))
+        if ref["case_id"] != case_id:
+            raise ConflictError("knowledge content must be an original stored in this case")
+        if ref["kind"] != ArtifactKind.KNOWLEDGE.value:
+            raise ConflictError(f"knowledge content must be a knowledge original, not {ref['kind']}")
+        try:
+            kind = knowmod.KnowledgeKind(kind).value
+            obligation = knowmod.KnowledgeObligation(obligation).value
+            scope_kind = knowmod.ScopeKind(scope_kind).value
+            knowmod.check_authority(authority, state, obligation)
+            activity_list = knowmod.check_activities(activities)
+            path_list = knowmod.check_paths(paths)
+        except ValueError as exc:
+            raise ConflictError(str(exc)) from None
+        title = " ".join(str(summary or "").split())
+        if not title:
+            raise ConflictError("a knowledge summary is required")
+        if scope_kind == knowmod.ScopeKind.REPOSITORY.value:
+            if not repository_id:
+                raise ConflictError("a repository scope needs a repository")
+            repository = self.get_project_repository(repository_id)
+            if repository["project_id"] != project_id:
+                raise ConflictError("the repository is not registered in this project")
+        else:
+            if repository_id or path_list:
+                raise ConflictError("a project scope has no repository or path condition")
+            repository_id = None
+        if source_message_id is not None:
+            message = self.get_message(source_message_id)
+            if message["case_id"] != case_id or message["author"] != MessageAuthor.USER.value:
+                raise ConflictError("the authority message must be a user message of this case")
+            if message["receipt"] != MessageReceipt.STORED.value:
+                raise ConflictError("the authority message is not stored")
+        if authority == knowmod.KnowledgeAuthority.USER_STATEMENT.value and source_message_id is None:
+            raise ConflictError("a user statement needs the user message it came from")
+        now = utc_now()
+        version_id = ids.new_id("knowv")
+        with transaction(self.conn):
+            if knowledge_id is None:
+                knowledge_id = ids.new_id("know")
+                self.conn.execute(
+                    "INSERT INTO knowledge_item (id, project_id, knowledge_key, created_by, created_at)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (knowledge_id, project_id, self._next_knowledge_key(project_id), created_by, now),
+                )
+                previous = None
+                number = 1
+            else:
+                item = self.conn.execute(
+                    "SELECT * FROM knowledge_item WHERE id = ?", (knowledge_id,)
+                ).fetchone()
+                if item is None:
+                    raise NotFoundError(f"knowledge not found: {knowledge_id}")
+                if item["project_id"] != project_id:
+                    raise ConflictError("the knowledge belongs to another project")
+                previous = self.conn.execute(
+                    "SELECT * FROM knowledge_version WHERE knowledge_id = ?"
+                    " ORDER BY version DESC LIMIT 1",
+                    (knowledge_id,),
+                ).fetchone()
+                number = (previous["version"] if previous else 0) + 1
+            self.conn.execute(
+                "INSERT INTO knowledge_version (id, knowledge_id, version, artifact_id, artifact_rev,"
+                " kind, obligation, state, summary, scope_kind, repository_id, paths_json,"
+                " activities_json, authority_kind, source_case_id, source_message_id, source_run_id,"
+                " source_report_index, created_by, reason_summary, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    version_id,
+                    knowledge_id,
+                    number,
+                    artifact_id,
+                    int(artifact_rev),
+                    kind,
+                    obligation,
+                    state,
+                    title[:200],
+                    scope_kind,
+                    repository_id,
+                    json.dumps(path_list, ensure_ascii=False),
+                    json.dumps(activity_list),
+                    authority,
+                    case_id,
+                    source_message_id,
+                    source_run_id,
+                    source_report_index,
+                    created_by,
+                    _summary(reason_summary) if reason_summary else None,
+                    now,
+                ),
+            )
+            if previous is not None:
+                if previous["state"] in knowmod.PROVIDED_STATES:
+                    self.conn.execute(
+                        "UPDATE knowledge_version SET state = ?, superseded_by = ?, superseded_at = ?"
+                        " WHERE id = ?",
+                        (knowmod.KnowledgeState.SUPERSEDED.value, version_id, now, previous["id"]),
+                    )
+                else:
+                    self.conn.execute(
+                        "UPDATE knowledge_version SET superseded_by = ?, superseded_at = ?"
+                        " WHERE id = ?",
+                        (version_id, now, previous["id"]),
+                    )
+        return self.get_knowledge_version(version_id)
+
+    def revise_knowledge(
+        self,
+        knowledge_id: str,
+        *,
+        actor: str,
+        reason_summary: str,
+        case_id: str | None = None,
+        artifact: tuple[str, int] | None = None,
+        **changes: Any,
+    ) -> dict[str, Any]:
+        """사람의 개정 — 새 버전(`user_registration`). 주지 않은 칸은 현재 버전 그대로다.
+
+        새 원문을 주면 그 원문의 Case 가 새 버전의 출처다. 주지 않으면 이전 원문을 다시 가리킨다.
+        """
+        current = self.current_knowledge_version(knowledge_id)
+        if current is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        if not reason_summary or not reason_summary.strip():
+            raise ConflictError("a revision needs a reason")
+        fields = {
+            "kind": current["kind"],
+            "obligation": current["obligation"],
+            "summary": current["summary"],
+            "scope_kind": current["scope_kind"],
+            "repository_id": current.get("repository_id"),
+            "paths": current["paths"],
+            "activities": current["activities"],
+            "state": (
+                current["state"]
+                if current["state"] in knowmod.PROVIDED_STATES
+                else knowmod.KnowledgeState.ACTIVE.value
+            ),
+        }
+        fields.update({k: v for k, v in changes.items() if v is not None})
+        if fields["scope_kind"] == knowmod.ScopeKind.PROJECT.value:
+            fields["repository_id"] = None
+            fields["paths"] = []
+        if artifact is None:
+            artifact = (current["artifact_id"], int(current["artifact_rev"]))
+            case_id = current["source_case_id"]
+        elif case_id is None:
+            raise ConflictError("a new original needs the case it was stored in")
+        return self.register_knowledge(
+            case_id,
+            artifact_id=artifact[0],
+            artifact_rev=artifact[1],
+            created_by=actor,
+            authority=knowmod.KnowledgeAuthority.USER_REGISTRATION.value,
+            reason_summary=reason_summary,
+            knowledge_id=knowledge_id,
+            **fields,
+        )
+
+    def activate_knowledge(self, knowledge_id: str, actor: str, reason_summary: str) -> dict[str, Any]:
+        """후보 → 활성. **사람의 결정이며 새 버전이다**(`user_decision`) — 후보 행을 덮어쓰지 않는다."""
+        current = self.current_knowledge_version(knowledge_id)
+        if current is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        if current["state"] != knowmod.KnowledgeState.CANDIDATE.value:
+            raise ConflictError(f"only a candidate is activated; this is {current['state']}")
+        return self.register_knowledge(
+            current["source_case_id"],
+            artifact_id=current["artifact_id"],
+            artifact_rev=int(current["artifact_rev"]),
+            kind=current["kind"],
+            obligation=current["obligation"],
+            summary=current["summary"],
+            created_by=actor,
+            state=knowmod.KnowledgeState.ACTIVE.value,
+            scope_kind=current["scope_kind"],
+            repository_id=current.get("repository_id"),
+            paths=current["paths"],
+            activities=current["activities"],
+            authority=knowmod.KnowledgeAuthority.USER_DECISION.value,
+            source_message_id=current.get("source_message_id"),
+            reason_summary=reason_summary or "후보를 활성으로",
+            knowledge_id=knowledge_id,
+        )
+
+    def invalidate_knowledge(self, knowledge_id: str, actor: str, reason: str) -> dict[str, Any]:
+        """무효. **사람의 명시 행동뿐이다** — 원문 조회 실패·적용 미확정을 무효로 적지 않는다."""
+        current = self.current_knowledge_version(knowledge_id)
+        if current is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        if current["state"] not in knowmod.PROVIDED_STATES:
+            raise ConflictError(f"this knowledge is already {current['state']}")
+        if not reason or not reason.strip():
+            raise ConflictError("invalidation needs a reason")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE knowledge_version SET state = ?, invalidated_at = ?, invalidated_by = ?,"
+                " invalid_reason = ? WHERE id = ? AND state IN (?, ?)",
+                (
+                    knowmod.KnowledgeState.INVALID.value,
+                    utc_now(),
+                    actor,
+                    _summary(reason),
+                    current["id"],
+                    knowmod.KnowledgeState.CANDIDATE.value,
+                    knowmod.KnowledgeState.ACTIVE.value,
+                ),
+            )
+        return self.get_knowledge_version(current["id"])
+
+    def record_knowledge_conflict(
+        self, project_id: str, knowledge_a: str, knowledge_b: str, actor: str, reason: str | None
+    ) -> dict[str, Any]:
+        """두 항목의 충돌을 기록한다. **한쪽을 조용히 고르지 않는다** — 사람이 해소한다."""
+        self.get_project(project_id)
+        if knowledge_a == knowledge_b:
+            raise ConflictError("a knowledge item does not conflict with itself")
+        for kid in (knowledge_a, knowledge_b):
+            if self.get_knowledge_item(kid)["project_id"] != project_id:
+                raise ConflictError("both knowledge items must belong to this project")
+        existing = self.conn.execute(
+            "SELECT id FROM knowledge_conflict WHERE state = 'open' AND project_id = ?"
+            " AND ((knowledge_a = ? AND knowledge_b = ?) OR (knowledge_a = ? AND knowledge_b = ?))",
+            (project_id, knowledge_a, knowledge_b, knowledge_b, knowledge_a),
+        ).fetchone()
+        if existing is not None:
+            return self._knowledge_conflict(existing["id"])
+        conflict_id = ids.new_id("kconf")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO knowledge_conflict (id, project_id, knowledge_a, knowledge_b, state,"
+                " recorded_by, reason_summary, created_at) VALUES (?, ?, ?, ?, 'open', ?, ?, ?)",
+                (
+                    conflict_id,
+                    project_id,
+                    knowledge_a,
+                    knowledge_b,
+                    actor,
+                    _summary(reason) if reason else None,
+                    utc_now(),
+                ),
+            )
+        return self._knowledge_conflict(conflict_id)
+
+    def resolve_knowledge_conflict(self, conflict_id: str, actor: str, summary: str) -> dict[str, Any]:
+        conflict = self._knowledge_conflict(conflict_id)
+        if conflict["state"] != "open":
+            raise ConflictError("this conflict is already resolved")
+        if not summary or not summary.strip():
+            raise ConflictError("a resolution needs a summary")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE knowledge_conflict SET state = 'resolved', resolved_at = ?, resolved_by = ?,"
+                " resolution_summary = ? WHERE id = ? AND state = 'open'",
+                (utc_now(), actor, _summary(summary), conflict_id),
+            )
+        return self._knowledge_conflict(conflict_id)
+
+    def _knowledge_conflict(self, conflict_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT kc.*, a.knowledge_key AS key_a, b.knowledge_key AS key_b"
+            " FROM knowledge_conflict kc"
+            " JOIN knowledge_item a ON a.id = kc.knowledge_a"
+            " JOIN knowledge_item b ON b.id = kc.knowledge_b WHERE kc.id = ?",
+            (conflict_id,),
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"knowledge conflict not found: {conflict_id}")
+        return dict(row)
+
+    def knowledge_view(self, project_id: str) -> dict[str, Any]:
+        """Project 의 지식 등록부: 항목·현재 버전·원문 가용성·이력, 충돌. 본문 없음."""
+        self.get_project(project_id)
+        repos = {r["id"]: r["name"] for r in self.list_project_repositories(project_id)}
+        items = []
+        rows = self.conn.execute(
+            "SELECT * FROM knowledge_item WHERE project_id = ? ORDER BY knowledge_key",
+            (project_id,),
+        ).fetchall()
+        for row in rows:
+            versions = self.knowledge_versions(row["id"])
+            for version in versions:
+                version["repository_name"] = repos.get(version.get("repository_id"))
+                try:
+                    version["availability"] = self.get_artifact_ref(
+                        version["artifact_id"], int(version["artifact_rev"])
+                    )["availability"]
+                except NotFoundError:
+                    version["availability"] = "missing"
+            items.append({**dict(row), "current": versions[-1] if versions else None, "versions": versions})
+        conflicts = [
+            self._knowledge_conflict(r["id"])
+            for r in self.conn.execute(
+                "SELECT id FROM knowledge_conflict WHERE project_id = ? ORDER BY created_at",
+                (project_id,),
+            ).fetchall()
+        ]
+        return {
+            "project_id": project_id,
+            "items": items,
+            "conflicts": conflicts,
+            "note": (
+                "원문(적용 내용·조건·예외)은 등록한 대화의 PC 에 있다. 필수는 실행의 범위·활동에"
+                " 해당할 때 원문으로 주입되고, 원문을 읽을 수 없으면 그 실행은 보류된다. 주입은 준수의"
+                " 증거가 아니며 모든 관련 지식을 찾았다는 뜻도 아니다"
+            ),
+        }
+
+    # ------------------------------------------------------------- 자동 등록
+
+    def apply_knowledge_report(self, run_id: str) -> list[dict[str, Any]]:
+        """논의 응답이 보고한 등록 항목을 **한 번** 처리한다(사용자 결정 2026-09-24).
+
+        응답이 완료된 요청 응답만 등록한다. 권위는 **요청을 연 사용자 메시지**다(`user_statement`).
+        없는 저장소·없는 대체 키·형식 오류는 등록하지 않고 사유를 남긴다. 같은 보고를 다시 처리해도
+        두 번 등록하지 않는다(`knowledge_intake`·`UNIQUE(source_run_id, source_report_index)`).
+        """
+        run = self.get_run(run_id)
+        raw = run.get("knowledge_report_json")
+        if not raw or run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value:
+            return []
+        if run.get("status") != RunStatus.FINISHED.value:
+            return []
+        report = json.loads(raw)
+        done = {
+            r["report_index"]
+            for r in self.conn.execute(
+                "SELECT report_index FROM knowledge_intake WHERE run_id = ?", (run_id,)
+            ).fetchall()
+        }
+        request = self.get_request(run["request_id"]) if run.get("request_id") else None
+        opening_id = request.get("opened_by_message_id") if request else None
+        case = self.get_case(run["case_id"])
+        repos = {
+            r["name"].strip().lower(): r["id"]
+            for r in self.list_project_repositories(case["project_id"])
+        }
+        out: list[dict[str, Any]] = []
+        for index, raw_item in enumerate(report):
+            if index in done:
+                continue
+            refusal: str | None = None
+            version: dict[str, Any] | None = None
+            summary = None
+            if isinstance(raw_item, dict):
+                summary = " ".join(str(raw_item.get("summary") or "").split())[:200] or None
+            if index >= knowmod.MAX_REPORT_ITEMS:
+                refusal = "too_many_items"
+            elif run.get("outcome") != RunOutcome.COMPLETED.value:
+                refusal = "reply_not_completed"
+            elif opening_id is None:
+                refusal = "no_user_message"
+            else:
+                item, refusal = knowmod.parse_report_item(raw_item)
+                if item is not None:
+                    repository_id = None
+                    if item["repository"]:
+                        repository_id = repos.get(item["repository"].lower())
+                        if repository_id is None:
+                            refusal = "unknown_repository"
+                    target = None
+                    if refusal is None and item["supersedes"]:
+                        target = self.find_knowledge_by_key(case["project_id"], item["supersedes"])
+                        if target is None:
+                            refusal = "unknown_supersedes_key"
+                    if refusal is None:
+                        try:
+                            version = self.register_knowledge(
+                                run["case_id"],
+                                artifact_id=item["artifact_id"],
+                                artifact_rev=item["revision"],
+                                kind=item["kind"],
+                                obligation=item["obligation"],
+                                summary=item["summary"],
+                                created_by=f"ai:{run['tool_id']}",
+                                state=knowmod.KnowledgeState.ACTIVE.value,
+                                scope_kind=(
+                                    knowmod.ScopeKind.REPOSITORY.value
+                                    if repository_id
+                                    else knowmod.ScopeKind.PROJECT.value
+                                ),
+                                repository_id=repository_id,
+                                paths=item["paths"],
+                                activities=item["activities"],
+                                authority=knowmod.KnowledgeAuthority.USER_STATEMENT.value,
+                                source_message_id=opening_id,
+                                source_run_id=run_id,
+                                source_report_index=index,
+                                reason_summary="대화에서 사용자가 정한 프로젝트 규칙(자동 등록)",
+                                knowledge_id=target["id"] if target else None,
+                            )
+                        except sqlite3.IntegrityError:
+                            # 다른 처리가 먼저 등록했다(재처리 경합). 그 버전을 가리킨다.
+                            row = self.conn.execute(
+                                "SELECT id FROM knowledge_version WHERE source_run_id = ?"
+                                " AND source_report_index = ?",
+                                (run_id, index),
+                            ).fetchone()
+                            if row is None:
+                                refusal = "registration_failed"
+                            else:
+                                version = self.get_knowledge_version(row["id"])
+                        except (ConflictError, NotFoundError) as exc:
+                            refusal = f"refused: {exc}"[:120]
+            try:
+                with transaction(self.conn):
+                    self.conn.execute(
+                        "INSERT INTO knowledge_intake (run_id, report_index, case_id, state,"
+                        " knowledge_version_id, refusal, summary, created_at)"
+                        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            run_id,
+                            index,
+                            run["case_id"],
+                            "registered" if version else "refused",
+                            version["id"] if version else None,
+                            None if version else (refusal or "refused")[:120],
+                            summary,
+                            utc_now(),
+                        ),
+                    )
+            except sqlite3.IntegrityError:
+                continue  # 다른 처리가 먼저 적었다
+            out.append(
+                {
+                    "report_index": index,
+                    "state": "registered" if version else "refused",
+                    "version": version,
+                    "refusal": None if version else refusal,
+                }
+            )
+        return out
+
+    def knowledge_registrations_view(self, case_id: str) -> list[dict[str, Any]]:
+        """이 대화의 말에서 등록한(또는 거부한) 지식. 카드가 쓴다 — 요약·키·버전·상태뿐이다."""
+        rows = self.conn.execute(
+            "SELECT ki.run_id, ki.report_index, ki.state AS intake_state, ki.refusal, ki.summary"
+            " AS reported_summary, ki.created_at, kv.id AS version_id, kv.knowledge_id, kv.version,"
+            " kv.kind, kv.obligation, kv.state, kv.summary, kv.scope_kind, kv.paths_json,"
+            " kv.activities_json, item.knowledge_key, pr.name AS repository_name,"
+            " kv.source_message_id"
+            " FROM knowledge_intake ki"
+            " LEFT JOIN knowledge_version kv ON kv.id = ki.knowledge_version_id"
+            " LEFT JOIN knowledge_item item ON item.id = kv.knowledge_id"
+            " LEFT JOIN project_repository pr ON pr.id = kv.repository_id"
+            " WHERE ki.case_id = ? ORDER BY ki.created_at, ki.report_index",
+            (case_id,),
+        ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["paths"] = json.loads(item.pop("paths_json") or "[]")
+            item["activities"] = json.loads(item.pop("activities_json") or "[]")
+            if item["knowledge_id"]:
+                current = self.current_knowledge_version(item["knowledge_id"])
+                item["current_version"] = current["version"] if current else None
+                item["current_state"] = current["state"] if current else None
+            out.append(item)
+        return out
+
     # ================================================================== P4-05
     #
     # 업무 단계 자동 진행·완료·예외·후속. 진행기(`controller.work_progressor`)가 쓰는 조회·기록이다.
@@ -12509,6 +13403,115 @@ class Repository:
             )
         return attempts[key]
 
+    # ------------------------------------------------------------- 진행 상한 (P4-05b)
+
+    def _current_limit_settings(self, case_id: str) -> dict[str, dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM progress_limit_setting WHERE case_id = ? AND state = ?",
+            (case_id, PolicyState.CURRENT.value),
+        ).fetchall()
+        return {r["limit_key"]: dict(r) for r in rows}
+
+    def effective_progress_limits(self, case_id: str) -> workflow.ProgressLimits:
+        """이 Case 의 유효 상한. **Case 명시 → 시스템 기본값** 순서다. 판정에 값으로 넘긴다."""
+        settings = self._current_limit_settings(case_id)
+        values: dict[str, int] = {}
+        sources: list[tuple[str, str]] = []
+        for key in workflow.LIMIT_KEYS:
+            if key in settings:
+                values[key] = int(settings[key]["limit_value"])
+                sources.append((key, "case_setting"))
+            else:
+                values[key] = int(getattr(self.progress_limits, key))
+                sources.append((key, "system_default"))
+        return workflow.ProgressLimits(**values, sources=tuple(sources))
+
+    def progress_limits_view(self, case_id: str) -> dict[str, Any]:
+        """조회용: 두 한도의 값·출처·현재 설정 행, 시스템 기본값, 변경 이력(오래된 순)."""
+        self.get_case(case_id)
+        settings = self._current_limit_settings(case_id)
+        effective = self.effective_progress_limits(case_id)
+        history = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT * FROM progress_limit_setting WHERE case_id = ? ORDER BY revision",
+                (case_id,),
+            ).fetchall()
+        ]
+        out: dict[str, Any] = {
+            key: {
+                "value": getattr(effective, key),
+                "source": effective.source(key),
+                "setting": settings.get(key),
+            }
+            for key in workflow.LIMIT_KEYS
+        }
+        out["system_default"] = {
+            key: getattr(self.progress_limits, key) for key in workflow.LIMIT_KEYS
+        }
+        out["range"] = {"min": workflow.LIMIT_MIN, "max": workflow.LIMIT_MAX}
+        out["history"] = history
+        out["closed"] = self.case_is_closed(case_id)
+        return out
+
+    def set_progress_limits(
+        self,
+        case_id: str,
+        values: dict[str, int],
+        set_by: str,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """Case 별 상한을 바꾼다(P4-05b). **준 키만** 바꾸고 이전 값은 `superseded` 로 남긴다.
+
+        종료된 Case 는 거부한다 — 종료 뒤에 바꿀 수 있는 것은 예산 한도뿐이다(D-87). 한도는 사람의
+        결정이 아니며 권한을 만들지 않는다: 올리는 것은 "한 번 더 시도해도 된다" 이지 결과의
+        인수·예외 수용이 아니다.
+        """
+        self.get_case(case_id)
+        self._guard_policy_change(case_id)
+        if not values:
+            raise ConflictError("no progress limit was given")
+        checked = {key: workflow.check_limit(key, value) for key, value in values.items()}
+        now = utc_now()
+        with transaction(self.conn):
+            row = self.conn.execute(
+                "SELECT MAX(revision) AS r FROM progress_limit_setting WHERE case_id = ?",
+                (case_id,),
+            ).fetchone()
+            revision = (row["r"] or 0) + 1
+            for key in workflow.LIMIT_KEYS:
+                if key not in checked:
+                    continue
+                self.conn.execute(
+                    "UPDATE progress_limit_setting SET state = ?, superseded_at = ?"
+                    " WHERE case_id = ? AND limit_key = ? AND state = ?",
+                    (
+                        PolicyState.SUPERSEDED.value,
+                        now,
+                        case_id,
+                        key,
+                        PolicyState.CURRENT.value,
+                    ),
+                )
+                self.conn.execute(
+                    "INSERT INTO progress_limit_setting (id, case_id, revision, limit_key,"
+                    " limit_value, set_by, reason_summary, state, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("plimit"),
+                        case_id,
+                        revision,
+                        key,
+                        checked[key],
+                        set_by,
+                        _summary(reason_summary) if reason_summary else None,
+                        PolicyState.CURRENT.value,
+                        now,
+                    ),
+                )
+                revision += 1
+        return self.progress_limits_view(case_id)
+
     def record_progress_event(
         self,
         case_id: str,
@@ -12567,7 +13570,23 @@ class Repository:
         state["events"] = self.list_progress_events(case_id)
         state["actor"] = self.WORK_PROGRESSOR_ACTOR
         state["auto"] = self.auto_process_requests
+        # P4-05b. 상한 대기 카드가 "재작성 2/2" 와 "한도를 올리고 계속" 을 그리는 값.
+        state["limits"] = self.progress_limits_view(case_id)
         return state
+
+    def progress_waiting_for(self, project_id: str, wait_code: str) -> list[dict[str, Any]]:
+        """P4-06. 이 Project 에서 그 사유로 사람을 기다리는 진행(지식 충돌이 풀린 뒤 다시 본다)."""
+        rows = self.conn.execute(
+            "SELECT cp.case_id, cp.wait_json FROM case_progress cp JOIN \"case\" c ON c.id = cp.case_id"
+            " WHERE c.project_id = ? AND cp.state = ?",
+            (project_id, workflow.ProgressState.WAITING_HUMAN),
+        ).fetchall()
+        out = []
+        for row in rows:
+            codes = [w.get("code") for w in json.loads(row["wait_json"] or "[]")]
+            if wait_code in codes:
+                out.append({"case_id": row["case_id"]})
+        return out
 
     def progress_rows_for_recovery(self) -> list[dict[str, Any]]:
         rows = self.conn.execute(
@@ -12742,6 +13761,7 @@ class Repository:
             workspaces=workspaces,
             attempts=dict(progress.get("attempts") or {}),
             finished_runs=finished,
+            limits=self.effective_progress_limits(case_id),
         )
 
     def _instruction_of(self, run_id: str) -> tuple[str, int]:

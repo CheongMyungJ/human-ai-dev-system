@@ -227,8 +227,9 @@ def test_a_v19_database_gets_no_progress_it_never_had(tmp_path):
 
     conn = db.connect(path)
     db.migrate(conn)
-    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 20
-    assert db.SCHEMA_VERSION == 20
+    # v21(P4-05b) 이후에도 이 이행의 사실은 같다 — 판의 고정은 각 판의 이행 시험이 한다.
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] >= 20
+    assert db.SCHEMA_VERSION >= 20
     request = conn.execute("SELECT * FROM conversation_request WHERE id = 'req-1'").fetchone()
     assert (request["state"], request["origin"], request["origin_ref"], request["opened_by_message_id"]) == (
         "completed", "user_message", None, "msg-1"
@@ -258,6 +259,6 @@ def test_a_v19_database_gets_no_progress_it_never_had(tmp_path):
     assert view["current_request"]["opening_receipt"] == "stored"
     db.migrate(conn)
     assert conn.execute(
-        "SELECT COUNT(*) FROM schema_version WHERE version = 20"
+        "SELECT COUNT(*) FROM schema_version WHERE version = ?", (db.SCHEMA_VERSION,)
     ).fetchone()[0] == 1
     conn.close()

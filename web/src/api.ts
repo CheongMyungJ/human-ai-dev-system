@@ -127,6 +127,202 @@ export interface RunContext {
   not_started_reason: string | null
   // `null` 은 "새 입력 없음"이 아니라 계산하지 않았다(옛 실행)는 뜻이다.
   freshness: RunContextFreshness | null
+  // P4-06. 지식 Manifest. `recorded = false` 는 기록 전(P4-06 이전 실행)이며 "지식 없음"이 아니다.
+  knowledge?: RunKnowledgeView
+}
+
+// ------------------------------------------------------------------ P4-06 지식
+
+export type KnowledgeKind = 'decision' | 'constraint' | 'known_problem' | 'operation'
+export type KnowledgeObligation = 'required' | 'reference'
+export type KnowledgeState = 'candidate' | 'active' | 'superseded' | 'invalid'
+
+export const KNOWLEDGE_KIND_LABEL: Record<KnowledgeKind, string> = {
+  decision: '결정',
+  constraint: '제약',
+  known_problem: '알려진 문제',
+  operation: '운영 사실',
+}
+
+export const KNOWLEDGE_STATE_LABEL: Record<KnowledgeState, string> = {
+  candidate: '후보',
+  active: '활성',
+  superseded: '대체됨',
+  invalid: '무효',
+}
+
+export const KNOWLEDGE_AUTHORITY_LABEL: Record<string, string> = {
+  user_registration: '사람이 등록',
+  user_statement: '대화의 사용자 말(AI 가 옮김)',
+  user_decision: '사람이 후보를 활성화',
+  ai_proposal: 'AI 제안',
+}
+
+export const KNOWLEDGE_DECISION_LABEL: Record<string, string> = {
+  provided: '제공',
+  omitted_size_limit: '한도로 생략',
+  not_applicable_activity: '활동 비적용',
+  not_applicable_repository: '다른 저장소',
+  scope_undetermined: '범위 미확정',
+}
+
+export interface KnowledgeVersion {
+  id: string
+  knowledge_id: string
+  knowledge_key: string
+  project_id: string
+  version: number
+  artifact_id: string
+  artifact_rev: number
+  kind: KnowledgeKind
+  obligation: KnowledgeObligation
+  state: KnowledgeState
+  summary: string
+  scope_kind: 'project' | 'repository'
+  repository_id: string | null
+  repository_name?: string | null
+  paths: string[]
+  activities: string[]
+  authority_kind: string
+  source_case_id: string
+  source_message_id: string | null
+  source_run_id: string | null
+  created_by: string
+  reason_summary: string | null
+  created_at: string
+  superseded_by: string | null
+  invalidated_at: string | null
+  invalidated_by: string | null
+  invalid_reason: string | null
+  availability?: string
+}
+
+export interface KnowledgeItemView {
+  id: string
+  project_id: string
+  knowledge_key: string
+  created_by: string
+  created_at: string
+  current: KnowledgeVersion | null
+  versions: KnowledgeVersion[]
+}
+
+export interface KnowledgeConflict {
+  id: string
+  project_id: string
+  knowledge_a: string
+  knowledge_b: string
+  key_a: string
+  key_b: string
+  state: 'open' | 'resolved'
+  recorded_by: string
+  reason_summary: string | null
+  created_at: string
+  resolved_at: string | null
+  resolution_summary: string | null
+}
+
+export interface KnowledgeView {
+  project_id: string
+  items: KnowledgeItemView[]
+  conflicts: KnowledgeConflict[]
+  note: string
+}
+
+export interface RunKnowledgeRow {
+  run_id: string
+  version_id: string
+  knowledge_id: string
+  knowledge_key: string
+  version: number
+  summary: string
+  obligation: KnowledgeObligation
+  state: KnowledgeState
+  decision: string
+  scope_resolution: string | null
+  context_seq: number | null
+  source_seq: number | null
+}
+
+export interface RunKnowledgeView {
+  run_id: string
+  recorded: boolean
+  items: RunKnowledgeRow[]
+  note: string
+}
+
+//: 대화의 말에서 등록한(또는 거부한) 지식. 카드가 쓴다.
+export interface KnowledgeRegistration {
+  run_id: string
+  report_index: number
+  intake_state: 'registered' | 'refused'
+  refusal: string | null
+  reported_summary: string | null
+  created_at: string
+  version_id: string | null
+  knowledge_id: string | null
+  knowledge_key: string | null
+  version: number | null
+  kind: KnowledgeKind | null
+  obligation: KnowledgeObligation | null
+  state: KnowledgeState | null
+  summary: string | null
+  scope_kind: string | null
+  repository_name: string | null
+  paths: string[]
+  activities: string[]
+  current_version?: number | null
+  current_state?: KnowledgeState | null
+}
+
+export const knowledgeApi = {
+  list: (projectId: string) => request<KnowledgeView>(`/api/projects/${projectId}/knowledge`),
+
+  // 사람의 등록 — 권위 승계, 재승인 없음. 원문은 PC 로 간다. 등록은 실행 권한을 만들지 않는다.
+  register: (
+    caseId: string,
+    body: {
+      content: string
+      summary: string
+      kind: KnowledgeKind
+      obligation: KnowledgeObligation
+      target_runner_id: string
+      repository_id?: string | null
+      paths?: string[]
+      activities?: string[]
+      authority?: string
+      state?: KnowledgeState
+      reason_summary?: string | null
+    },
+  ) =>
+    request<{ version: KnowledgeVersion }>(`/api/cases/${caseId}/knowledge`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  activate: (knowledgeId: string, reason: string) =>
+    request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/activate`, {
+      method: 'POST',
+      body: JSON.stringify({ reason_summary: reason, actor: 'owner' }),
+    }),
+
+  invalidate: (knowledgeId: string, reason: string) =>
+    request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/invalidate`, {
+      method: 'POST',
+      body: JSON.stringify({ reason_summary: reason, actor: 'owner' }),
+    }),
+
+  recordConflict: (projectId: string, a: string, b: string, reason: string) =>
+    request<KnowledgeConflict>(`/api/projects/${projectId}/knowledge-conflicts`, {
+      method: 'POST',
+      body: JSON.stringify({ knowledge_a: a, knowledge_b: b, reason_summary: reason || null, actor: 'owner' }),
+    }),
+
+  resolveConflict: (conflictId: string, summary: string) =>
+    request<KnowledgeConflict>(`/api/knowledge-conflicts/${conflictId}/resolve`, {
+      method: 'POST',
+      body: JSON.stringify({ reason_summary: summary, actor: 'owner' }),
+    }),
 }
 
 export const RUN_CONTEXT_STATE_LABEL: Record<RunContextState, string> = {
@@ -2004,6 +2200,8 @@ export interface CasePolicy {
   profile: CaseProfileState
   checkpoints: ControlledCheckpointRow[]
   budget: BudgetState
+  // P4-05b. 진행기 상한과 출처.
+  progress_limits?: ProgressLimitsView
   delegation_basis: { current: DelegationBasisRow | null; history: DelegationBasisRow[]; detail: string }
   repositories: CaseRepositoryState
   enforcement: Record<string, EnforcementNote>
@@ -2261,6 +2459,8 @@ export interface ConversationView {
   // P4-05. 업무 단계 진행 상태·이력(행이 없으면 null — 진행기가 잇지 않는 Case)과 연결 Case·종료 기록.
   progress?: ProgressView | null
   relations?: CaseRelationView[]
+  // P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식.
+  knowledge_registrations?: KnowledgeRegistration[]
   closure?: ClosureRecord | null
 }
 
@@ -2536,6 +2736,47 @@ export interface ProgressEvent {
   codes: string[]
 }
 
+// P4-05b. 진행기의 재작성·재시도 상한. Case 명시 → 시스템 기본값(제어부 환경 변수).
+export type ProgressLimitKey = 'repair_limit' | 'task_retry_limit'
+
+export interface ProgressLimitSettingRow {
+  id: string
+  case_id: string
+  revision: number
+  limit_key: ProgressLimitKey
+  limit_value: number
+  set_by: string
+  reason_summary: string | null
+  state: 'current' | 'superseded'
+  created_at: string
+  superseded_at: string | null
+}
+
+export interface ProgressLimitValue {
+  value: number
+  source: 'case_setting' | 'system_default'
+  setting: ProgressLimitSettingRow | null
+}
+
+export interface ProgressLimitsView {
+  repair_limit: ProgressLimitValue
+  task_retry_limit: ProgressLimitValue
+  system_default: Record<ProgressLimitKey, number>
+  range: { min: number; max: number }
+  history: ProgressLimitSettingRow[]
+  closed: boolean
+}
+
+export const PROGRESS_LIMIT_LABEL: Record<ProgressLimitKey, string> = {
+  repair_limit: '재작성',
+  task_retry_limit: '재시도',
+}
+
+export const PROGRESS_LIMIT_SOURCE_LABEL: Record<ProgressLimitValue['source'], string> = {
+  case_setting: '이 업무에서 정함',
+  system_default: '시스템 기본값',
+}
+
 export interface ProgressView {
   case_id: string
   state: ProgressStateCode
@@ -2552,6 +2793,7 @@ export interface ProgressView {
   events: ProgressEvent[]
   actor: string
   auto: boolean
+  limits: ProgressLimitsView
 }
 
 export interface CaseRelationView {
@@ -2643,8 +2885,23 @@ export const PROGRESS_ACTION_LABEL: Record<string, string> = {
 
 export const progressApi = {
   get: (caseId: string) =>
-    request<{ case_id: string; progress: ProgressView | null; auto: boolean }>(
+    request<{ case_id: string; progress: ProgressView | null; auto: boolean; limits: ProgressLimitsView }>(
       `/api/cases/${caseId}/progress`,
+    ),
+
+  // P4-05b. 재작성·재시도 상한을 이 업무에서 바꾼다(이력). 상한 대기에서 올리면 그 자리에서 한 번 더
+  // 간다 — 확인·인수·권한이 아니다.
+  setLimits: (
+    caseId: string,
+    values: Partial<Record<ProgressLimitKey, number>>,
+    reasonSummary: string,
+  ) =>
+    request<{ limits: ProgressLimitsView; progress: ProgressView | null }>(
+      `/api/cases/${caseId}/progress/limits`,
+      {
+        method: 'PUT',
+        body: JSON.stringify({ ...values, set_by: 'owner', reason_summary: reasonSummary || null }),
+      },
     ),
 
   // 멈춤·막힘·실패 뒤 **계속 진행**. 확인·동의·인수가 아니다 — 다음 걸음을 다시 보라는 요청이다.

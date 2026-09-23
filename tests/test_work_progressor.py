@@ -7,7 +7,7 @@
 
     진행기는 진입 검사를 우회하지 않는다   거부되면 그 사유로 멈춘다
     진행기는 사람의 결정을 만들지 않는다   동의·확인·인수·예외는 사람 경로에서만 기록된다
-    통과할 때까지 돌리지 않는다            재작성 2회·재시도 1회 뒤 사람에게 넘긴다
+    통과할 때까지 돌리지 않는다            재작성·재시도 상한(기본 2회·1회, P4-05b 부터 설정) 뒤 사람에게 넘긴다
     기준 판정은 구조 검사를 지난 보고다    연결되지 않은 기준·명령 없는 검증은 적지 않는다
 
 시험 이름 옆의 AC 번호는 P4-PLAN-05 5절이다.
@@ -463,12 +463,15 @@ def test_a_failed_task_is_retried_once_and_then_waits_for_a_person(processing_ha
     impl = [r for r in _runs(h, case_id) if r["purpose"] == "feature_implementation"]
     assert [r["outcome"] for r in impl] == ["failed", "failed"]
     assert conv["send"]["general"]["allowed"] is True
-    # 사람이 고친 뒤 계속 진행을 누르면 다시 시도한다(상한은 초기화되지 않으므로 한 번 더).
+    # 계속 진행만으로는 한 번 더 가지 않는다 — 상한은 초기화되지 않고 같은 대기로 돌아간다.
+    # (P4-05 는 "한 번 더" 라고 적었고 이 단언이 `done` 도 받아 차이를 드러내지 못했다. 한 번 더
+    # 가는 길은 한도를 올리는 것이다 — P4-05b, tests/test_progress_limits.py.)
     h.agent.cli_executor.write_files = {"reader.py": "fixed\n"}
     resumed = h.client.post(f"/api/cases/{case_id}/progress/resume", json={"actor": "owner"})
     assert resumed.status_code == 200, resumed.text
     conv = _drive(h, case_id)
-    assert conv["progress"]["state"] in ("waiting_human", "done"), conv["progress"]
+    assert _wait_codes(conv) == ["task_failed"], conv["progress"]
+    assert len([r for r in _runs(h, case_id) if r["purpose"] == "feature_implementation"]) == 2
 
 
 # ================================================== AC-13 중단·재개·복구

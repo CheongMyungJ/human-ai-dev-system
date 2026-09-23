@@ -93,6 +93,7 @@ def _repo(request: Request) -> Repository:
         context_inline_limit=request.app.state.config.context_inline_limit_bytes,
         runner_stale_seconds=request.app.state.config.runner_stale_seconds,
         auto_process_requests=request.app.state.config.auto_process_requests,
+        progress_limits=request.app.state.config.progress_limits,
     )
 
 
@@ -326,6 +327,9 @@ class ResultIn(BaseModel):
     #: P4-05. 검증·분석 실행의 **기준별 판정**(`[{key, verdict, conclusion?, summary?}]`). 본문이
     #: 아니다 — 시스템이 구조 검사로 거른 뒤 기록한다.
     criteria_report: list[dict[str, Any]] | None = None
+    #: P4-06. 논의 응답이 옮긴 **프로젝트 지식 등록 항목**(종류·효력·요약·범위·원문 참조). 본문이
+    #: 아니다 — 원문은 Runner 가 먼저 저장·등록했다. 등록은 처리기가 응답 완료 뒤에 한다.
+    knowledge_report: list[dict[str, Any]] | None = None
 
 
 class ExecutingIn(BaseModel):
@@ -928,6 +932,7 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             reporter=payload.runner_id,
             interpretation=payload.interpretation,
             criteria_report=payload.criteria_report,
+            knowledge_report=payload.knowledge_report,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -3665,7 +3670,46 @@ def get_progress(request: Request, case_id: str) -> dict[str, Any]:
         "case_id": case_id,
         "progress": repo.progress_view(case_id),
         "auto": request.app.state.config.progress_enabled,
+        # P4-05b. 진행 행이 없는 Case 도 한도는 있다(진행기가 잇게 되면 쓰인다).
+        "limits": repo.progress_limits_view(case_id),
     }
+
+
+class ProgressLimitsIn(BaseModel):
+    """P4-05b. 진행 상한 조정. **준 키만** 바꾼다. 무제한은 없다(0~10)."""
+
+    repair_limit: int | None = Field(default=None, ge=0, le=10)
+    task_retry_limit: int | None = Field(default=None, ge=0, le=10)
+    set_by: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+@router.put("/api/cases/{case_id}/progress/limits")
+def set_progress_limits(
+    request: Request, case_id: str, payload: ProgressLimitsIn
+) -> dict[str, Any]:
+    """P4-05b. 재작성·재시도 상한을 이 Case 에서 바꾼다(이력으로 남는다).
+
+    기록 뒤 **사람 입력으로 진행기를 부른다**(예산 한도 변경과 같다) — 상한 대기에서 한도를 올리면
+    그 자리에서 한 번 더 가고, 다시 실패하면 새 한도에서 멈춘다. 확인·인수·권한이 아니다.
+    """
+    values = {
+        key: value
+        for key, value in (
+            ("repair_limit", payload.repair_limit),
+            ("task_retry_limit", payload.task_retry_limit),
+        )
+        if value is not None
+    }
+    if not values:
+        raise HTTPException(status_code=422, detail="give repair_limit or task_retry_limit")
+    repo = _repo(request)
+    try:
+        repo.set_progress_limits(case_id, values, payload.set_by, payload.reason_summary)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_human_input(request, repo, case_id, "progress_limits")
+    return {"limits": repo.progress_limits_view(case_id), "progress": repo.progress_view(case_id)}
 
 
 class ResumeIn(BaseModel):
@@ -3686,6 +3730,230 @@ def resume_progress(request: Request, case_id: str, payload: ResumeIn) -> dict[s
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
     return {"result": result, "progress": repo.progress_view(case_id)}
+
+
+class KnowledgeIn(BaseModel):
+    """P4-06. 지식 등록. `content` 는 서버에 저장되지 않는다 — 중계 버퍼를 거쳐 Runner 로 간다.
+
+    `summary` 는 짧은 제목이며 원문 대체가 아니다. 권위는 등록하는 사람이다(`user_registration`,
+    기존 확정 결정·규칙의 충실한 등록 — 재승인하지 않는다). AI 가 제안한 것을 적어 두려면
+    `authority = ai_proposal` 로 적고 그것은 **후보로만** 들어간다.
+    """
+
+    content: str = Field(min_length=1)
+    summary: str = Field(min_length=1, max_length=200)
+    kind: str
+    obligation: str
+    target_runner_id: str
+    state: str = "active"
+    repository_id: str | None = None
+    paths: list[str] = Field(default_factory=list, max_length=20)
+    activities: list[str] = Field(default_factory=list, max_length=8)
+    authority: str = "user_registration"
+    source_message_id: str | None = None
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+class KnowledgeRevisionIn(BaseModel):
+    """P4-06. 개정 — 새 버전. 주지 않은 칸은 현재 버전 그대로다. 새 원문을 주면 `case_id` 가
+    그 원문을 저장할 대화다(출처)."""
+
+    reason_summary: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    content: str | None = Field(default=None, min_length=1)
+    case_id: str | None = None
+    target_runner_id: str | None = None
+    summary: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: str | None = None
+    obligation: str | None = None
+    state: str | None = None
+    scope_kind: str | None = None
+    repository_id: str | None = None
+    paths: list[str] | None = Field(default=None, max_length=20)
+    activities: list[str] | None = Field(default=None, max_length=8)
+
+
+class KnowledgeActIn(BaseModel):
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+class KnowledgeConflictIn(BaseModel):
+    knowledge_a: str
+    knowledge_b: str
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+def _knowledge_intake(
+    request: Request, repo: Repository, case_id: str, content: str, summary: str, runner_id: str
+) -> dict[str, Any]:
+    """지식 원문을 **기록보다 먼저** 중계하고 접수를 연다(`/artifacts` 와 같은 순서)."""
+    body = content.encode("utf-8")
+    intake_id = _relay_first(request, body)
+    try:
+        return repo.open_intake(
+            case_id=case_id,
+            kind=ArtifactKind.KNOWLEDGE,
+            target_runner_id=runner_id,
+            expected_hash=content_hash(body),
+            byte_size=len(body),
+            summary=summary,
+            intake_id=intake_id,
+        )
+    except BaseException:
+        request.app.state.relay.drop(intake_id)
+        raise
+
+
+@router.post("/api/cases/{case_id}/knowledge", status_code=201)
+def register_knowledge(request: Request, case_id: str, payload: KnowledgeIn) -> dict[str, Any]:
+    """P4-06. 사람이 이 대화(Case)에서 프로젝트 지식을 등록한다.
+
+    원문은 이 Case 의 원문으로 PC 에 저장되고(저장 보고 전에는 `pending` — 필수면 그 사이 주입이
+    보류된다), 서버에는 요약·메타데이터·참조만 남는다. **종료된 Case 에서도 등록할 수 있다** — 지식은
+    Project 의 것이며 그 Case 의 기록·판정을 바꾸지 않는다. 등록은 실행 권한을 만들지 않는다.
+    """
+    repo = _repo(request)
+    try:
+        intake = _knowledge_intake(
+            request, repo, case_id, payload.content, payload.summary, payload.target_runner_id
+        )
+        version = repo.register_knowledge(
+            case_id,
+            artifact_id=intake["artifact_id"],
+            artifact_rev=intake["revision"],
+            kind=payload.kind,
+            obligation=payload.obligation,
+            summary=payload.summary,
+            created_by=payload.actor,
+            state=payload.state,
+            scope_kind="repository" if payload.repository_id else "project",
+            repository_id=payload.repository_id,
+            paths=payload.paths,
+            activities=payload.activities,
+            authority=payload.authority,
+            source_message_id=payload.source_message_id,
+            reason_summary=payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"version": version, "intake_id": intake["id"]}
+
+
+@router.get("/api/projects/{project_id}/knowledge")
+def get_project_knowledge(request: Request, project_id: str) -> dict[str, Any]:
+    """P4-06. Project 의 지식 등록부(항목·현재 버전·원문 가용성·이력·충돌). 본문 없음."""
+    try:
+        return _repo(request).knowledge_view(project_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/knowledge/{knowledge_id}/versions", status_code=201)
+def revise_knowledge(
+    request: Request, knowledge_id: str, payload: KnowledgeRevisionIn
+) -> dict[str, Any]:
+    """P4-06. 개정 — 새 버전. 이전 버전은 대체 관계와 함께 남는다(덮어쓰지 않는다)."""
+    repo = _repo(request)
+    try:
+        artifact = None
+        if payload.content is not None:
+            if not payload.case_id or not payload.target_runner_id:
+                raise ConflictError("a new original needs case_id and target_runner_id")
+            intake = _knowledge_intake(
+                request,
+                repo,
+                payload.case_id,
+                payload.content,
+                payload.summary or "지식 개정",
+                payload.target_runner_id,
+            )
+            artifact = (intake["artifact_id"], intake["revision"])
+        version = repo.revise_knowledge(
+            knowledge_id,
+            actor=payload.actor,
+            reason_summary=payload.reason_summary,
+            case_id=payload.case_id,
+            artifact=artifact,
+            summary=payload.summary,
+            kind=payload.kind,
+            obligation=payload.obligation,
+            state=payload.state,
+            scope_kind=payload.scope_kind,
+            repository_id=payload.repository_id,
+            paths=payload.paths,
+            activities=payload.activities,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {"version": version}
+
+
+@router.post("/api/knowledge/{knowledge_id}/activate")
+def activate_knowledge(request: Request, knowledge_id: str, payload: KnowledgeActIn) -> dict[str, Any]:
+    """P4-06. 후보 → 활성(사람의 결정, 새 버전)."""
+    try:
+        return {"version": _repo(request).activate_knowledge(knowledge_id, payload.actor, payload.reason_summary)}
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/knowledge/{knowledge_id}/invalidate")
+def invalidate_knowledge(
+    request: Request, knowledge_id: str, payload: KnowledgeActIn
+) -> dict[str, Any]:
+    """P4-06. 무효(사유 필수). 이력은 지우지 않는다. 대기 중인 진행은 사람 입력으로 다시 본다."""
+    repo = _repo(request)
+    try:
+        version = repo.invalidate_knowledge(knowledge_id, payload.actor, payload.reason_summary)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_knowledge_change(request, repo, version["project_id"], f"knowledge:{knowledge_id}")
+    return {"version": version}
+
+
+@router.post("/api/projects/{project_id}/knowledge-conflicts", status_code=201)
+def record_knowledge_conflict(
+    request: Request, project_id: str, payload: KnowledgeConflictIn
+) -> dict[str, Any]:
+    """P4-06. 두 항목의 충돌을 기록한다. 둘이 함께 적용되는 필수 작업은 해소 전까지 보류된다."""
+    try:
+        return _repo(request).record_knowledge_conflict(
+            project_id, payload.knowledge_a, payload.knowledge_b, payload.actor, payload.reason_summary
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/knowledge-conflicts/{conflict_id}/resolve")
+def resolve_knowledge_conflict(
+    request: Request, conflict_id: str, payload: KnowledgeActIn
+) -> dict[str, Any]:
+    """P4-06. 충돌 해소(사람). 대기 중인 진행은 사람 입력으로 다시 본다."""
+    repo = _repo(request)
+    try:
+        conflict = repo.resolve_knowledge_conflict(conflict_id, payload.actor, payload.reason_summary)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_knowledge_change(request, repo, conflict["project_id"], f"knowledge_conflict:{conflict_id}")
+    return conflict
+
+
+@router.get("/api/runs/{run_id}/knowledge")
+def get_run_knowledge(request: Request, run_id: str) -> dict[str, Any]:
+    """P4-06. 한 실행의 지식 Manifest(선택·제공·생략·비적용·범위 미확정). 준수 판정이 아니다."""
+    try:
+        return _repo(request).run_knowledge_view(run_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+def _after_knowledge_change(request: Request, repo: Repository, project_id: str, ref: str) -> None:
+    """지식 충돌이 풀리면 그것 때문에 기다리던 Case 의 진행을 다시 본다(사람 입력과 같은 경계)."""
+    for row in repo.progress_waiting_for(project_id, "knowledge_conflict"):
+        _after_human_input(request, repo, row["case_id"], ref)
 
 
 @router.post("/api/cases/{case_id}/archive")

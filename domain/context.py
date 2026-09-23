@@ -38,7 +38,13 @@ INSTRUCTION_ROLE = "instruction"
 #: 역할은 요청·결정·금지·동의 범위·사람의 답·피드백이거나, 재작성이 잃으면 처음부터
 #: 다시 쓰게 되는 이전 버전(P2-04)이다.
 SUPPORTING_ROLES: frozenset[str] = frozenset(
-    {ContextRefRole.CONVERSATION_ASSISTANT_MESSAGE.value}
+    {
+        ContextRefRole.CONVERSATION_ASSISTANT_MESSAGE.value,
+        # P4-06. 참고·후보 지식은 보조다 — 부족해도 필수 규칙 위반이 아니고 무관한 업무를 막지
+        # 않는다. **필수 지식과 그 권위 원문은 핵심**(모르는 역할과 같은 쪽)이다.
+        ContextRefRole.KNOWLEDGE_REFERENCE.value,
+        ContextRefRole.KNOWLEDGE_CANDIDATE.value,
+    }
 )
 
 #: 읽지 못한 상태. 해시가 다른 본문은 **다른 원문**이므로 읽은 것이 아니다.
@@ -75,6 +81,11 @@ class ContextPlan:
     full_bytes: int
     over_limit: bool = False
     omitted: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-06. 지식 선택의 결정(`domain.knowledge.Selection.decisions()`). 제공한 항목은
+    #: `ref_index` 로 `refs` 의 자리를 가리킨다. 진입 검사·생성·Manifest 가 이 한 목록을 쓴다.
+    knowledge: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-06. 이 실행을 막는 지식 충돌(적용되는 필수 사이의 열린 충돌).
+    knowledge_conflicts: list[dict[str, Any]] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
         return {

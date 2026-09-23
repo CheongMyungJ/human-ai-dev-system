@@ -394,7 +394,26 @@ CONTEXT_LABEL = {
         "대화에서 **AI 가 한 말** (이전 제안일 뿐 사용자의 요구·결정이 아니다."
         " 사용자가 받아들인 것만 결정이다)"
     ),
+    # P4-06. 프로젝트 지식. 머리에 키·버전·효력·범위가 붙는다(`knowledge_head`).
+    "knowledge_required": "프로젝트 **필수** 규칙 (적힌 조건·예외 안에서 지킨다)",
+    "knowledge_source": "필수 규칙의 **권위 원문** (사용자가 한 말. 적용 내용과 다르면 이것이 앞선다)",
+    "knowledge_reference": "프로젝트 참고 지식 (판단에 쓰되 의무가 아니다)",
+    "knowledge_candidate": "프로젝트 지식 **후보** (확정되지 않은 단서. 규칙으로 따르지 않는다)",
 }
+
+#: P4-06. **프로젝트 지식이 들어간 실행**의 안내. 고정 컨텍스트 머리 바로 뒤에 온다.
+#:
+#: 제공은 준수의 증거가 아니다 — 그것을 AI 에게도 말한다. "규칙을 읽었으니 지켰다" 는 보고는 검증이
+#: 아니며, 준수는 기존 기준 판정·검토가 따로 본다. 규칙을 넓히지 말라는 말은 D-67 의 "AI 가 새
+#: 규칙을 덧붙이지 않음"이다.
+KNOWLEDGE_NOTE = """아래 자료에는 이 프로젝트의 **등록된 지식**이 있다(머리에 키·버전·효력·범위가 적혀 있다).
+- 필수: 적힌 조건·예외 안에서 지킨다. 경로 조건이 있으면 그 경로를 다룰 때만 해당한다.
+- 참고: 판단에 쓰되 의무가 아니다. 후보: 확정되지 않은 단서이며 규칙으로 따르지 않는다.
+- 필수 규칙과 함께 온 **권위 원문**(사용자의 말)과 적용 내용이 다르면 권위 원문이 앞선다.
+- 규칙을 넓히거나 새로 만들지 마라. 제공받았다는 사실은 지켰다는 증거가 아니다 — 지켰다고
+  주장하지 말고, 필요하면 확인할 수 있는 근거(명령·결과)로 보인다.
+- 요청·계획과 필수 규칙이 충돌하면 임의로 한쪽을 고르지 말고 그 충돌을 결과에 적는다.
+"""
 
 CONTEXT_HEADER = """--- 고정 컨텍스트 ---
 아래는 이 작업에 고정된 자료다. **처음부터 다시 쓰지 마라.** 이전 버전이 있으면 그
@@ -419,9 +438,13 @@ def build_context_block(items: list[dict[str, Any]]) -> str:
     if not items:
         return ""
     parts = [CONTEXT_HEADER]
+    if any(item.get("knowledge") for item in items):
+        parts.append(KNOWLEDGE_NOTE)
     for item in items:
         label = CONTEXT_LABEL.get(item["role"], item["role"])
         head = f"[{label}] {item['artifact_id']}@{item['revision']}"
+        if item.get("knowledge"):
+            head += " " + knowledge_head(item["knowledge"])
         if item.get("status") == "omitted":
             # P4-04. 읽지 못한 것과 **넣지 않은 것**은 다른 사실이다.
             parts.append(f"{head}\n{OMITTED_NOTE}\n")
@@ -821,6 +844,89 @@ CLOSED_CASE_RULE = """이 업무는 **이미 종료됐다.** 고정 컨텍스트
 """
 
 
+_OBLIGATION_LABEL = {"required": "필수", "reference": "참고"}
+_KIND_LABEL = {
+    "decision": "결정",
+    "constraint": "제약",
+    "known_problem": "알려진 문제",
+    "operation": "운영 사실",
+}
+
+
+def knowledge_head(meta: dict[str, Any]) -> str:
+    """P4-06. 지식 참조의 머리 — 키·버전·효력·종류·범위·활동. 제어부가 준 메타데이터뿐이다."""
+    if meta.get("source_of"):
+        return f"(← {meta['source_of']} 의 권위 원문: 사용자가 한 말)"
+    state = "후보" if meta.get("state") == "candidate" else _OBLIGATION_LABEL.get(
+        meta.get("obligation") or "", meta.get("obligation") or ""
+    )
+    scope = "프로젝트 전체"
+    if meta.get("scope") == "repository":
+        scope = f"저장소 {meta.get('repository') or '?'}"
+        if meta.get("paths"):
+            scope += " · 경로 " + ", ".join(meta["paths"])
+    activities = ", ".join(meta.get("activities") or []) or "모든 작업"
+    return (
+        f"{{{meta.get('key')} v{meta.get('version')} · {state} · "
+        f"{_KIND_LABEL.get(meta.get('kind') or '', meta.get('kind') or '')} · {scope} · 활동 {activities}"
+        f" · {meta.get('summary') or ''}}}"
+    )
+
+
+#: P4-06. **모든 논의 응답**에 붙는 등록 규칙(사용자 결정 2026-09-24 — 자동 활성 등록).
+#:
+#: 좁게 둔 이유는 오판의 비용이다 — "이번 업무에서는" 을 프로젝트 규칙으로 읽으면 다른 업무 전부에
+#: 필수 규칙이 주입된다(D-80 "Case 한정 예외를 Project 규칙 변경으로 확대하지 않는다"). 옮겨 적기의
+#: 충실성은 시스템이 판정하지 못한다 — 그래서 사용자가 말하지 않은 의무·금지·예외를 더하지 말라고
+#: 적고, 주입할 때 원래 사용자 메시지를 함께 준다.
+KNOWLEDGE_REGISTRATION_RULE = """**프로젝트 규칙 등록.** 사용자의 **마지막 메시지**가 이 프로젝트에서 **앞으로** 지킬
+규칙·결정·알려진 문제·운영 사실을 명시적으로 정할 때만(예: "이 프로젝트에서는 앞으로 …",
+"앞으로 모든 작업에서 …") 답 글 뒤에 아래 블록을 붙인다. 해당하지 않으면 붙이지 않는다.
+이 블록은 사람에게 보이지 않는다(다른 블록이 있으면 그것과 따로 붙인다).
+
+```hads-knowledge
+{{"items": [{{"kind": "constraint", "obligation": "required", "summary": "짧은 제목",
+  "content": "사용자가 정한 내용을 옮겨 적은 것(조건·예외 포함)", "repository": null,
+  "paths": [], "activities": [], "supersedes": null}}]}}
+```
+
+- "이번 업무에서는 …"처럼 이 업무에만 해당하는 선택·예외는 붙이지 않는다.
+- 범위(프로젝트 전체인지 특정 저장소·경로인지)나 반드시인지 참고인지가 **모호하면 붙이지 말고**
+  글로 묻는다.
+- content 는 사용자가 한 말을 **옮겨 적는다.** 사용자가 말하지 않은 의무·금지·예외를 더하지 않는다.
+- obligation: 반드시 하라/하지 마라면 "required", 참고로 알려 준 것이면 "reference".
+- kind: "decision"(설계 결정과 이유) · "constraint"(지켜야 할 조건) · "known_problem"(반복되는
+  문제와 진단법) · "operation"(빌드·시험·환경 같은 운영 사실).
+- repository: 특정 저장소에만 해당하면 아래 등록 저장소 이름 중 하나, 아니면 null. paths 는 그
+  저장소 안의 경로이며 없으면 [].
+- activities: 특정 활동에만 해당하면 intent·design·plan·implementation·verification·
+  investigation·review·discussion 중에서, 모든 작업이면 [].
+- supersedes: 사용자가 아래 **기존 지식** 하나를 바꾸라고 했으면 그 키, 아니면 null.
+- 블록을 붙이면 글에 "프로젝트 규칙으로 등록한다"는 사실과 옮겨 적은 내용을 짧게 적는다.
+
+등록 저장소: {repositories}
+기존 지식:
+{items}
+
+"""
+
+
+def knowledge_rule(index: dict[str, Any] | None) -> str:
+    """P4-06. 등록 규칙에 현재 지식 목록과 저장소 이름을 채운다(제어부가 준 요약뿐이다)."""
+    index = index or {}
+    repos = ", ".join(index.get("repositories") or []) or "(없음)"
+    lines = []
+    for item in index.get("items") or []:
+        scope = f"저장소 {item['repository']}" if item.get("repository") else "프로젝트 전체"
+        state = "후보" if item.get("state") == "candidate" else _OBLIGATION_LABEL.get(
+            item.get("obligation") or "", ""
+        )
+        lines.append(f"  - {item['key']} · {state} · {scope} · {item.get('summary') or ''}")
+    return KNOWLEDGE_REGISTRATION_RULE.format(
+        repositories=repos, items="\n".join(lines) or "  (없음)"
+    )
+
+
 def _repository_rule(repositories: list[dict[str, Any]] | None) -> str:
     """계획이 Task 마다 저장소를 적게 하는 규칙(P3-04).
 
@@ -870,6 +976,7 @@ def build(
     criteria: list[dict[str, Any]] | None = None,
     gate_findings: list[dict[str, Any]] | None = None,
     closed_case: bool = False,
+    knowledge_index: dict[str, Any] | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문 (+ 이 실행의 작업·지적, P4-05).
 
@@ -924,6 +1031,14 @@ def build(
         if DISCUSSION_REPLY_TAIL not in head:
             raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
         head = head.replace(DISCUSSION_REPLY_TAIL, CLOSED_CASE_RULE + DISCUSSION_REPLY_TAIL)
+    if purpose == "discussion_reply":
+        # P4-06. **모든 논의 응답**에 등록 규칙이 붙는다 — 준비·업무·종료 단계 어디서든 사용자는
+        # 프로젝트 규칙을 말할 수 있다. 등록은 그 Case 의 기록을 바꾸지 않는다.
+        if DISCUSSION_REPLY_TAIL not in head:
+            raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
+        head = head.replace(
+            DISCUSSION_REPLY_TAIL, knowledge_rule(knowledge_index) + DISCUSSION_REPLY_TAIL
+        )
     if purpose == "limited_analysis" and criteria:
         head = head.replace("--- 지시 원문 ---\n", ANALYSIS_REPORT_RULE + "\n--- 지시 원문 ---\n")
     if purpose == "intent_authoring" and gate_findings:

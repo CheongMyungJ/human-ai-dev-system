@@ -56,6 +56,7 @@ import httpx
 from pathlib import Path
 
 from domain import context as ctxmod
+from domain import knowledge as knowmod
 from domain import conversation as convmod
 from domain import ids, intent_doc, prep_doc
 from domain.budget import USAGE_RECOVERED_FROM, USAGE_RECOVERED_FROM_RAW_LOG
@@ -542,6 +543,14 @@ class RunnerAgent:
                 produced["commands"],
             )
 
+        # P4-06. 등록 블록의 원문을 이 Runner 에 저장하고 보고 항목을 만든다(결과보다 먼저 — 결과
+        # 기록이 원문 참조를 가리킨다).
+        knowledge_report = (
+            self._store_knowledge(case_id, run_id, produced.pop("knowledge_items"))
+            if produced.get("knowledge_items")
+            else None
+        )
+
         result_payload = {
             "outcome": output.outcome.value,
             "exit_code": output.exit_code,
@@ -563,6 +572,9 @@ class RunnerAgent:
         # P4-05. 검증·분석 실행의 기준 보고. 원장에도 남아 재전송이 같은 보고를 보낸다.
         if produced.get("criteria_report"):
             result_payload["criteria_report"] = produced["criteria_report"]
+        # P4-06. 등록 보고. 원장에도 남아 재전송이 같은 보고(같은 원문 참조)를 보낸다.
+        if knowledge_report:
+            result_payload["knowledge_report"] = knowledge_report
         # UI-02. 잔류 값의 근거와 종료한 수. 근거를 모르는 실행기는 보내지 않는다.
         if getattr(output, "residual_basis", None):
             result_payload["residual_basis"] = output.residual_basis
@@ -634,6 +646,8 @@ class RunnerAgent:
             criteria=assignment.get("criteria"),
             gate_findings=assignment.get("gate_findings"),
             closed_case=bool(assignment.get("closed_case")),
+            # P4-06. 논의 응답의 등록 규칙에 채우는 현재 지식 목록·저장소 이름(요약뿐).
+            knowledge_index=assignment.get("knowledge_index"),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
@@ -759,6 +773,8 @@ class RunnerAgent:
                     "inclusion": inclusion,
                     "status": status,
                     "body": body,
+                    # P4-06. 지식 참조의 키·버전·효력·범위(지시문 머리). 제어부가 준 메타데이터다.
+                    "knowledge": ref.get("knowledge"),
                 }
             )
         return context
@@ -893,14 +909,23 @@ class RunnerAgent:
         `invalid` 로 보고한다). 블록을 떼니 글이 비면 사람에게 보일 말이 없으므로 실행은
         실패다. 업무 단계 응답은 건드리지 않는다(해석 규칙을 받지 않았다).
         """
-        if assignment.get("conversation_stage") != CaseStage.DISCUSSION.value and not assignment.get(
-            "closed_case"
-        ):
-            return {"produced": "discussion_reply"}
         original = output.final_message
-        text, interpretation = convmod.split_interpretation(original)
+        # P4-06. **모든 논의 응답**에서 등록 블록을 뗀다. 항목의 원문은 이 Runner 에 저장되고
+        # (`_store_knowledge`) 제어부에는 메타데이터와 참조만 간다.
+        text, knowledge_items = knowmod.split_knowledge(original)
+        produced: dict[str, Any] = {"produced": "discussion_reply"}
+        if knowledge_items:
+            produced["knowledge_items"] = knowledge_items
+        interprets = assignment.get("conversation_stage") == CaseStage.DISCUSSION.value or bool(
+            assignment.get("closed_case")
+        )
+        if not interprets and text == original:
+            return produced
+        if interprets:
+            text, interpretation = convmod.split_interpretation(text)
+            produced["interpretation"] = interpretation.to_dict()
         if not text:
-            raise ValueError("응답 글이 비었다 — 해석 블록만으로는 대화에 붙일 말이 없다")
+            raise ValueError("응답 글이 비었다 — 블록만으로는 대화에 붙일 말이 없다")
         output.final_message = text
         body = output.output_body
         tail = original.encode("utf-8")
@@ -911,7 +936,46 @@ class RunnerAgent:
             output.output_body = (
                 body.decode("utf-8", errors="replace").replace(original, text).encode("utf-8")
             )
-        return {"produced": "discussion_reply", "interpretation": interpretation.to_dict()}
+        return produced
+
+    def _store_knowledge(
+        self, case_id: str, run_id: str, items: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """P4-06. 옮겨 적은 적용 내용을 **이 Runner 에** 원문으로 저장·등록하고 보고 항목을 만든다.
+
+        보고에는 메타데이터와 원문 참조만 간다. 형식이 틀린 항목은 그대로 `format_error` 로 보낸다 —
+        제어부가 거부 사유로 남긴다(조용히 버리지 않는다).
+        """
+        report: list[dict[str, Any]] = []
+        for raw in items[: knowmod.MAX_REPORT_ITEMS + 5]:
+            if raw.get("format_error"):
+                report.append({"format_error": str(raw["format_error"])[:120]})
+                continue
+            body = str(raw.get("content") or "").strip().encode("utf-8")
+            artifact_id = ids.new_artifact_id()
+            stored = self.store.put(artifact_id, 1, body)
+            self._send(
+                self.client.register_artifact,
+                {
+                    "runner_id": self.config.runner_id,
+                    "case_id": case_id,
+                    "kind": "knowledge",
+                    "artifact_id": artifact_id,
+                    "revision": 1,
+                    "content_hash": stored.content_hash,
+                    "byte_size": stored.byte_size,
+                    "summary": f"knowledge original from {run_id}"[:200],
+                },
+            )
+            entry = {
+                key: raw.get(key)
+                for key in ("kind", "obligation", "summary", "repository", "paths", "activities", "supersedes")
+            }
+            entry["summary"] = " ".join(str(entry.get("summary") or "").split())[:200]
+            entry["artifact_id"] = artifact_id
+            entry["revision"] = 1
+            report.append(entry)
+        return report
 
     def _produce_implementation(self, output: Any) -> dict[str, Any]:
         """구현 실행의 산출물은 **작업공간의 실제 변화**다.

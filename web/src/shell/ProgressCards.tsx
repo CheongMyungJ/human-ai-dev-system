@@ -11,12 +11,19 @@ import { useEffect, useState } from 'react'
 
 import {
   intentApi,
+  knowledgeApi,
+  KNOWLEDGE_KIND_LABEL,
+  KNOWLEDGE_STATE_LABEL,
   progressApi,
   resultApi,
+  PROGRESS_LIMIT_LABEL,
+  PROGRESS_LIMIT_SOURCE_LABEL,
   PROGRESS_STATE_LABEL,
   PROGRESS_STEP_LABEL,
   WAIT_LABEL,
+  type ProgressLimitKey,
   type CaseRelationView,
+  type KnowledgeRegistration,
   type ConversationView,
   type MaterialDeltaRow,
   type ProgressView,
@@ -208,6 +215,10 @@ function WaitCard(props: {
     case 'criteria_unresolved':
       return <ExceptionCard {...props} />
     default:
+      // P4-05b. 상한에 걸린 대기는 한도·사용 수를 싣는다 — "한도를 올리고 계속" 카드.
+      if (wait.limit_key === 'repair_limit' || wait.limit_key === 'task_retry_limit') {
+        return <LimitWaitCard {...props} limitKey={wait.limit_key} />
+      }
       return <GenericWaitCard {...props} />
   }
 }
@@ -527,6 +538,176 @@ function GenericWaitCard(props: { wait: ProgressWait; progress: ProgressView; ca
           다시 시도
         </button>
       </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 상한 대기 (P4-05b)
+
+function LimitWaitCard(props: {
+  wait: ProgressWait
+  progress: ProgressView
+  caseId: string
+  projectId: string
+  limitKey: ProgressLimitKey
+  onChanged: () => void
+}) {
+  const action = useAction(props.onChanged)
+  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
+  const limit = Number(props.wait.limit ?? 0)
+  const used = Number(props.wait.used ?? 0)
+  const max = props.progress.limits?.range.max ?? 10
+  const source = props.wait.limit_source === 'case_setting' ? 'case_setting' : 'system_default'
+  const label = PROGRESS_LIMIT_LABEL[props.limitKey]
+  const target = [props.wait.task_key, props.wait.stage].filter(Boolean).join(' · ')
+  // 올리면 서버가 기록 뒤 진행기를 부른다 — 그 자리에서 한 번 더 가고, 다시 실패하면 새 한도에서 멈춘다.
+  const raise = () =>
+    progressApi.setLimits(props.caseId, { [props.limitKey]: limit + 1 }, '대기 카드에서 한도를 올림')
+  return (
+    <div className="sh-card sh-card-wait" data-testid={`wait-card-${props.wait.code}`} data-limit-key={props.limitKey}>
+      <div className="sh-card-head">
+        <strong>{WAIT_LABEL[props.wait.code] ?? props.wait.code}</strong>
+        <span className="sh-muted" data-testid="limit-usage">
+          {' '}· {label} {used}/{limit} ({PROGRESS_LIMIT_SOURCE_LABEL[source]})
+        </span>
+      </div>
+      <div className="sh-muted">{props.wait.detail}</div>
+      {target && <div className="sh-mono sh-muted">{target}</div>}
+      <div className="sh-muted">
+        한도를 올리면 한 번 더 시도하고, 다시 실패하면 새 한도에서 멈춘다. 시도 수는 처음부터 다시 세지 않는다.
+        한도를 올리는 것은 결과의 인수·예외 수용이 아니다.
+      </div>
+      <div className="sh-composer-bar">
+        <a className="sh-link" href={admin}>
+          관리 화면에서 보기
+        </a>
+        {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+        <span className="sh-spacer" />
+        {limit < max ? (
+          <button
+            type="button"
+            className="sh-primary"
+            disabled={action.busy}
+            onClick={() => void action.run(raise)}
+            data-testid="limit-raise"
+          >
+            한도를 올리고 계속 ({label} {limit} → {limit + 1})
+          </button>
+        ) : (
+          <span className="sh-notice sh-notice-warn">한도가 최대({max})다. 요청을 고치거나 관리 화면에서 본다</span>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 지식 자동 등록 (P4-06)
+
+//: 등록하지 않은 이유(서버 사유 코드 → 읽을 말).
+const KNOWLEDGE_REFUSAL_LABEL: Record<string, string> = {
+  unknown_repository: '그런 저장소가 이 프로젝트에 없다',
+  unknown_supersedes_key: '바꾸라는 기존 규칙을 찾지 못했다',
+  invalid_kind_or_obligation: '종류·효력을 알아볼 수 없다',
+  format_error: '형식이 맞지 않는다',
+  reply_not_completed: '응답이 완료되지 않았다',
+  summary_missing: '제목이 없다',
+  content_not_stored: '내용이 저장되지 않았다',
+  invalid_scope: '범위를 알아볼 수 없다',
+  too_many_items: '한 번에 너무 많다',
+}
+
+/**
+ * 대화의 말에서 **프로젝트 규칙으로 등록한 것**(사용자 결정 2026-09-24 — 자동 활성, 재승인 없음).
+ * 권위는 사용자가 한 말이고 AI 는 옮겨 적었다. 옮기며 뜻이 바뀌었을 수 있으므로 여기서 바로
+ * **무효로** 할 수 있다(내용 고치기는 관리 화면의 새 버전). 등록은 실행 권한이 아니다.
+ */
+export function KnowledgeCards(props: {
+  registrations: KnowledgeRegistration[]
+  projectId: string
+  caseId: string
+  onChanged: () => void
+}) {
+  if (props.registrations.length === 0) return null
+  return (
+    <>
+      {props.registrations.map((r) => (
+        <KnowledgeCard key={`${r.run_id}-${r.report_index}`} registration={r} {...props} />
+      ))}
+    </>
+  )
+}
+
+function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: string; caseId: string; onChanged: () => void }) {
+  const r = props.registration
+  const action = useAction(props.onChanged)
+  const [reason, setReason] = useState('')
+  const [asking, setAsking] = useState(false)
+  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
+  if (r.intake_state === 'refused') {
+    return (
+      <div className="sh-card sh-card-event" data-testid="knowledge-refused-card">
+        <strong>프로젝트 규칙으로 등록하지 않음</strong> · {r.reported_summary ?? ''}
+        <div className="sh-muted">
+          {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''} — 필요하면 범위·내용을 분명히 해서 다시 말하거나 관리 화면에서 등록한다
+        </div>
+      </div>
+    )
+  }
+  const live = r.current_state === 'active' || r.current_state === 'candidate'
+  const scope =
+    r.scope_kind === 'repository'
+      ? `저장소 ${r.repository_name ?? '?'}${r.paths.length ? ` · 경로 ${r.paths.join(', ')}` : ''}`
+      : '프로젝트 전체'
+  return (
+    <div className="sh-card sh-card-event" data-testid="knowledge-card" data-state={r.current_state ?? ''}>
+      <div className="sh-card-head">
+        <strong>프로젝트 규칙으로 등록됨</strong> · {r.knowledge_key} v{r.version} ·{' '}
+        {r.obligation === 'required' ? '필수' : '참고'} · {KNOWLEDGE_KIND_LABEL[r.kind ?? 'constraint']}
+      </div>
+      <div>{r.summary}</div>
+      <div className="sh-muted">
+        {scope} · 활동 {r.activities.join(', ') || '모든 작업'} · 권위: 이 대화에서 한 말(AI 가 옮겨 적음)
+        {r.current_version && r.current_version !== r.version
+          ? ` · 지금은 v${r.current_version}(${KNOWLEDGE_STATE_LABEL[r.current_state ?? 'active']})`
+          : r.current_state && r.current_state !== 'active'
+            ? ` · 지금 ${KNOWLEDGE_STATE_LABEL[r.current_state]}`
+            : ''}
+      </div>
+      <div className="sh-muted">
+        앞으로 이 프로젝트의 해당 작업에 원문과 함께 주입된다. 옮긴 내용이 다르면 무효로 하고 다시 말한다. 주입은 준수의 증거가 아니다.
+      </div>
+      {live && r.knowledge_id && (
+        <div className="sh-composer-bar">
+          <a className="sh-link" href={admin}>
+            관리 화면에서 보기·고치기
+          </a>
+          {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+          <span className="sh-spacer" />
+          {asking ? (
+            <>
+              <input
+                className="sh-input"
+                placeholder="무효 사유"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                data-testid="knowledge-invalidate-reason"
+              />
+              <button
+                type="button"
+                disabled={!reason.trim() || action.busy}
+                onClick={() => void action.run(() => knowledgeApi.invalidate(r.knowledge_id!, reason))}
+                data-testid="knowledge-invalidate-confirm"
+              >
+                무효로
+              </button>
+            </>
+          ) : (
+            <button type="button" onClick={() => setAsking(true)} data-testid="knowledge-invalidate">
+              이 등록을 무효로
+            </button>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -29,6 +29,7 @@ import {
 } from './api'
 import { ConversationPanel } from './ConversationPanel'
 import { IntentPanel } from './IntentPanel'
+import { KnowledgePanel } from './KnowledgePanel'
 import { PolicyPanel } from './PolicyPanel'
 import { PreparationPanel } from './PreparationPanel'
 import { ResultPanel } from './ResultPanel'
@@ -466,6 +467,10 @@ function CaseDetailPanel(props: {
           "결과를 채택할 수 있는가"다(D-59). */}
       <PolicyPanel detail={detail} onChanged={props.onChanged} />
 
+      {/* P4-06. 이 Case 의 Project 지식. 등록은 이 대화에서 하고(출처), 적용은 Project 의 모든
+          업무가 범위·활동에 따라 받는다. 등록은 실행 권한이 아니고 주입은 준수의 증거가 아니다. */}
+      <KnowledgePanel projectId={detail.project_id} caseId={detail.id} runnerId={props.runners[0]?.id} />
+
       <GatePanel detail={detail} onChanged={props.onChanged} />
       <QualityGatesPanel detail={detail} />
 
@@ -872,6 +877,22 @@ function RunContextCell(props: { run: Run }) {
     parts.push(`못 읽음 ${context.unread.map((u) => `${u.role}(${u.status})`).join(', ')}`)
   }
   if (props.run.not_started_reason) parts.push('시작하지 않음 · 소비 0')
+  // P4-06. 무엇을 주입했는가(제공은 준수의 증거가 아니다). 기록 전 실행은 따로 적는다.
+  const knowledge = context.knowledge
+  if (knowledge && !knowledge.recorded) parts.push('지식 기록 전')
+  if (knowledge && knowledge.recorded) {
+    const given = knowledge.items.filter((k) => k.decision === 'provided' || k.decision === 'omitted_size_limit')
+    if (given.length > 0) {
+      parts.push(
+        '지식 ' +
+          given
+            .map((k) => `${k.knowledge_key} v${k.version}${k.decision === 'omitted_size_limit' ? '(생략)' : ''}`)
+            .join(', '),
+      )
+    }
+    const undetermined = knowledge.items.filter((k) => k.decision === 'scope_undetermined').length
+    if (undetermined > 0) parts.push(`지식 범위 미확정 ${undetermined}`)
+  }
   const fresh = context.freshness
   if (fresh && fresh.state === 'drifted') {
     parts.push(

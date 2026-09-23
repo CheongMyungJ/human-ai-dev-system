@@ -42,7 +42,12 @@ import {
   CONFORMANCE_METHOD_LABEL,
   MATERIALITY_LABEL,
   policyApi,
+  progressApi,
   progressionApi,
+  PROGRESS_LIMIT_LABEL,
+  PROGRESS_LIMIT_SOURCE_LABEL,
+  type ProgressLimitKey,
+  type ProgressLimitsView,
   type Autonomy,
   type CaseDetail,
   type CasePolicy,
@@ -94,6 +99,79 @@ function guaranteeLabel(guarantee: string | undefined): string {
 /** 바이트·초가 소수점으로 길어지지 않게. 값을 **반올림할 뿐 바꾸지 않는다.** */
 function round2(value: number): number {
   return Math.round(value * 100) / 100
+}
+
+function ProgressLimitsSection(props: {
+  caseId: string
+  limits: ProgressLimitsView
+  guard: (fn: () => Promise<void>) => Promise<void>
+}) {
+  const { limits } = props
+  const [repair, setRepair] = useState(String(limits.repair_limit.value))
+  const [retry, setRetry] = useState(String(limits.task_retry_limit.value))
+  const [why, setWhy] = useState('')
+  const keys: ProgressLimitKey[] = ['repair_limit', 'task_retry_limit']
+  return (
+    <div className="task" data-testid="progress-limits">
+      <div className="task-head">
+        <strong>진행 상한</strong>
+        <span className="muted small">
+          {' '}범위 {limits.range.min}~{limits.range.max} · 0 이면 자동으로 다시 하지 않고 바로 사람에게
+        </span>
+      </div>
+      <ul className="list">
+        {keys.map((key) => (
+          <li key={key} className="small">
+            {PROGRESS_LIMIT_LABEL[key]} ({key}) <strong>{limits[key].value}</strong> ·{' '}
+            <span className="muted">
+              {PROGRESS_LIMIT_SOURCE_LABEL[limits[key].source]} (시스템 기본값 {limits.system_default[key]})
+            </span>
+          </li>
+        ))}
+      </ul>
+      {!limits.closed && (
+        <div className="row">
+          <label className="small">
+            재작성 <input size={3} value={repair} onChange={(event) => setRepair(event.target.value)} />
+          </label>
+          <label className="small">
+            재시도 <input size={3} value={retry} onChange={(event) => setRetry(event.target.value)} />
+          </label>
+          <input placeholder="사유 요약(선택)" value={why} onChange={(event) => setWhy(event.target.value)} />
+          <button
+            type="button"
+            onClick={() =>
+              void props.guard(async () => {
+                const values: Partial<Record<ProgressLimitKey, number>> = {}
+                // 바뀐 값만 보낸다 — 같은 값을 다시 적어 이력을 늘리지 않는다.
+                if (Number(repair) !== limits.repair_limit.value) values.repair_limit = Number(repair)
+                if (Number(retry) !== limits.task_retry_limit.value) values.task_retry_limit = Number(retry)
+                if (Object.keys(values).length === 0) return
+                await progressApi.setLimits(props.caseId, values, why)
+              })
+            }
+          >
+            상한 변경
+          </button>
+        </div>
+      )}
+      {limits.history.length > 0 && (
+        <ul className="list">
+          {limits.history.map((row) => (
+            <li key={row.id} className="muted small">
+              r{row.revision} · {PROGRESS_LIMIT_LABEL[row.limit_key]} {row.limit_value} · {row.set_by} ·{' '}
+              {row.created_at} · {row.state}
+              {row.reason_summary ? ` · ${row.reason_summary}` : ''}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="muted small">
+        한도에 걸려 멈춘 뒤 올리면 한 번 더 시도하고, 다시 실패하면 새 한도에서 멈춘다. 시도 수는 처음부터 다시 세지
+        않는다. 종료된 업무는 바꿀 수 없다.
+      </p>
+    </div>
+  )
 }
 
 export function PolicyPanel(props: {
@@ -536,6 +614,17 @@ export function PolicyPanel(props: {
           {budget.reservation_contract[metric]?.reason}
         </p>
       </div>
+
+      {/* --- 진행 상한 (P4-05b) ---------------------------------------
+          진행기가 QG-01·준비 산출물을 다시 쓰고 실패한 작업을 다시 시도하는 횟수. QG-02~07 의
+          게이트별 수정 한도(위 예산 절의 안내)와는 다른 설정이다. */}
+      {policy.progress_limits && (
+        <ProgressLimitsSection
+          caseId={props.detail.id}
+          limits={policy.progress_limits}
+          guard={guard}
+        />
+      )}
 
       {/* --- 저장소 -------------------------------------------------- */}
       <div className="task">

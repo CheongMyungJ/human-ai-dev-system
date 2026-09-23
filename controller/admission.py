@@ -251,6 +251,8 @@ class AdmissionRequest:
     context_plan: dict[str, Any] = field(default_factory=dict)
     #: P4-04. 인라인으로 넣을 **핵심** 참조 중 지금 `available` 이 아닌 것.
     context_unavailable: list[dict[str, Any]] = field(default_factory=list)
+    #: P4-06. 이 실행에 적용되는 필수 지식 사이의 **열린 충돌**(id·두 항목 키).
+    knowledge_conflicts: list[dict[str, Any]] = field(default_factory=list)
     #: P4-05. **종료 뒤 설명 전용 진입**(D-87). 요청에 묶인 읽기 전용 논의 응답만 참이며, 그때만
     #: 종료 Case 의 거부를 묻지 않는다. 다른 모든 목적은 종료 Case 에서 그대로 거부된다.
     explanation_entry: bool = False
@@ -918,6 +920,24 @@ def _check_context(request: AdmissionRequest, refuse: Callable[..., None]) -> No
         )
 
 
+def _check_knowledge(request: AdmissionRequest, refuse: Callable[..., None]) -> None:
+    """적용되는 필수 지식이 서로 충돌하는가(P4-06).
+
+    근거만으로 풀지 못한 충돌은 사람에게 묻고 **그 지식에 의존하는 작업만** 보류한다 — 두 항목이
+    모두 이 실행에 적용될 때만 막고 무관한 업무는 막지 않는다(project-knowledge 2절). 최신 날짜나
+    좁은 경로로 한쪽을 조용히 고르지 않는다.
+    """
+    if request.knowledge_conflicts:
+        detail = ", ".join(
+            f"{c['knowledge_a']}↔{c['knowledge_b']}" for c in request.knowledge_conflicts
+        )
+        refuse(
+            AdmissionRefusal.KNOWLEDGE_CONFLICT_UNRESOLVED,
+            f"이 실행에 적용되는 필수 지식이 서로 충돌한다: {detail}. 사람이 해소(한쪽 무효·개정·"
+            "해소 기록)한 뒤 진행한다",
+        )
+
+
 def evaluate(request: AdmissionRequest) -> AdmissionResult:
     """진입 조건을 검사한다. 거부 사유는 **모두** 모은다.
 
@@ -1001,6 +1021,7 @@ def evaluate(request: AdmissionRequest) -> AdmissionResult:
     # 지시 원문 다음에 **나머지 핵심 입력**을 본다(P4-04). 같은 질문의 연장이다 —
     # 실행자가 읽어야 할 것을 읽을 수 있는가.
     _check_context(request, refuse)
+    _check_knowledge(request, refuse)
 
     latest = request.intent_state.get("latest_intent_version")
     agreement_state = request.intent_state.get("agreement_state")

@@ -78,6 +78,7 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
             context_inline_limit=config.context_inline_limit_bytes,
             runner_stale_seconds=config.runner_stale_seconds,
             auto_process_requests=config.auto_process_requests,
+            progress_limits=config.progress_limits,
         )
         progressor = WorkProgressor(repo, enabled=config.progress_enabled)
         processed = RequestProcessor(
@@ -90,7 +91,8 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
         app.state.logger.info(
             "startup db=%s lost_pending_intakes=%d expired_read_requests=%d"
             " auto_process_requests=%s auto_progress_work=%s requests_started=%d"
-            " requests_finished=%d progress_advanced=%d progress_paused=%d",
+            " requests_finished=%d progress_advanced=%d progress_paused=%d"
+            " repair_limit=%d task_retry_limit=%d",
             config.db_path,
             recovered,
             expired,
@@ -100,6 +102,8 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
             processed["finished"],
             progressed["advanced"],
             progressed["paused"],
+            config.progress_limits.repair_limit,
+            config.progress_limits.task_retry_limit,
         )
         try:
             yield

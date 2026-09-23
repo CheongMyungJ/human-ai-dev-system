@@ -187,6 +187,9 @@ class ArtifactKind(str, Enum):
     #: UI-01. 사용자가 대화에 보낸 메시지(일반·정정·카드 답변). AI 응답은 실행 출력
     #: (`RUN_OUTPUT`)을 그대로 가리킨다 — 같은 원문을 두 번 저장하지 않는다.
     MESSAGE = "message"
+    #: P4-06. 프로젝트 지식의 **적용 내용**(조건·예외 포함). 등록한 Case 의 원문으로 소유 Runner 에
+    #: 있다. 서버에는 요약·메타데이터·참조만 있다(D-67·data-boundary 5절).
+    KNOWLEDGE = "knowledge"
 
 
 @dataclass(frozen=True)
@@ -617,6 +620,13 @@ class AdmissionRefusal(str, Enum):
     CONTEXT_OVER_INLINE_LIMIT = "context_over_inline_limit"
     REQUIRED_CONTEXT_UNAVAILABLE = "required_context_unavailable"
 
+    # --- P4-06 지식 ---------------------------------------------------------
+    #
+    # 이 실행에 적용되는 **필수 지식 사이에 해소되지 않은 충돌**이 있다. 근거만으로 풀지 못한
+    # 선택은 사람에게 묻고 그 지식에 의존하는 작업만 보류한다(project-knowledge 2절). 최신 날짜·
+    # 좁은 경로로 한쪽을 조용히 고르지 않는다.
+    KNOWLEDGE_CONFLICT_UNRESOLVED = "knowledge_conflict_unresolved"
+
     # --- UI-02 입력·실행 제어 ----------------------------------------------
     #
     # 중단이 요청된 요청에는 **후속 실행을 붙이지 않는다**(D-76). 처리 중이라는 사실만으로
@@ -996,6 +1006,18 @@ class ContextRefRole(str, Enum):
     #: 다르기 때문이다 — AI 의 이전 제안은 사용자의 요구가 아니며 위임 근거도 아니다
     #: (D-60). 한 역할로 묶으면 다시 쓰는 AI 가 자기 제안을 사용자 요구로 적는다.
     CONVERSATION_ASSISTANT_MESSAGE = "conversation_assistant_message"
+    #: P4-06. **이 실행의 범위·활동에 해당하는 프로젝트 필수 규칙**(적용 내용·조건·예외 원문).
+    #: 핵심이다 — 한도로 생략하지 않고, 읽지 못하면 그 실행을 시작하지 않는다(D-67 "필수 내용은
+    #: 조건·예외까지 제공"). 참조만 주고 제공 완료로 적지 않는다.
+    KNOWLEDGE_REQUIRED = "knowledge_required"
+    #: P4-06. 필수 규칙의 **권위 원문**(사용자 메시지). 대화에서 옮겨 등록한 규칙은 옮긴 글과
+    #: 함께 원래 말을 준다 — 옮기며 뜻이 바뀌었으면 실행하는 AI 가 대조할 수 있다(사용자 결정
+    #: 2026-09-24). 필수에 딸리므로 핵심이다.
+    KNOWLEDGE_SOURCE = "knowledge_source"
+    #: P4-06. 참고 지식. 보조다 — 부족해도 필수 규칙 위반으로 바꾸지 않는다.
+    KNOWLEDGE_REFERENCE = "knowledge_reference"
+    #: P4-06. 후보 지식. 확정되지 않은 조사 단서이며 규칙이 아니다. 보조다.
+    KNOWLEDGE_CANDIDATE = "knowledge_candidate"
 
 
 # --------------------------------------------------------------------- P4-04

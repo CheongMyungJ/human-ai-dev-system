@@ -43,7 +43,7 @@ import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodie
 import { Composer, randomId, refusalText } from './Composer'
 import { emit } from './events'
 import type { PanelTab } from './ReviewPanel'
-import { PredecessorLine, ProgressBanner, RelationCards, WaitCards } from './ProgressCards'
+import { KnowledgeCards, PredecessorLine, ProgressBanner, RelationCards, WaitCards } from './ProgressCards'
 import { checkReceipt, sendAndConfirm } from './send'
 import type { ShellCaseDetail } from './useCaseData'
 
@@ -269,6 +269,14 @@ export function ConversationView(props: {
                     : null
                 }
               />
+              {message.run_id && (
+                <KnowledgeCards
+                  registrations={(conv.knowledge_registrations ?? []).filter((r) => r.run_id === message.run_id)}
+                  projectId={props.project.id}
+                  caseId={caseId}
+                  onChanged={props.onChanged}
+                />
+              )}
               {interp && (interp.kind === 'work_request' || interp.report_status === 'invalid') && (
                 <p className="sh-system-line" data-testid="interpretation-line">
                   AI 해석:{' '}

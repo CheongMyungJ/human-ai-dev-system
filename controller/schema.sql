@@ -1790,3 +1790,173 @@ CREATE TABLE IF NOT EXISTS case_progress_event (
 );
 
 CREATE INDEX IF NOT EXISTS idx_case_progress_event_case ON case_progress_event(case_id, seq);
+
+-- ===================================================================
+-- 스키마 v21 (P4-05b) — 진행 상한 설정
+--
+-- 진행기의 재작성·재시도 상한을 **Case 별로 조정한 이력**이다. 행이 없으면 시스템 기본값
+-- (제어부 환경 변수 → 코드 기본값)이 유효하다. 예산 한도와 같은 방식으로 이전 값은
+-- `superseded` 로 남고 덮어쓰지 않는다. 무제한은 없다(0~10).
+--
+-- P4-01 의 `quality_gate_setting.repair_limit`(QG-02~07 게이트별 수정 한도)와 다른 설정이다 —
+-- 이쪽은 진행기가 쓰는 QG-01·준비 산출물 재작성과 작업 재시도 한도다.
+--
+-- 옛 Case 에는 행을 만들지 않는다 — 시스템 기본값 출처로 보인다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS progress_limit_setting (
+    id              TEXT PRIMARY KEY,
+    case_id         TEXT NOT NULL REFERENCES "case"(id),
+    revision        INTEGER NOT NULL,
+    limit_key       TEXT NOT NULL CHECK (limit_key IN ('repair_limit', 'task_retry_limit')),
+    limit_value     INTEGER NOT NULL CHECK (limit_value BETWEEN 0 AND 10),
+    set_by          TEXT NOT NULL,
+    reason_summary  TEXT,
+    state           TEXT NOT NULL CHECK (state IN ('current', 'superseded')),
+    created_at      TEXT NOT NULL,
+    superseded_at   TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_progress_limit_setting_case
+    ON progress_limit_setting(case_id, limit_key, state);
+
+-- ===================================================================
+-- 스키마 v22 (P4-06) — 프로젝트 지식 관리·적용
+--
+-- 같은 저장 경계 규칙이 그대로 적용된다. **지식 원문(적용 내용·조건·예외)은 소유 Runner 에
+-- 있고** 여기에는 요약·메타데이터·참조만 있다(D-67·data-boundary 5절). 원문은 그것을 등록한
+-- Case 의 `artifact_ref`(종류 `knowledge`)다 — 출처가 곧 그 Case 다. 프로젝트 공통이 되는 것은
+-- 적용 관계이지 원문의 소유가 아니다.
+--
+-- 변경은 새 버전·이유·대체 관계로 남기고 과거 내용을 덮어쓰지 않는다. 대체·무효는 기본 주입에서
+-- 빠지지만 이력은 지우지 않는다. **AI 제안은 활성 필수가 되지 않는다** — 아래 CHECK 가 마지막
+-- 방어선이다.
+--
+-- 옛 실행에는 Manifest 를 만들지 않는다 — "기록 전"이지 "지식 없음"이 아니다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS knowledge_item (
+    id             TEXT PRIMARY KEY,
+    project_id     TEXT NOT NULL REFERENCES project(id),
+    -- Project 안에서 사람이 부르는 키(K-001). 대화의 등록 블록이 대체할 항목을 이 키로 가리킨다.
+    knowledge_key  TEXT NOT NULL,
+    created_by     TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    UNIQUE (project_id, knowledge_key),
+    CHECK (length(knowledge_key) <= 16)
+);
+
+CREATE TABLE IF NOT EXISTS knowledge_version (
+    id                   TEXT PRIMARY KEY,
+    knowledge_id         TEXT NOT NULL REFERENCES knowledge_item(id),
+    version              INTEGER NOT NULL,
+    artifact_id          TEXT NOT NULL,
+    artifact_rev         INTEGER NOT NULL,
+    kind                 TEXT NOT NULL
+                         CHECK (kind IN ('decision', 'constraint', 'known_problem', 'operation')),
+    obligation           TEXT NOT NULL CHECK (obligation IN ('required', 'reference')),
+    state                TEXT NOT NULL
+                         CHECK (state IN ('candidate', 'active', 'superseded', 'invalid')),
+    -- 짧은 제목. 원문 대체가 아니다(호출자 규칙).
+    summary              TEXT NOT NULL,
+    scope_kind           TEXT NOT NULL CHECK (scope_kind IN ('project', 'repository')),
+    repository_id        TEXT REFERENCES project_repository(id),
+    -- 저장소 안 경로 조건(메타데이터). 실행은 경로를 미리 말하지 않으므로 조건으로 준다.
+    paths_json           TEXT NOT NULL DEFAULT '[]',
+    -- 빈 목록 = 논의를 뺀 모든 작업 활동.
+    activities_json      TEXT NOT NULL DEFAULT '[]',
+    authority_kind       TEXT NOT NULL
+                         CHECK (authority_kind IN ('user_registration', 'user_statement',
+                                                   'user_decision', 'ai_proposal')),
+    source_case_id       TEXT NOT NULL REFERENCES "case"(id),
+    -- 권위 원문이 된 사용자 메시지(자동 등록·출처를 준 수동 등록).
+    source_message_id    TEXT REFERENCES conversation_message(id),
+    -- 옮겨 적은 실행(자동 등록).
+    source_run_id        TEXT REFERENCES run(run_id),
+    source_report_index  INTEGER,
+    created_by           TEXT NOT NULL,
+    reason_summary       TEXT,
+    created_at           TEXT NOT NULL,
+    superseded_by        TEXT REFERENCES knowledge_version(id),
+    superseded_at        TEXT,
+    invalidated_at       TEXT,
+    invalidated_by       TEXT,
+    invalid_reason       TEXT,
+    UNIQUE (knowledge_id, version),
+    UNIQUE (source_run_id, source_report_index),
+    FOREIGN KEY (artifact_id, artifact_rev) REFERENCES artifact_ref(artifact_id, revision),
+    CHECK (length(summary) BETWEEN 1 AND 200),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200),
+    CHECK (invalid_reason IS NULL OR length(invalid_reason) <= 200),
+    CHECK (length(paths_json) <= 4200),
+    CHECK (length(activities_json) <= 400),
+    CHECK ((scope_kind = 'repository') = (repository_id IS NOT NULL)),
+    CHECK (scope_kind = 'repository' OR paths_json = '[]'),
+    CHECK ((state = 'invalid') = (invalidated_at IS NOT NULL)),
+    -- **AI 제안은 활성 필수 규칙이 되지 않는다**(D-67·D-80).
+    CHECK (NOT (state = 'active' AND obligation = 'required' AND authority_kind = 'ai_proposal'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_version_item ON knowledge_version(knowledge_id, version);
+CREATE INDEX IF NOT EXISTS idx_knowledge_version_state ON knowledge_version(state);
+
+-- 두 항목 사이의 충돌. 사람이 기록하고 사람이 해소한다(한쪽 무효·대체로도 풀린다).
+CREATE TABLE IF NOT EXISTS knowledge_conflict (
+    id                  TEXT PRIMARY KEY,
+    project_id          TEXT NOT NULL REFERENCES project(id),
+    knowledge_a         TEXT NOT NULL REFERENCES knowledge_item(id),
+    knowledge_b         TEXT NOT NULL REFERENCES knowledge_item(id),
+    state               TEXT NOT NULL CHECK (state IN ('open', 'resolved')),
+    recorded_by         TEXT NOT NULL,
+    reason_summary      TEXT,
+    created_at          TEXT NOT NULL,
+    resolved_at         TEXT,
+    resolved_by         TEXT,
+    resolution_summary  TEXT,
+    CHECK (knowledge_a <> knowledge_b),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200),
+    CHECK (resolution_summary IS NULL OR length(resolution_summary) <= 200),
+    CHECK ((state = 'resolved') = (resolved_at IS NOT NULL))
+);
+
+-- 논의 응답이 보고한 등록 항목의 처리(자동 등록, 사용자 결정 2026-09-24). 보고 한 건을 한 번만
+-- 처리한다 — 재전송·기동 복구가 두 번 등록하지 않는다. 거부도 사유와 함께 남는다.
+CREATE TABLE IF NOT EXISTS knowledge_intake (
+    run_id                TEXT NOT NULL REFERENCES run(run_id),
+    report_index          INTEGER NOT NULL,
+    case_id               TEXT NOT NULL REFERENCES "case"(id),
+    state                 TEXT NOT NULL CHECK (state IN ('registered', 'refused')),
+    knowledge_version_id  TEXT REFERENCES knowledge_version(id),
+    refusal               TEXT,
+    summary               TEXT,
+    created_at            TEXT NOT NULL,
+    PRIMARY KEY (run_id, report_index),
+    CHECK ((state = 'registered') = (knowledge_version_id IS NOT NULL)),
+    CHECK (refusal IS NULL OR length(refusal) <= 120),
+    CHECK (summary IS NULL OR length(summary) <= 200)
+);
+
+-- 실행의 지식 Manifest. 무엇을 골라 **실제로 넣었고**, 무엇을 왜 넣지 않았는가. 주입 기록이며
+-- 준수의 증거가 아니다.
+CREATE TABLE IF NOT EXISTS run_knowledge (
+    run_id            TEXT NOT NULL REFERENCES run(run_id),
+    version_id        TEXT NOT NULL REFERENCES knowledge_version(id),
+    knowledge_id      TEXT NOT NULL REFERENCES knowledge_item(id),
+    activity          TEXT NOT NULL,
+    obligation        TEXT NOT NULL,
+    state             TEXT NOT NULL,
+    decision          TEXT NOT NULL
+                      CHECK (decision IN ('provided', 'omitted_size_limit',
+                                          'not_applicable_activity', 'not_applicable_repository',
+                                          'scope_undetermined')),
+    scope_resolution  TEXT,
+    -- 고정 문맥의 순번(`run_context_ref.seq`). 제공·한도 생략만 있다.
+    context_seq       INTEGER,
+    -- 함께 넣은 권위 원문의 순번(없거나 이미 대화로 들어갔으면 NULL).
+    source_seq        INTEGER,
+    PRIMARY KEY (run_id, version_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_knowledge_version ON run_knowledge(version_id);

@@ -12,6 +12,12 @@ from pathlib import Path
 
 from domain.context import DEFAULT_INLINE_LIMIT_BYTES
 from domain.run_control import DEFAULT_RUNNER_STALE_SECONDS
+from domain.work_flow import (
+    DEFAULT_REPAIR_LIMIT,
+    DEFAULT_TASK_RETRY_LIMIT,
+    ProgressLimits,
+    check_limit,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -30,6 +36,9 @@ ENV_AUTO_PROCESS_REQUESTS = "HADS_AUTO_PROCESS_REQUESTS"
 #: 논의 응답·업무화까지만 하고, 업무 단계는 관리 화면·하네스가 진행한다(UI-03 계약). 처리기가
 #: 꺼져 있으면 이 값과 무관하게 진행기도 꺼진다.
 ENV_AUTO_PROGRESS_WORK = "HADS_AUTO_PROGRESS_WORK"
+#: P4-05b. 진행기의 재작성·재시도 상한의 **시스템 기본값**(0~10). Case 별 조정이 이 값보다 앞선다.
+ENV_REPAIR_LIMIT = "HADS_REPAIR_LIMIT"
+ENV_TASK_RETRY_LIMIT = "HADS_TASK_RETRY_LIMIT"
 
 DEFAULT_HOST = "127.0.0.1"  # 로컬 기본 접점은 루프백이다(implementation-baseline 2절)
 DEFAULT_PORT = 8765
@@ -50,6 +59,8 @@ class ControllerConfig:
     auto_process_requests: bool = True
     #: P4-05. 업무 단계 진행기. 처리기와 같은 종류의 운영 설정이며 시험 분기가 아니다.
     auto_progress_work: bool = True
+    #: P4-05b. 진행기 상한의 시스템 기본값. Case 별 조정이 없으면 이 값이 유효하다.
+    progress_limits: ProgressLimits = ProgressLimits()
 
     @property
     def progress_enabled(self) -> bool:
@@ -94,6 +105,12 @@ def load_config() -> ControllerConfig:
     progress_raw = (os.environ.get(ENV_AUTO_PROGRESS_WORK) or "1").strip().lower()
     if progress_raw not in ("1", "0", "true", "false", "on", "off"):
         raise ValueError(f"{ENV_AUTO_PROGRESS_WORK} must be 1 or 0")
+    limits = ProgressLimits(
+        repair_limit=_limit_from_env(ENV_REPAIR_LIMIT, "repair_limit", DEFAULT_REPAIR_LIMIT),
+        task_retry_limit=_limit_from_env(
+            ENV_TASK_RETRY_LIMIT, "task_retry_limit", DEFAULT_TASK_RETRY_LIMIT
+        ),
+    )
     return ControllerConfig(
         data_root=data_root,
         host=os.environ.get(ENV_HOST, DEFAULT_HOST),
@@ -103,4 +120,21 @@ def load_config() -> ControllerConfig:
         runner_stale_seconds=stale_seconds,
         auto_process_requests=auto_raw in ("1", "true", "on"),
         auto_progress_work=progress_raw in ("1", "true", "on"),
+        progress_limits=limits,
     )
+
+
+def _limit_from_env(env: str, key: str, default: int) -> int:
+    """상한 환경 변수 하나. **이상한 값이면 기동을 멈춘다** — 진행기에서 처음 알게 되면 사람은
+    왜 재작성이 한 번도 안 되는지(또는 끝없이 되는지) 찾아다녀야 한다."""
+    raw = (os.environ.get(env) or "").strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f"{env} must be an integer between 0 and 10") from None
+    try:
+        return check_limit(key, value)
+    except ValueError:
+        raise ValueError(f"{env} must be an integer between 0 and 10") from None

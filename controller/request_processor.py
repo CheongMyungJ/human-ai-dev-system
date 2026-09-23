@@ -191,6 +191,9 @@ class RequestProcessor:
         replies = [r for r in runs if r.get("purpose") == RunPurpose.DISCUSSION_REPLY.value]
         work_started = False
         for reply in replies:
+            # P4-06. 응답이 옮긴 프로젝트 규칙을 **먼저** 등록한다 — 같은 요청에서 업무화되면 그
+            # 업무의 첫 실행부터 규칙이 주입된다. 등록은 응답이 완료됐을 때만이고 한 번뿐이다.
+            self.repo.apply_knowledge_report(reply["run_id"])
             row = self.apply_interpretation(reply["run_id"])
             work_started = work_started or bool(row and row.get("applied"))
         if self.progressor is not None:

@@ -13,6 +13,9 @@
     HADS_FAKE_WORK=<Profile> (UI-03) 준비 단계 논의 응답이면 그 Profile 의 업무 요청으로 해석한다.
                              없으면 논의로 해석한다. 해석 규칙을 받지 않은 응답에는 블록을 붙이지 않는다
     HADS_FAKE_NO_QUESTION    (P4-05) 의도 초안에 질문을 넣지 않는다(기본은 의도 질문 하나)
+    HADS_FAKE_IMPL_NOCHANGE  (P4-05b) 구현 실행이 고쳤다고 적지만 파일을 바꾸지 않는다(실패 → 재시도 상한)
+    HADS_FAKE_RULE           (P4-06) 논의 응답이 사용자의 마지막 메시지를 프로젝트 필수 규칙으로 옮기는
+                             등록 블록(`hads-knowledge`)을 붙인다
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -81,6 +84,8 @@ def work_stage_reply(prompt: str) -> str | None:
     if starts(templates.PLAN_AUTHORING_PROMPT):
         return canned.FAKE_PLAN_VERIFIED
     if starts(templates.FEATURE_IMPLEMENTATION_PROMPT):
+        if "HADS_FAKE_IMPL_NOCHANGE" in prompt:
+            return canned.FAKE_IMPLEMENTATION_RESPONSE  # 바뀐 것이 없다 → 제품이 실패로 본다
         Path("reader.py").write_text(
             "def read(path):\n    return [l for l in open(path) if l.startswith('ERROR')]\n",
             encoding="utf-8",
@@ -150,6 +155,21 @@ def main() -> int:
                 {"kind": "work_request", "profile": work.group(1)} if work else {"kind": "discussion"}
             )
             text += "\n\n```hads-interpretation\n" + json.dumps(verdict) + "\n```"
+        if "hads-knowledge" in prompt:
+            # P4-06. 등록 규칙을 받은 논의 응답. 표지는 사용자의 마지막 메시지에서만 읽는다.
+            last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
+            if "HADS_FAKE_RULE" in last:
+                said = " ".join(last.replace("HADS_FAKE_RULE", "").split())[:300]
+                item = {
+                    "kind": "constraint", "obligation": "required", "summary": "대화에서 정한 규칙",
+                    "content": said, "repository": None, "paths": [], "activities": [],
+                    "supersedes": None,
+                }
+                text += (
+                    "\n\n```hads-knowledge\n"
+                    + json.dumps({"items": [item]}, ensure_ascii=False)
+                    + "\n```"
+                )
     emit(
         {
             "type": "item.completed",

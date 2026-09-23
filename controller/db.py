@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 22
 
 
 def utc_now() -> str:
@@ -448,6 +448,23 @@ def migrate(conn: sqlite3.Connection) -> None:
         "closure_record",
         "snapshot_json",
         "TEXT CHECK (snapshot_json IS NULL OR length(snapshot_json) <= 4000)",
+    )
+
+    # v21: 진행 상한 설정(P4-05b). 이력 표(`progress_limit_setting`)는 schema.sql 이 만든다.
+    #      **기존 표를 바꾸지 않고 데이터 이행도 없다.** 옛 Case 는 행이 없고 시스템 기본값이
+    #      유효하다 — 없던 설정을 지어내지 않는다.
+
+    # v22: 프로젝트 지식(P4-06). 표 다섯은 schema.sql 이 만들고 여기서는 `run` 에 컬럼 하나를 더한다.
+    #
+    #      `run.knowledge_report_json`  논의 응답이 보고한 등록 블록(종류·효력·요약·범위·원문
+    #                                   참조, 본문 없음). 옛 실행은 NULL — 보고하지 않았다.
+    #
+    #      **데이터 이행 없음.** 옛 실행에 Manifest 를 만들지 않는다 — 조회는 "기록 전"이다.
+    _add_column_if_missing(
+        conn,
+        "run",
+        "knowledge_report_json",
+        "TEXT CHECK (knowledge_report_json IS NULL OR length(knowledge_report_json) <= 8000)",
     )
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
