@@ -292,6 +292,43 @@ DISCUSSION_REPLY_PROMPT = """당신은 이 프로젝트에 대해 사용자와 *
 
 """
 
+#: 논의 지시문의 마지막 줄. 해석 규칙을 그 앞에 끼운다.
+DISCUSSION_REPLY_TAIL = "고정 컨텍스트 다음에 오는 글이 사용자의 마지막 메시지다.\n\n"
+
+#: UI-03. **준비 단계 대화에서만** 붙이는 해석 규칙(D-69).
+#:
+#: 시스템은 본문을 읽지 않으므로 "업무 요청인가"를 AI 가 답 끝에 구조로 남긴다. 규칙이
+#: 좁은 이유는 오판의 비용이 비대칭이기 때문이다 — 논의를 업무로 읽으면 사용자가 위임하지
+#: 않은 업무가 시작된 것처럼 기록된다(업무화는 되돌리는 경로가 없다). 모호하면 논의로 두고
+#: 글로 묻는다. **이 블록은 위임이 아니다** — 위임 근거는 사용자의 메시지 원문이다.
+DISCUSSION_INTERPRETATION_RULE = """이 대화는 아직 **준비 단계**다(목표·업무 유형 미정). 답 글을 다 쓴 뒤 맨 끝에
+시스템이 읽는 블록을 **정확히 하나** 붙인다. 이 블록은 사람에게 보이지 않는다.
+
+```hads-interpretation
+{"kind": "discussion"}
+```
+
+사용자의 **마지막 메시지**가 구체적인 작업의 수행을 **명시적으로** 요청할 때만 kind 를
+"work_request" 로 하고 profile 을 아래 여섯 중 하나로 적는다.
+
+  feature              새 기능·동작을 더한다
+  defect_fix           잘못된 동작을 고친다
+  root_cause_analysis  문제의 원인을 규명한다
+  research             조사·분석·비교를 정리한다
+  refactoring          동작을 바꾸지 않고 구조를 개선한다
+  maintenance          의존성·설정·환경 등을 유지 보수한다
+
+예: {"kind": "work_request", "profile": "research"}
+
+해석 규칙:
+- 선택지에 동의하기, 생각 나누기, 질문, "아직 ~하지 마" 같은 제한 표명은 모두
+  "discussion" 이다. 동의는 그 선택에만 적용된다 — 작업을 맡긴 것이 아니다.
+- 업무 요청인지 애매하면 "discussion" 으로 두고 글에서 무엇을 하면 되는지 묻는다.
+- "work_request" 로 적으면 글에 이해한 목표·범위·제약을 짧게 정리한다. 이 실행에서
+  작업을 시작했거나 끝냈다고 말하지 않는다(규칙 2).
+
+"""
+
 #: 고정 컨텍스트 참조의 역할별 설명. 지시문에 **무엇을 주는지**를 적어 준다.
 CONTEXT_LABEL = {
     "previous_intent": "직전 의도 초안 (이 내용을 잃지 말고 고칠 곳만 고친다)",
@@ -715,8 +752,12 @@ def build(
     profile_version: str | None = None,
     stage_hint: str | None = None,
     repositories: list[dict[str, Any]] | None = None,
+    conversation_stage: str | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문.
+
+    `conversation_stage` 는 **제어부가 정한** 대화 단계다(UI-03). 준비 단계의 논의 응답에만
+    해석 규칙을 붙인다 — 업무 단계 응답의 해석은 쓰이지 않는다.
 
     `stage_hint` 는 **제어부가 정한** 준비 산출물의 단계다(P3-R4). Fast Lane 의
     계획 작성 실행은 `combined` 를 받아 결합 기록의 지시문을 쓴다. Runner 가 스스로
@@ -755,6 +796,12 @@ def build(
         head = head.replace(
             "{FIELD_LIST}", _intent_field_list(profile, profile_version)
         ).replace("{PROFILE_NOTE}", _intent_profile_note(profile, profile_version))
+    if purpose == "discussion_reply" and conversation_stage == "discussion":
+        if DISCUSSION_REPLY_TAIL not in head:
+            raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
+        head = head.replace(
+            DISCUSSION_REPLY_TAIL, DISCUSSION_INTERPRETATION_RULE + DISCUSSION_REPLY_TAIL
+        )
     return head + build_context_block(context or []) + instruction.decode(
         "utf-8", errors="replace"
     )

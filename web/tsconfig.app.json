@@ -14,5 +14,7 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // UI-03. 단위 시험은 Node 내장 실행기가 타입을 벗겨 돌린다(`npm test`). 빌드에서 뺀다.
+  "exclude": ["src/**/*.test.ts"]
 }

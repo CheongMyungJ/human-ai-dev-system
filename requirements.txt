@@ -5,3 +5,6 @@ fastapi>=0.115,<1.0
 uvicorn>=0.34,<1.0
 httpx>=0.28,<1.0
 pytest>=8.3,<9.0
+# UI-03. 브라우저 시험(tests/test_web_shell.py)과 실제 사용 확인(ui/live/ui03_shell.py).
+# **브라우저를 내려받지 않는다** — 설치된 Edge(`msedge` 채널)를 쓴다. 없으면 그 시험은 건너뛴다.
+playwright>=1.47,<2.0

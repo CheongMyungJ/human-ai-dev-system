@@ -1992,3 +1992,50 @@ class ConversationRefusal(str, Enum):
     RUN_ALREADY_FINISHED = "run_already_finished"
     #: UI-02. 잔류 재확인은 확인되지 않은 실행이 있는 `unknown` 요청에만 한다.
     REQUEST_NOT_UNKNOWN = "request_not_unknown"
+
+
+# ===================================================================== UI-03
+#
+# 요청 처리기와 AI 해석. **해석은 기록이지 권한이 아니다** — 업무화의 위임 근거는 여전히
+# 사용자가 보낸 메시지 원문이고, 해석은 "누가 Profile 을 정했는가"의 근거일 뿐이다.
+
+
+class InterpretationKind(str, Enum):
+    """논의 응답을 쓴 AI 가 사용자의 마지막 메시지를 어떻게 읽었는가(D-69).
+
+    `DISCUSSION`   논의·질문·선택 동의·금지 표명. 업무화하지 않는다
+    `WORK_REQUEST` 구체적인 작업 수행을 **명시적으로** 요청했다. 같은 Case 에서 업무화한다
+    """
+
+    DISCUSSION = "discussion"
+    WORK_REQUEST = "work_request"
+
+
+class InterpretationStatus(str, Enum):
+    """해석이 **보고됐는가.** 없거나 형식이 틀린 해석을 논의로 읽지 않는다 — 모른다고 남긴다.
+
+    `REPORTED` 형식에 맞는 해석이 왔다
+    `MISSING`  응답에 해석 블록이 없었다
+    `INVALID`  블록이 있었지만 형식·값이 맞지 않았다(여럿이었거나)
+    """
+
+    REPORTED = "reported"
+    MISSING = "missing"
+    INVALID = "invalid"
+
+
+class InterpretationRefusal(str, Enum):
+    """보고된 해석을 **적용하지 않은** 이유. 업무화가 거부한 사유는 그 코드를 그대로 쓴다.
+
+    `NOT_A_WORK_REQUEST` 논의로 읽었다(적용할 것이 없다)
+    `NOT_REPORTED`       해석이 없거나 형식이 틀렸다
+    `REPLY_NOT_COMPLETED` 응답 실행이 완료되지 않았다 — 끝나지 않은 해석으로 업무를 열지 않는다
+    """
+
+    NOT_A_WORK_REQUEST = "not_a_work_request"
+    NOT_REPORTED = "not_reported"
+    REPLY_NOT_COMPLETED = "reply_not_completed"
+
+
+#: 요청 처리기가 요청을 끝낼 때 적는 주체. 사람의 종료 기록과 구별한다.
+REQUEST_PROCESSOR_ACTOR = "request-processor"

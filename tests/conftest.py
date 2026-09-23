@@ -1475,10 +1475,23 @@ HARNESS_RUNNER_STALE_SECONDS = 3600.0
 
 @pytest.fixture
 def harness(tmp_path: Path):
+    # UI-03. 기존 시험은 요청을 **스스로 처리한다**(논의 응답 실행을 만들고 종료를 적는다).
+    # 제어부의 요청 처리기는 끈다 — 처리기 시험은 `processing_harness` 를 쓴다.
+    yield from _make_harness(tmp_path, auto_process_requests=False)
+
+
+@pytest.fixture
+def processing_harness(tmp_path: Path):
+    """UI-03. 제어부의 **요청 처리기를 켠** 하네스(제품 기본값과 같다)."""
+    yield from _make_harness(tmp_path, auto_process_requests=True)
+
+
+def _make_harness(tmp_path: Path, *, auto_process_requests: bool):
     controller_config = ControllerConfig(
         data_root=tmp_path / "controller",
         web_dist=None,
         runner_stale_seconds=HARNESS_RUNNER_STALE_SECONDS,
+        auto_process_requests=auto_process_requests,
     )
     app = create_app(controller_config)
     with TestClient(app) as client:

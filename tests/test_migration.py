@@ -1726,11 +1726,13 @@ def test_a_v17_database_is_rebuilt_without_losing_rows_or_inventing_stops(tmp_pa
     ):
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(statement)
+    # 뜻은 "현재 판으로 이행한다"다. v19(UI-03)가 표 하나를 더했으므로 18 고정을 `>=` 로
+    # 바꿨다 — v19 고정은 `test_a_v18_database_gets_no_interpretation_it_never_had` 가 한다.
     assert (
         conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
         == db.SCHEMA_VERSION
-        == 18
     )
+    assert db.SCHEMA_VERSION >= 18
 
     # 반복 이행이 멱등이다 — 다시 만들지 않는다.
     ddl_before = conn.execute(
@@ -1764,4 +1766,125 @@ def test_a_new_database_needs_no_rebuild():
     assert db._widen_check(  # noqa: SLF001
         conn, "run", "not_started_reason", NOT_STARTED_REASONS
     ) is False
+    conn.close()
+
+
+def _v18_schema() -> str:
+    """UI-03 표식이 없고 v18 표식이 있는 마지막 커밋 스키마."""
+    log = subprocess.run(
+        ["git", "log", "--format=%H", "-30", "--", "controller/schema.sql"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+    )
+    if log.returncode != 0:
+        pytest.skip("git 이력을 읽을 수 없다")
+    for commit in log.stdout.decode("utf-8").split():
+        schema = _committed_schema(commit)
+        if "스키마 v18" in schema and "스키마 v19" not in schema:
+            return schema
+    pytest.skip("v18 스키마를 가진 커밋을 찾지 못했다")
+
+
+def test_a_v18_database_gets_no_interpretation_it_never_had(tmp_path):
+    """v18 → v19 (UI-03 AC-10).
+
+    v19 는 **표 하나만 더한다**(`conversation_interpretation`). 그래서 v18 DB 는 "지금 이행 코드로
+    만든 DB 에서 그 표와 v19 표식을 뺀 것"과 같다 — 커밋된 v18 스키마에 그 표가 없고 나머지 표가
+    모두 있다는 것을 먼저 확인해 그 동등성을 시험의 전제로 고정한다.
+
+    지키는 것: 옛 요청·실행에 해석을 지어내지 않는다, **이행이 요청을 처리하지 않는다**(처리 중
+    요청은 처리 중 그대로이고 응답 실행이 생기지 않는다), 멱등이다, 새 표의 CHECK 가 선다.
+    """
+    committed = _v18_schema()
+    assert "conversation_interpretation" not in committed
+    path = tmp_path / "controller.sqlite3"
+    conn = db.connect(path)
+    db.migrate(conn)
+    current_tables = {
+        r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    for line in committed.splitlines():
+        if line.startswith("CREATE TABLE IF NOT EXISTS "):
+            name = line.split()[5].strip('"(')
+            assert name in current_tables, name
+    conn.execute("DROP TABLE conversation_interpretation")
+    # 새로 만든 DB 는 현재 판 표식 하나만 갖는다. v18 DB 의 표식으로 바꾼다.
+    conn.execute("DELETE FROM schema_version WHERE version = 19")
+    conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (18, ?)", (utc_now(),))
+
+    now = utc_now()
+    # 요청과 여는 메시지는 서로를 가리킨다. 옛 DB 의 행을 그대로 옮기듯 외래 키 검사를 끄고 넣는다.
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    conn.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    conn.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at, stage)'
+        " VALUES ('case-1', 'prj-1', 'old', 'undecided', 'received', ?, ?, 'discussion')",
+        (now, now),
+    )
+    conn.execute(
+        "INSERT INTO runner (id, name, host, status, registered_at, last_heartbeat_at)"
+        " VALUES ('runner-1','old','old-host','registered',?,?)", (now, now)
+    )
+    conn.execute(
+        "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, owner_runner_id,"
+        " content_hash, byte_size, summary, availability, created_at)"
+        " VALUES ('art-msg',1,'case-1','message','runner-1','h',10,'s','available',?)", (now,)
+    )
+    conn.execute(
+        "INSERT INTO intake (id, case_id, kind, artifact_id, revision, target_runner_id, state,"
+        " expected_hash, byte_size, summary, created_at, stored_at)"
+        " VALUES ('int-1','case-1','message','art-msg',1,'runner-1','stored','h',10,'s',?,?)",
+        (now, now),
+    )
+    # 사람이 처리하던(UI-01 방식) **처리 중** 요청. 응답 실행이 아직 없다.
+    conn.execute(
+        "INSERT INTO conversation_request (id, case_id, opened_by_message_id, state, opened_at)"
+        " VALUES ('req-1','case-1','msg-1','processing',?)",
+        (now,),
+    )
+    conn.execute(
+        "INSERT INTO conversation_message (id, case_id, seq, author, message_kind, actor,"
+        " client_message_id, artifact_id, artifact_rev, content_hash, intake_id, request_id,"
+        " summary, created_at) VALUES ('msg-1','case-1',1,'user','general','owner','c-1',"
+        " 'art-msg',1,'h','int-1','req-1','사용자 메시지 · 3자',?)",
+        (now,),
+    )
+    conn.close()
+
+    conn = db.connect(path)
+    db.migrate(conn)
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] == 19
+    assert db.SCHEMA_VERSION == 19
+    assert conn.execute("SELECT COUNT(*) FROM conversation_interpretation").fetchone()[0] == 0
+    request = conn.execute("SELECT * FROM conversation_request WHERE id = 'req-1'").fetchone()
+    assert (request["state"], request["settled_by"]) == ("processing", None)
+    assert conn.execute("SELECT COUNT(*) FROM run").fetchone()[0] == 0
+    view = Repository(conn).conversation_view("case-1")
+    assert view["interpretations"] == []
+    assert view["processing"]["auto"] is False  # 저장 계층 기본값 — 켜짐은 제어부 설정이 준다
+
+    # 새 표의 CHECK. 모르는 보고 상태·Profile, 업무 요청이 아닌 적용은 들어가지 않는다.
+    for statement in (
+        "INSERT INTO conversation_interpretation (run_id, case_id, request_id,"
+        " opening_message_id, report_status, recorded_at)"
+        " VALUES ('r1','case-1','req-1','msg-1','guessed','t')",
+        "INSERT INTO conversation_interpretation (run_id, case_id, request_id,"
+        " opening_message_id, report_status, kind, profile, recorded_at)"
+        " VALUES ('r1','case-1','req-1','msg-1','reported','work_request','hobby','t')",
+        "INSERT INTO conversation_interpretation (run_id, case_id, request_id,"
+        " opening_message_id, report_status, kind, applied, recorded_at, evaluated_at)"
+        " VALUES ('r1','case-1','req-1','msg-1','reported','discussion',1,'t','t')",
+    ):
+        with pytest.raises(sqlite3.IntegrityError):
+            conn.execute(statement)
+
+    # 반복 이행이 멱등이다.
+    db.migrate(conn)
+    assert conn.execute(
+        "SELECT COUNT(*) FROM schema_version WHERE version = 19"
+    ).fetchone()[0] == 1
     conn.close()

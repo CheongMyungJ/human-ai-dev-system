@@ -1,0 +1,37 @@
+UI-03 라이브 215304164 · codex codex-cli 0.156.1 · 데이터 C:\Users\USER\AppData\Local\Temp\hads-ui-03-live\215304164
+Runner 기동 (first) pid=5140
+[OK] 기본 화면이 대화 화면이고 라이트 테마
+[OK] 처리 중 일반 전송은 서버 판정대로 막힘 — 지금은 보낼 수 없다: 현재 요청을 처리하고 있다 — 초안은 편집할 수 있고 질문에는 답할 수 있다 (작성 중인 입력은 자동으로 보내지지 않는다)
+[OK] 처리 중에도 초안 편집 가능 · 보내기 비활성
+[OK] 요청 처리기가 응답하고 요청을 끝냄 — completed
+[OK] 응답 실행은 읽기 전용 논의 응답 하나
+[OK] AI 응답 본문이 화면에 보이고 기계용 블록은 없다
+[관찰] A 응답(앞 200자) — [README.md](C:/Users/USER/AppData/Local/Temp/hads-ui-03-live/215304164/workspace/README.md)와 [app.py](C:/Users/USER/AppData/Local/Temp/hads-ui-03-live/215304164/workspace/app.py)를 보면, 현재 한 줄은 `시각 메시지`
+[관찰] A 해석 — {'report_status': 'reported', 'kind': 'discussion', 'profile': None, 'applied': False, 'refusal': 'not_a_work_request'}
+[OK] 해석과 단계가 일치(적용된 업무 요청이 없으면 논의 단계) — discussion
+[OK] 막혀 있던 동안 쓴 초안은 자동으로 보내지지 않음
+[OK] 새로 고침 뒤 초안 복구
+[OK] 복구가 전송을 만들지 않음
+[OK] 브라우저 저장소에 대화 본문 없음(초안만)
+[관찰] C 해석 — {'report_status': 'reported', 'kind': 'work_request', 'profile': 'research', 'applied': True, 'refusal': None}
+[관찰] C 응답(앞 300자) — [README.md](C:/Users/USER/AppData/Local/Temp/hads-ui-03-live/215304164/workspace/README.md)에는 사람이 읽고 나중에 모아 분석할 로그라고 적혀 있습니다. [app.py](C:/Users/USER/AppData/Local/Temp/hads-ui-03-live/215304164/workspace/app.py:4)의 `log(message)`는 현재 `HH:MM:SS 메시지`를 표준 출력에 인쇄합니다.
+
+**현재 형식의 문제**
+
+- 날짜와 시간대가 없어 다른 날이나
+[OK] AI 해석 업무화: 같은 Case·결정 주체 AI·근거 실행
+[OK] 위임 근거는 사용자 메시지 원문
+[OK] 업무화가 실행을 시작하지 않음(응답 실행만) — ['discussion_reply', 'discussion_reply']
+[OK] 화면이 업무 단계와 미지원 자동 진행을 보임
+[OK] 화면의 중단 → 요청 interrupted(stopped_by_request) — interrupted
+[OK] OS 목록에 그 셸 대기가 없음
+[OK] 카드 답변이 그 질문만 닫고 동의가 되지 않음 — never_agreed
+[OK] 읽는 동안 새 버전이 생겨도 본문은 v1 그대로
+[OK] 전환은 사람이 고른 뒤에만
+[OK] 불러온 본문은 단절 뒤에도 보임
+[OK] PC 미연결이면 전송 비활성·사유 표시
+[OK] 미연결 PC 로 새 열람 요청을 만들지 않음 — (10, 10)
+Runner 기동 (restart) pid=9364
+[OK] 재연결 뒤 본문을 불러옴 · 초안 유지 · 자동 전송 없음
+종료 뒤 이 라이브의 남은 프로세스: 0
+결과: passed · 제품 규칙 24/24 · 관찰 4

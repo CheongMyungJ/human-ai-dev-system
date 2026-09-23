@@ -2117,7 +2117,7 @@ export const policyApi = {
 //
 // 대화·요청 기반. **화면은 보낼 수 있는지를 판단하지 않는다** — `send.general` 은
 // 서버가 실제로 적용하는 판정과 같은 값이고, 버튼을 비활성화해도 서버가 같은 이유로
-// 거부한다(FR-11). 초안의 브라우저 저장·복구(D-83)는 UI-03 이다.
+// 거부한다(FR-11). 초안의 브라우저 저장·복구(D-83)는 기본 대화 화면(web/src/lib/drafts.ts)이 한다.
 
 export type MessageReceipt = 'pending' | 'stored' | 'lost_before_persist'
 export type RequestState = 'processing' | 'completed' | 'failed' | 'unknown' | 'interrupted'
@@ -2247,6 +2247,24 @@ export interface ConversationView {
     runner_connection: RunnerConnectionState
   }
   needs_response: boolean
+  // UI-03. **요청을 누가 처리하는가.** 켜져 있으면 제어부가 논의 응답을 만들고 요청을 끝낸다.
+  processing?: { auto: boolean; actor: string; scope: string }
+  // UI-03. 준비 단계 응답의 AI 해석(본문 없음). 업무화의 **근거가 아니라 기록**이다.
+  interpretations?: ConversationInterpretation[]
+}
+
+export interface ConversationInterpretation {
+  run_id: string
+  case_id: string
+  request_id: string
+  opening_message_id: string
+  report_status: 'reported' | 'missing' | 'invalid'
+  kind: 'discussion' | 'work_request' | null
+  profile: string | null
+  applied: boolean
+  refusal: string | null
+  recorded_at: string
+  evaluated_at: string | null
 }
 
 export interface SubmittedMessage {
@@ -2313,6 +2331,15 @@ export const CONVERSATION_REFUSAL_LABEL: Record<string, string> = {
   request_not_unknown: '다시 확인할 것은 실행 상태를 모르는 요청뿐이다',
 }
 
+export interface MessageReferenceInput {
+  kind: 'artifact' | 'project_file'
+  artifact_id?: string
+  revision?: number
+  repository_id?: string
+  path?: string
+  location?: string
+}
+
 export const conversationApi = {
   create: (projectId: string, title: string) =>
     request<ConversationView>(`/api/projects/${projectId}/conversations`, {
@@ -2337,6 +2364,8 @@ export const conversationApi = {
       corrects_message_id?: string
       question_id?: string
       intent_version_id?: string
+      // UI-03. 자료 참조(D-81). 서버가 버전·해시를 고정한다. 본문·이미지가 아니다.
+      references?: MessageReferenceInput[]
     },
   ) =>
     request<SubmittedMessage>(`/api/cases/${caseId}/messages`, {
@@ -2394,4 +2423,74 @@ export const conversationApi = {
       method: 'POST',
       body: JSON.stringify({ actor: 'owner' }),
     }),
+}
+
+
+// ===================================================================== UI-03
+//
+// 기본 대화 화면이 쓰는 조회. **판단 값은 서버가 준다** — 목록의 상태, 프로젝트 주의 수, PC 연결
+// 상태 모두 서버가 도출한 값이며 화면이 heartbeat 시각 등으로 따로 계산하지 않는다.
+
+export interface ProjectAttention {
+  needs_response: number
+  request_unknown: number
+  processing: number
+}
+
+export interface ProjectWithAttention extends Project {
+  attention: ProjectAttention
+}
+
+export interface RunnerWithConnection extends RunnerInfo {
+  connection: RunnerConnectionState
+}
+
+export interface ConversationRow extends Case {
+  stage?: 'discussion' | 'work' | null
+  profile?: string | null
+  effective_stage: 'discussion' | 'work'
+  stage_source: string
+  archived: boolean
+  current_request_state: RequestState | null
+  current_request_stopping: boolean
+  needs_response: boolean
+  last_activity_at: string | null
+}
+
+export interface ProjectRepository {
+  id: string
+  project_id: string
+  name: string
+  repo_path: string
+}
+
+export const INTERPRETATION_REFUSAL_LABEL: Record<string, string> = {
+  not_a_work_request: '논의로 읽었다',
+  not_reported: '해석이 없거나 형식이 맞지 않았다',
+  reply_not_completed: '응답이 완료되지 않았다',
+  case_not_in_discussion_stage: '이미 업무 단계였다',
+  case_already_closed: '종료된 업무였다',
+  work_request_not_current: '그 요청이 이미 끝났다',
+  work_request_not_stored: '요청 메시지가 저장되지 않았다',
+}
+
+export const PROFILE_LABEL: Record<string, string> = {
+  feature: '기능 개발',
+  defect_fix: '결함 수정',
+  root_cause_analysis: '원인 분석',
+  research: '조사·연구',
+  refactoring: '리팩터링',
+  maintenance: '유지 보수',
+}
+
+export const shellApi = {
+  projects: () => request<ProjectWithAttention[]>('/api/projects'),
+
+  runners: () => request<RunnerWithConnection[]>('/api/runners'),
+
+  conversations: (projectId: string) =>
+    request<ConversationRow[]>(`/api/projects/${projectId}/conversations?archived=include`),
+
+  repositories: (projectId: string) =>
+    request<{ repositories: ProjectRepository[] }>(`/api/projects/${projectId}/repositories`),
 }

@@ -45,9 +45,11 @@ def _free_port() -> int:
 class ControllerProcess:
     """실제 uvicorn 자식 프로세스."""
 
-    def __init__(self, data_root: Path, port: int) -> None:
+    def __init__(self, data_root: Path, port: int, auto_process: bool = False) -> None:
         self.data_root = data_root
         self.port = port
+        #: UI-03. 요청 처리기. 기존 시험은 요청을 스스로 처리하므로 끈다(UI-01 명시 계약).
+        self.auto_process = auto_process
         self.base_url = f"http://127.0.0.1:{port}"
         self.proc: subprocess.Popen | None = None
 
@@ -55,6 +57,7 @@ class ControllerProcess:
         env = dict(os.environ)
         env["HADS_CONTROLLER_DATA"] = str(self.data_root)
         env["HADS_WEB_DIST"] = ""  # 이 시험은 API만 본다
+        env["HADS_AUTO_PROCESS_REQUESTS"] = "1" if self.auto_process else "0"
         env["PYTHONPATH"] = str(REPO_ROOT)
         self.proc = subprocess.Popen(
             [

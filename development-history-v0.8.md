@@ -6,6 +6,8 @@
 
 **S-022(UI-02 완료) 정리 때 이어서 옮긴 것:** 당시 1.4절(UI-02 의 경계와 시작점)과 S-020 인계. 같은 규칙으로 글자 그대로 옮겼다.
 
+**S-023(UI-03 완료) 정리 때 이어서 옮긴 것:** 당시 1.5절(UI-03 의 경계와 시작점)과 S-021 인계. 같은 규칙으로 글자 그대로 옮겼다.
+
 ## 1. 완료 작업의 설명 문단 (당시 1절)
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
@@ -44,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -83,6 +85,15 @@ P4-04의 고정 입력·새 세션·usage 복원은 이 설계와 연결되지�
 - **실측 근거:** P1-03의 `safe_stop_next_call`(조건부)·`cancel_confirmed = unknown`·Windows 자식 프로세스 잔류 관측과, P4-04 라이브 D(실행 중 Runner 트리 강제 종료 → 재시작 → 원시 출력 복구)의 원시 출력 모양(`p4/evidence/P4-04-live-D-raw.stdout.jsonl`).
 - 코드 대조 시작점: `runner/agent.py`의 `poll_once`·`handle_assignment`·`run_forever`, `runner/cli_adapter.py`의 `CliExecutor.execute`, `controller/repository.py`의 `settle_request`·`request_admission_state`·`bump_generation`·`heartbeat`, `domain/conversation.py`의 요청 종료 규칙, `web/src/ConversationPanel.tsx`.
 
+### 1.5 UI-03의 경계와 시작점 (완료 — 당시 인계로 보존, S-023 에 옮김)
+
+**목표:** PC·라이트 기본 shell 에서 프로젝트/대화 선택 → 논의/요청 → 진행/질문 → 실제 결과 검토의 기본 흐름을 쓸 수 있게 한다. 기본값 요약·브라우저 초안 복구·검토 버전 유지를 연결한다(1.1절 3행, D-68·D-71·D-83·D-85, [UI 설계](ui-conversation-design.md) 3·6·6.1·8절). 없는 산출물/지원 능력을 표시하지 않고 API 상태·원문 가용성과 일치시킨다.
+
+- **UI-02가 넘긴 것:** 서버가 전송 가능 여부(`send.general.refusals`·`send.card_answer`)와 PC 연결(`send.runner_connection`: 기준 PC·판단 근거·마지막 확인)을 말한다. 요청 조회에 `stopping`·실행별 `execution_state`·잔류 근거·`interruption_summary` 가 있고 요청 상태 `interrupted` 가 새로 있다. 중단(`POST .../requests/{rid}/stop`)·상태 다시 확인(`.../reconcile`)은 API 와 관리 화면(`ConversationPanel`, 새 화면 아님)에 연결됐다.
+- **아직 사람·하네스가 하는 일:** 요청 종료 기록과 논의 응답 실행 생성은 처리하는 쪽의 명시 동작이다(중단된 요청만 제어부가 끝낸다). 자연어 업무 요청의 분류·업무화, 기존 접수 네 경로 정리도 UI-03 흐름에서 본다(9절).
+- **D-83 초안 복구:** 브라우저 저장·복구, 접수가 확인된 전송분만 비우기, 자동 전송 없음. 서버에는 대기열이 없고 `by-client-id` 대조가 있다. PC 미연결일 때 원문 열람의 "연결 필요" 표시도 화면 몫이다(9절).
+- 코드 대조 시작점: `web/src/App.tsx`·`ConversationPanel.tsx`·`api.ts`, `controller/repository.py` 의 `conversation_view`·`request_view`·`list_cases`, `controller/api.py` 의 대화 경로.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -120,6 +131,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-021 / 2026-09-23 / P4-04 문맥·재개 (**완료**)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan 검증 인계 절차를 지켜줘." 다음 단계는 D-90·1.3절의 **P4-04** 였다.
+- **수행:** 시작 상태(`main`/`867582c`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → pytest **513** + unittest **18**, 4분 26초)을 직접 확인한 뒤 [P4-PLAN-04](plans/P4-PLAN-04.md)를 **구현 전에 기록·공유**하고 구현·검증했다. 상세 근거는 [P4-04 결과](p4/evidence/P4-04-results.md)다. 새 제품 판단은 없었고 사람에게 질문하지 않았다 — 핵심을 자르지 않고 보류한다는 규칙은 review-context-contract 4절·NFR-09 의 확정 내용이며, 한도 256 KiB 는 상세 설계 제안값으로 적었다.
+- **모델:** `run_context_ref` 에 등급(`core`/`supporting`)·인라인 여부·크기, `run` 에 적용 한도·`not_started_reason`·결과 시점 최신성, 새 표 `run_context_receipt`(순번·역할·상태, 본문 없음). 스키마 **v17**. 옛 실행은 영수증이 없어 `not_reported`, 옛 참조의 등급은 역할에서 도출하되 기록 전으로 표시한다(이행이 데이터를 쓰지 않는다).
+- **규칙:** AI 의 이전 제안만 보조다. 한도를 넘으면 보조만 오래된 것부터 드러내어 생략, 핵심만으로 넘으면 `context_over_inline_limit`, 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`. Runner 는 **원장을 잡기 전에** 지시·참조를 읽어 해시를 대조한 영수증을 보내고, 핵심을 못 읽으면 CLI 를 부르지 않고 `not_started_reason` 으로 끝낸다 — 시작하지 않은 실행은 소비 0(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새 입력을 최신성으로 남긴다(표시). 재시작 뒤 착수만 있는 실행은 원시 출력에서 사용량·세션·이벤트를 되찾아 `unknown` 으로 보고한다.
+- **기존 시험의 의미 검토:** P3-01 AC-12 `test_an_unreadable_reference_is_reported_as_unread` 가 "동의된 의도를 못 읽어도 설계를 쓴다"를 고정했다 — 핵심 누락 → 미실행으로 바꾸고 원래 뜻(읽음으로 적지 않음)은 영수증으로 강화했다. v15→v16 이행 시험의 `SCHEMA_VERSION == 16` 은 `>= 16` 으로 바꿨다(v17 고정은 새 시험). 검사를 지우지 않았다.
+- **자기 검토에서 고친 것:** 처음에는 영수증을 원장 뒤에 보냈다 — 영수증 보고가 유실되면 CLI 를 부르지 않은 실행이 재배정 때 결과 불명이 된다. 원장 앞으로 옮기고 시험으로 고정했다. 0 이하 한도는 제어부 기동 시 거부한다.
+- **검증:** P4-04 집중 **24**, v16→v17 이행 1, 실제 uvicorn 강제 종료 재시작 1을 더해 전체 **pytest 539 + P1 계약 unittest 18 통과**, `npm run build` 성공. 알려진 deprecation warning 2건 외 실패 없음. 실제 codex·claude 원시 출력(P1 증거)을 자동 시험의 복구 입력으로 썼다.
+- **실제 CLI:** **수행.** `p4/live/p4_04_context.py` 로 실제 `codex-cli 0.154.0` 논의 응답 3회와 실행 중 Runner 트리 강제 종료 1회를 **두 번** 돌렸다(1회차는 D 의 하네스 타이밍으로 멈춤 — 결과 3절). 2회차 제품 규칙 21건 통과, 지시와 다른 관찰 없음. 한도로 A 의 AI 응답만 생략된 C 에서 codex 는 "첫 번째 답변은 현재 컨텍스트에서 생략되어 있어 정확히 복원할 수 없다"고 밝히고 보이는 B 에서만 2번을 복원했다. D 는 재호출 없이 원시 출력의 세션 id 를 되찾고 사용량이 없어 토큰을 지어내지 않았으며 요청은 `unknown` 으로 잠겼다. 표본은 대화 하나·강제 종료 하나다.
+- **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 분할 검토·체크포인트·단계적 조회(3.9절), 요청 `unknown` 해제·중단·수신/실행 분리(UI-02), 원문 재동기화(P6-04), 새 화면(UI-03)은 구현하지 않았다. 재배정의 새 세대 예약(과대 쪽)은 바꾸지 않고 9절에 배정했다.
+- **다음 행동:** **UI-02(입력·실행 제어)** 를 새 plan 으로 시작한다(1.4절). 완료된 P4-PLAN-01~04·UI-PLAN-01 을 다시 열지 않고 UI-03 으로 자동 확대하지 않는다.
+- **사람에게 물어야 할 것:** 없다.
+- **사용자 지시로 한 일:** 작업을 마친 뒤 사용자 요청("DEVELOPMENT.md 에 이어서 할 작업들에 불필요한 것들은 지우는게 나을까" → "그렇게 작업후 커밋푸시까지해줘")으로 (1) P4-04 변경을 **`5580896`** 으로 커밋하고, (2) 이 문서에서 완료 작업의 설명 문단·완료된 시작점(1.2·1.3절)·P3 남은 작업 표·P3 plan 행·해소된 한계 행·S-020 이전 인계를 **[보존본](development-history-v0.8.md)으로 글자 그대로 옮겨**(지우지 않았다) 문서를 줄인 뒤 커밋해, 둘을 함께 `origin/main` 에 push 했다(push 전에 원격을 fetch 해 앞서 간 커밋이 없음을 확인). 절 번호는 다른 문서가 번호로 참조하므로 그대로 두었다. 지금도 효력이 있는 결정(`autonomy = NULL` 의 controlled 취급 등)은 1절 요약에 남겼다. P4-04 커밋 뒤 이행 시험을 다시 돌려 `_v16_schema()` 가 `867582c` 의 v16 스키마를 찾는 것을 확인했다(12건 통과, 건너뜀 없음). 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`867582c` clean. 이 세션이 그 위에 P4-04 커밋 `5580896` 과 문서 정리·인계 기록 커밋을 올렸다 — 새 파일 `domain/context.py`, `tests/test_context.py`, `plans/P4-PLAN-04.md`, `p4/evidence/P4-04-*`, `p4/live/p4_04_context.py` 와 수정 파일 `controller/{admission,api,config,db,repository,schema.sql}`, `domain/{budget,models}.py`, `runner/{agent,client,prompts}.py`, `tests/{test_migration,test_preparation,test_restart_recovery}.py`, `web/src/{App.tsx,api.ts}`, 문서 `DEVELOPMENT.md`·`README.md`·`ui-conversation-design.md`·`review-context-contract.md`. 정리 커밋은 `DEVELOPMENT.md`·`README.md`·`plans/P4-PLAN-04.md` 수정과 새 보존본 `development-history-v0.8.md` 다. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. 실제 커밋은 `git log --oneline 867582c..HEAD`, 원격 반영은 로컬/원격 ref, 작업 트리는 `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner 프로세스는 스크립트가 `finally` 에서 내렸다(D 의 강제 종료 트리 포함). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p4-04-live\{163521474,163738630}` 에 남아 있고(두 회차) 저장소 `var\` 는 건드리지 않았다. 증거 사본은 2회차의 `p4/evidence/P4-04-live*` 다.
+- **다음 세션이 이어서 할 때:** 한도를 바꾸는 시험은 `tests/test_context.py` 의 `_set_limit`(제어부 설정 교체)을, 재시작 복구 시험은 `_simulate_crash_after_start`(원장 착수 + 실제 원시 출력 복사)를 쓴다. `submit_artifact` 도우미는 대기 중인 원문을 **전부** 저장하므로 저장 대기 입력을 만드는 시험은 지시를 먼저 접수한다. `tests/test_migration.py` 의 `_v16_schema()` 는 `스키마 v17` 표식이 없는 가장 최근 커밋 스키마를 찾는다 — P4-04 를 커밋하기 전에도 뒤에도 `867582c` 의 v16 스키마를 고른다.
 
 ### 이전 개발 인계 — S-020 / 2026-09-23 / UI-01 대화·요청 기반 (**완료**)
 

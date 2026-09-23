@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 
 def utc_now() -> str:
@@ -402,6 +402,10 @@ def migrate(conn: sqlite3.Connection) -> None:
     _widen_check(conn, "conversation_request", "state", REQUEST_STATES)
     _widen_check(conn, "conversation_request", "outcome_reason", REQUEST_OUTCOME_REASONS)
 
+    # v19: 기본 대화 화면(UI-03). 해석 표(`conversation_interpretation`)는 schema.sql 이 만든다.
+    #      **기존 표를 바꾸지 않는다.** 요청 처리기가 끝낸 요청은 `settled_by` 의 주체 값으로
+    #      구별하고, 옛 요청·실행에는 해석 행을 만들지 않는다.
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -494,6 +498,78 @@ def _widen_check(
 #: 부르는 경로가 있을 수 있기 때문이다 — 그 경우는 SQLite 가 여전히 막지만, 그
 #: 실패는 **설계 문제**로 드러나야지 스레드 경합으로 가려지면 안 된다.
 _WRITE_LOCK = threading.RLock()
+
+
+class _Rows:
+    """문장 하나의 결과를 **잠금 안에서 다 읽어 둔** 것. 커서처럼 쓴다."""
+
+    def __init__(self, rows: list[Any], rowcount: int, lastrowid: int | None, description: Any):
+        self._rows = rows
+        self._index = 0
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+        self.description = description
+
+    def fetchone(self) -> Any:
+        if self._index >= len(self._rows):
+            return None
+        row = self._rows[self._index]
+        self._index += 1
+        return row
+
+    def fetchall(self) -> list[Any]:
+        rest = self._rows[self._index :]
+        self._index = len(self._rows)
+        return rest
+
+    def __iter__(self) -> Iterator[Any]:
+        return iter(self.fetchall())
+
+
+class SerializedConnection:
+    """요청 스레드들이 **공유하는** 연결(UI-03).
+
+    제어부는 연결 하나를 스레드 풀의 요청들이 함께 쓴다(`check_same_thread=False`). 쓰기
+    트랜잭션은 `transaction()` 이 이미 직렬화했지만 **잠금 밖의 문장**(조회·자동 커밋 쓰기)은
+    그렇지 않았다. 같은 SQL 을 두 스레드가 동시에 실행하면 파이썬 sqlite3 의 **준비된 문장
+    캐시를 함께 써서** 한쪽의 매개변수가 다른 쪽 실행을 덮는다 — 방금 커밋한 행이 "없다"로
+    읽히거나 `InterfaceError: bad parameter or other API misuse` 가 난다. 또 남의 열린 쓰기
+    트랜잭션 안에서 실행된 조회는 커밋 전 행을 본다.
+
+    UI-03 의 기본 화면이 조회를 여러 개 겹쳐 보내자 실제로 드러났다(`web_shell` 브라우저 시험·
+    부하 재현). 그래서 **문장 하나(실행과 결과 읽기)를 쓰기 트랜잭션과 같은 잠금 안에서
+    끝낸다.** 트랜잭션이 열려 있으면 다른 스레드의 문장은 그 트랜잭션이 끝날 때까지 기다린다.
+    잠금은 이 프로세스 안에서만이다(여러 제어부는 P6-03).
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    @property
+    def raw(self) -> sqlite3.Connection:
+        return self._conn
+
+    def execute(self, sql: str, parameters: Any = ()) -> _Rows:
+        with _WRITE_LOCK:
+            cursor = self._conn.execute(sql, parameters)
+            rows = cursor.fetchall() if cursor.description is not None else []
+            return _Rows(rows, cursor.rowcount, cursor.lastrowid, cursor.description)
+
+    def executemany(self, sql: str, seq: Iterable[Any]) -> _Rows:
+        with _WRITE_LOCK:
+            cursor = self._conn.executemany(sql, seq)
+            return _Rows([], cursor.rowcount, cursor.lastrowid, None)
+
+    def executescript(self, script: str) -> None:
+        with _WRITE_LOCK:
+            self._conn.executescript(script)
+
+    def close(self) -> None:
+        with _WRITE_LOCK:
+            self._conn.close()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
 
 
 @contextmanager

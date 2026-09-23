@@ -67,6 +67,7 @@ from domain.models import (
     LOCKING_REQUEST_STATES,
     OPENS_REQUEST,
     POLICY_VERSION,
+    REQUEST_PROCESSOR_ACTOR,
     AcceptanceMode,
     AcceptanceRefusal,
     AdmissionOutcome,
@@ -363,6 +364,7 @@ class Repository:
         conn: sqlite3.Connection,
         context_inline_limit: int = ctxmod.DEFAULT_INLINE_LIMIT_BYTES,
         runner_stale_seconds: float = runctl.DEFAULT_RUNNER_STALE_SECONDS,
+        auto_process_requests: bool = False,
     ) -> None:
         self.conn = conn
         #: P4-04. 한 실행의 지시 + 인라인 고정 참조의 한도(바이트). 제어부 설정에서 온다.
@@ -370,6 +372,9 @@ class Repository:
         self.context_inline_limit = int(context_inline_limit)
         #: UI-02. 이만큼 heartbeat 가 없으면 PC 미연결로 본다(D-75). 제어부 설정에서 온다.
         self.runner_stale_seconds = float(runner_stale_seconds)
+        #: UI-03. 제어부의 요청 처리기가 켜져 있는가. 조회가 그 사실을 화면에 알린다 — 처리는
+        #: `controller.request_processor` 가 한다(저장 계층은 판정·기록만).
+        self.auto_process_requests = bool(auto_process_requests)
 
     # ------------------------------------------------------------------ owner
 
@@ -725,17 +730,22 @@ class Repository:
         summary: str,
         artifact_id: str | None = None,
         revision: int = 1,
+        intake_id: str | None = None,
     ) -> dict[str, Any]:
         """원문 접수를 연다. **본문은 받지 않는다.**
 
         참조를 `pending` 으로 만들고, Runner가 영속 저장을 보고해야 `available` 이 된다.
         그 전까지는 저장 완료가 아니다(NFR-01, D-51).
+
+        UI-03. `intake_id` 를 호출자가 정할 수 있다 — 호출자가 **기록 전에** 본문을 그 키로
+        중계 버퍼에 넣기 위해서다. 커밋과 중계 사이에 Runner 폴링이 끼면 본문 없는 접수가
+        유실로 표시된다(UI-01 의 메시지 경로와 같은 순서).
         """
         self.get_case(case_id)
         self.guard_open_case(case_id)
         self.get_runner(target_runner_id)
         artifact_id = artifact_id or ids.new_artifact_id()
-        intake_id = ids.new_intake_id()
+        intake_id = intake_id or ids.new_intake_id()
         with transaction(self.conn):
             self._insert_intake_rows(
                 intake_id=intake_id,
@@ -1394,6 +1404,13 @@ class Repository:
         # UI-02. **중단이 요청된 실행인가.** Runner 는 이 표시가 있으면 CLI 를 부르지 않는다
         # (원장에 이미 있으면 원장대로 판단한다).
         run["stop_requested"] = bool(run.get("stop_requested_at"))
+        # UI-03. **논의 응답이 준비 단계 대화의 것인가.** 그때만 Runner 가 해석 규칙을 붙인다 —
+        # 업무 단계 응답의 해석은 쓰이지 않는다(목적·유형 변경은 D-86, UI-04).
+        if run.get("purpose") == RunPurpose.DISCUSSION_REPLY.value:
+            stage, _source = self.case_stage(run["case_id"])
+            run["conversation_stage"] = stage.value
+        else:
+            run["conversation_stage"] = None
         return run
 
     def code_repository_choices(self, case_id: str) -> list[dict[str, Any]]:
@@ -1542,6 +1559,7 @@ class Repository:
         residual_terminated: int | None = None,
         residual_source: ResidualSource = ResidualSource.RESULT,
         reporter: str = "runner",
+        interpretation: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
@@ -1575,6 +1593,12 @@ class Repository:
                 f" {residual_basis!r}; report 'unknown' when it was not confirmed"
             )
         run = self._check_generation(run_id, generation)
+        if interpretation is not None and (
+            run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value or not run.get("request_id")
+        ):
+            # UI-03. 해석은 **요청에 대한 논의 응답**에만 붙는다. 다른 실행이 보낸 해석은
+            # 계약 위반이다 — 받으면 어떤 요청의 업무화 근거인지 아무도 답할 수 없다.
+            raise ConflictError("an interpretation belongs only to a discussion reply of a request")
         if run["status"] == RunStatus.FINISHED.value:
             if run["outcome"] == outcome.value:
                 # **중복 청구가 생기지 않는 자리가 여기다.** 정산은 이 가드 뒤에
@@ -1632,6 +1656,10 @@ class Repository:
                 usage,
                 finished_at,
             )
+            if interpretation is not None:
+                # UI-03. 해석도 결과와 **같은 트랜잭션**이다. 결과는 있는데 해석이 없는 중간
+                # 상태에서 처리기가 요청을 끝내면 업무 요청이 논의로 닫힌다.
+                self._record_interpretation(run, interpretation, finished_at)
             if residual_basis is not None:
                 # UI-02. 결과와 **같은 트랜잭션**에 관측을 남긴다. 결과는 있는데 근거가
                 # 없는 중간 상태를 만들지 않는다.
@@ -11672,6 +11700,14 @@ class Repository:
                 "runner_connection": connection,
             },
             "needs_response": open_questions > 0,
+            # UI-03. **요청을 누가 처리하는가.** 켜져 있으면 제어부의 처리기가 논의 응답을 만들고
+            # 요청을 끝낸다. 꺼져 있으면 처리하는 쪽(사람·하네스)이 한다 — 화면이 둘을 구별한다.
+            "processing": {
+                "auto": self.auto_process_requests,
+                "actor": REQUEST_PROCESSOR_ACTOR,
+                "scope": "discussion_reply_only",
+            },
+            "interpretations": self.list_interpretations(case_id),
         }
 
     def _with_conversation_summary(self, case: dict[str, Any]) -> dict[str, Any]:
@@ -11684,7 +11720,18 @@ class Repository:
         case["stage_source"] = source.value
         case["archived"] = self.visibility_state(case["id"])["archived"]
         case["current_request_state"] = active["state"] if active is not None else None
+        # UI-02 이후 중단 요청 중인 요청도 처리 중으로 남는다. 목록이 그것을 따로 보인다.
+        case["current_request_stopping"] = bool(
+            active is not None and active.get("stop_requested_at")
+        )
         case["needs_response"] = self._open_question_count(case["id"]) > 0
+        # UI-03. 목록을 **마지막 활동** 순으로 보이려고 싣는다. 메시지가 없으면 Case 의 갱신 시각.
+        last = self.conn.execute(
+            "SELECT MAX(created_at) AS t FROM conversation_message WHERE case_id = ?",
+            (case["id"],),
+        ).fetchone()["t"]
+        stamps = [t for t in (last, case.get("updated_at")) if t]
+        case["last_activity_at"] = max(stamps) if stamps else None
         return case
 
 
@@ -12102,3 +12149,121 @@ class Repository:
         if state is RequestState.UNKNOWN:
             self._request_rechecks(request_id)
         return self.get_request(request_id)
+
+
+    # ================================================================== UI-03
+    #
+    # 기본 대화 화면. 요청 처리기(`controller.request_processor`)가 쓰는 조회·기록과 AI 해석.
+    # **해석은 기록이지 권한이 아니다** — 업무화의 위임 근거는 사용자가 보낸 메시지 원문이다.
+
+    def message_for_intake(self, intake_id: str) -> dict[str, Any] | None:
+        """이 접수로 들어온 대화 메시지. 대화 메시지가 아니면 `None` 이다."""
+        row = self.conn.execute(
+            "SELECT id FROM conversation_message WHERE intake_id = ?", (intake_id,)
+        ).fetchone()
+        return self.get_message(row["id"]) if row is not None else None
+
+    def request_runs(self, request_id: str) -> list[dict[str, Any]]:
+        """요청에 연결된 실행과 종료 판정에 쓰는 사실(UI-02 의 `_request_runs` 와 같다)."""
+        return self._request_runs(request_id)
+
+    def assistant_message_for_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT id FROM conversation_message WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return self.get_message(row["id"]) if row is not None else None
+
+    def processing_requests(self) -> list[dict[str, Any]]:
+        """처리 중이고 중단이 요청되지 않은 요청(처리기의 기동 복구)."""
+        rows = self.conn.execute(
+            "SELECT * FROM conversation_request WHERE state = ? AND stop_requested_at IS NULL"
+            " ORDER BY opened_at",
+            (RequestState.PROCESSING.value,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def reply_tool(self, runner_id: str, tool_id: str) -> dict[str, Any] | None:
+        """그 PC 가 이 도구를 **코딩 CLI 로 확인했다고 보고했는가.** 했으면 그 능력 행.
+
+        논의 응답은 AI 가 글을 써야 한다. 확인되지 않은 도구로 실행을 만들면 "요청했는데 아무
+        답도 없는" 상태가 된다 — 처리기는 만들지 않고 이유와 함께 요청을 끝낸다.
+        """
+        row = self.conn.execute(
+            "SELECT tool_id, mode FROM runner_capability WHERE runner_id = ? AND tool_id = ?"
+            " AND capability = 'coding_cli' AND state = ?",
+            (runner_id, tool_id, CapabilityState.VERIFIED.value),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def _record_interpretation(
+        self, run: dict[str, Any], report: dict[str, Any], recorded_at: str
+    ) -> None:
+        """결과에 실린 해석을 남긴다. **호출자의 트랜잭션 안에서 돈다.** 재전송은 새 행을
+        만들지 않는다(실행당 하나)."""
+        parsed = convmod.interpretation_from_report(report)
+        request = self.conn.execute(
+            "SELECT opened_by_message_id FROM conversation_request WHERE id = ?",
+            (run["request_id"],),
+        ).fetchone()
+        self.conn.execute(
+            "INSERT INTO conversation_interpretation"
+            " (run_id, case_id, request_id, opening_message_id, report_status, kind, profile,"
+            "  applied, refusal, recorded_at, evaluated_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL)"
+            " ON CONFLICT(run_id) DO NOTHING",
+            (
+                run["run_id"],
+                run["case_id"],
+                run["request_id"],
+                request["opened_by_message_id"],
+                parsed.status.value,
+                parsed.kind.value if parsed.kind else None,
+                parsed.profile.value if parsed.profile else None,
+                recorded_at,
+            ),
+        )
+
+    def get_interpretation(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM conversation_interpretation WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_interpretations(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM conversation_interpretation WHERE case_id = ? ORDER BY recorded_at",
+            (case_id,),
+        ).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            item["applied"] = bool(item["applied"])
+            out.append(item)
+        return out
+
+    def mark_interpretation_evaluated(
+        self, run_id: str, *, applied: bool, refusal: str | None
+    ) -> dict[str, Any] | None:
+        """처리기가 해석을 적용했는지·왜 안 했는지를 적는다. **한 번만** 적는다."""
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE conversation_interpretation SET applied = ?, refusal = ?, evaluated_at = ?"
+                " WHERE run_id = ? AND evaluated_at IS NULL",
+                (1 if applied else 0, refusal, utc_now(), run_id),
+            )
+        return self.get_interpretation(run_id)
+
+    def project_attention(self, project_id: str) -> dict[str, int]:
+        """다른 프로젝트의 **주의 상태**(D-68·D-82). 선택기에 표시하며 자동으로 옮기지 않는다.
+
+        보관된 대화도 센다 — 보관은 가시성이지 종료가 아니고, 답이 필요한 질문은 그대로다.
+        """
+        counts = {"needs_response": 0, "request_unknown": 0, "processing": 0}
+        for case in self.list_cases(project_id):
+            if case["needs_response"]:
+                counts["needs_response"] += 1
+            if case["current_request_state"] == RequestState.UNKNOWN.value:
+                counts["request_unknown"] += 1
+            elif case["current_request_state"] == RequestState.PROCESSING.value:
+                counts["processing"] += 1
+        return counts

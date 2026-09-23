@@ -13,13 +13,19 @@
 
 from __future__ import annotations
 
+import json
+import re
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from domain.models import (
     LOCKING_REQUEST_STATES,
+    CaseProfile,
     CaseStage,
     ConversationRefusal,
+    InterpretationKind,
+    InterpretationRefusal,
+    InterpretationStatus,
     MessageReceipt,
     RequestOutcomeReason,
     RequestSettleOutcome,
@@ -255,3 +261,138 @@ def lost_original_fails_request(
         and opening_receipt is MessageReceipt.LOST_BEFORE_PERSIST
         and linked_run_count == 0
     )
+
+
+# ================================================================ UI-03 요청 처리기
+#
+# 요청을 처리하는 쪽이 사람·하네스에서 제어부의 처리기로 옮겨 왔다. 처리기는 **읽기 전용
+# 논의 응답 하나**를 만들고 그 결과로 요청을 끝낸다. 판정은 여기 둔다 — 처리기의 실시간
+# 경로와 기동 복구가 같은 답을 내야 한다.
+
+
+def processor_settle_outcome(
+    reply_outcome: str | None, reply_message_attached: bool
+) -> RequestSettleOutcome:
+    """처리기가 끝내는 요청에 **무엇을 요청하는가.**
+
+    응답 실행이 완료됐고 그 응답이 AI 메시지로 대화에 붙었을 때만 `completed` 다. 붙지
+    않았으면 사람은 답을 받지 못했다 — 처리했다고 적지 않는다. 결과를 모르는 실행은 이
+    요청을 받은 `decide_settle` 이 `unknown`·`interrupted` 로 바꾼다(UI-02 그대로).
+    """
+    if reply_outcome == RunOutcome.COMPLETED.value and reply_message_attached:
+        return RequestSettleOutcome.COMPLETED
+    return RequestSettleOutcome.FAILED
+
+
+#: 논의 응답 끝에 AI 가 두는 기계용 블록의 이름(```hads-interpretation ... ```).
+INTERPRETATION_FENCE = "hads-interpretation"
+
+_INTERPRETATION_BLOCK = re.compile(
+    r"```[ \t]*" + re.escape(INTERPRETATION_FENCE) + r"[ \t]*\r?\n(.*?)```",
+    re.DOTALL,
+)
+
+
+@dataclass(frozen=True)
+class Interpretation:
+    """AI 가 사용자의 마지막 메시지를 어떻게 읽었는가(D-69). **본문을 담지 않는다.**"""
+
+    status: InterpretationStatus
+    kind: InterpretationKind | None = None
+    profile: CaseProfile | None = None
+    detail: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"status": self.status.value}
+        if self.kind is not None:
+            out["kind"] = self.kind.value
+        if self.profile is not None:
+            out["profile"] = self.profile.value
+        if self.detail:
+            out["detail"] = self.detail[:200]
+        return out
+
+
+def parse_interpretation(value: Any) -> Interpretation:
+    """해석 값 하나를 검사한다. Runner 가 블록에서 읽은 것과 제어부가 받은 보고에 같이 쓴다.
+
+    `work_request` 는 **여섯 Profile 중 하나**를 가져야 한다. Profile 없는 업무 요청은 무엇을
+    열지 모르므로 형식 오류다 — 모르는 것을 논의로 바꿔 읽지 않고 `invalid` 로 남긴다.
+    """
+    if not isinstance(value, dict):
+        return Interpretation(InterpretationStatus.INVALID, detail="not an object")
+    try:
+        kind = InterpretationKind(value.get("kind"))
+    except ValueError:
+        return Interpretation(InterpretationStatus.INVALID, detail="unknown kind")
+    if kind is InterpretationKind.DISCUSSION:
+        return Interpretation(InterpretationStatus.REPORTED, kind)
+    try:
+        profile = CaseProfile(value.get("profile"))
+    except ValueError:
+        return Interpretation(
+            InterpretationStatus.INVALID, kind, detail="work_request needs one of the six profiles"
+        )
+    return Interpretation(InterpretationStatus.REPORTED, kind, profile)
+
+
+def interpretation_from_report(report: Any) -> Interpretation:
+    """Runner 가 결과에 실어 보낸 해석을 읽는다(제어부).
+
+    `reported` 는 값을 다시 검사한다 — Runner 의 판정을 그대로 믿으면 형식이 틀린 해석이
+    업무화를 연다. `missing`·`invalid` 는 그대로 남긴다(모른다는 사실이 기록이다).
+    """
+    if not isinstance(report, dict):
+        return Interpretation(InterpretationStatus.INVALID, detail="not an object")
+    try:
+        status = InterpretationStatus(report.get("status"))
+    except ValueError:
+        return Interpretation(InterpretationStatus.INVALID, detail="unknown status")
+    if status is InterpretationStatus.MISSING:
+        return Interpretation(InterpretationStatus.MISSING)
+    if status is InterpretationStatus.INVALID:
+        try:
+            kind = InterpretationKind(report.get("kind")) if report.get("kind") else None
+        except ValueError:
+            kind = None
+        return Interpretation(
+            InterpretationStatus.INVALID, kind, detail=str(report.get("detail") or "")[:200]
+        )
+    return parse_interpretation(report)
+
+
+def split_interpretation(final_message: str) -> tuple[str, Interpretation]:
+    """응답 글에서 해석 블록을 **떼어 낸다.** (사람이 읽을 글, 해석)
+
+    블록은 기계용이다 — 대화에 AI 의 말로 붙는 것은 나머지 글뿐이다. 블록이 없으면
+    `missing`, 형식이 틀리거나 **둘 이상이면** `invalid` 다(어느 쪽이 AI 의 판단인지 모른다).
+    어떤 경우에도 글은 남는다 — 해석이 실패했다고 응답을 지우지 않는다.
+    """
+    blocks = list(_INTERPRETATION_BLOCK.finditer(final_message))
+    if not blocks:
+        return final_message.strip(), Interpretation(InterpretationStatus.MISSING)
+    text = _INTERPRETATION_BLOCK.sub("", final_message).strip()
+    if len(blocks) > 1:
+        return text, Interpretation(InterpretationStatus.INVALID, detail="more than one block")
+    try:
+        value = json.loads(blocks[0].group(1))
+    except ValueError:
+        return text, Interpretation(InterpretationStatus.INVALID, detail="block is not JSON")
+    return text, parse_interpretation(value)
+
+
+def interpretation_refusal(
+    interpretation: Interpretation, reply_outcome: str | None
+) -> InterpretationRefusal | None:
+    """이 해석으로 **업무화를 시도하는가.** 시도하지 않는 이유를 돌려준다(없으면 시도한다).
+
+    업무화 자체의 조건(준비 단계·처리 중 요청·저장된 메시지)은 `start_work` 가 본다 — 두
+    곳에 쓰지 않는다. 여기서는 해석과 응답의 조건만 본다.
+    """
+    if interpretation.status is not InterpretationStatus.REPORTED:
+        return InterpretationRefusal.NOT_REPORTED
+    if interpretation.kind is not InterpretationKind.WORK_REQUEST:
+        return InterpretationRefusal.NOT_A_WORK_REQUEST
+    if reply_outcome != RunOutcome.COMPLETED.value:
+        return InterpretationRefusal.REPLY_NOT_COMPLETED
+    return None

@@ -56,12 +56,14 @@ import httpx
 from pathlib import Path
 
 from domain import context as ctxmod
+from domain import conversation as convmod
 from domain import ids, intent_doc, prep_doc
 from domain.budget import USAGE_RECOVERED_FROM, USAGE_RECOVERED_FROM_RAW_LOG
 from domain.models import (
     ArtifactKind,
     AuthoringMode,
     CapabilityState,
+    CaseStage,
     ContextInclusion,
     ContextReceiptStatus,
     EventType,
@@ -555,6 +557,9 @@ class RunnerAgent:
             "observed_tool_version": getattr(output, "observed_tool_version", None)
             or f"{TOOL_ID}/{TOOL_VERSION}",
         }
+        # UI-03. 준비 단계 논의 응답의 해석. 원장에도 남아 재전송이 같은 해석을 보낸다.
+        if produced.get("interpretation") is not None:
+            result_payload["interpretation"] = produced["interpretation"]
         # UI-02. 잔류 값의 근거와 종료한 수. 근거를 모르는 실행기는 보내지 않는다.
         if getattr(output, "residual_basis", None):
             result_payload["residual_basis"] = output.residual_basis
@@ -619,6 +624,8 @@ class RunnerAgent:
             # 하므로 고를 수 있는 이름을 함께 준다. Runner 가 찾아 나서지 않는다 —
             # 이 Case 가 고르지 않은 저장소를 계획에 적으면 허용을 넓히는 요구가 된다.
             repositories=assignment.get("case_repositories"),
+            # **제어부가 정한 대화 단계**(UI-03). 준비 단계 논의 응답에만 해석 규칙이 붙는다.
+            conversation_stage=assignment.get("conversation_stage"),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
@@ -846,6 +853,8 @@ class RunnerAgent:
                 produced["gate_findings"] = prompts.parse_gate_review(output.final_message)
                 produced["intent_version_id"] = target
                 produced["produced"] = "gate_review"
+            elif purpose == RunPurpose.DISCUSSION_REPLY.value:
+                produced.update(self._produce_discussion_reply(assignment, output))
             elif purpose == RunPurpose.QUALITY_GATE_REVIEW.value:
                 # 일반 게이트의 대상·기준 연결은 제어부가 별도 API에서 검증한다.
                 # Runner는 원문을 가진 채 발견만 구조화하며 스스로 통과를 선언하지 않는다.
@@ -859,7 +868,34 @@ class RunnerAgent:
             produced["failure"] = f"{type(exc).__name__}: {exc}"
             produced.pop("gate_findings", None)
             produced.pop("quality_gate_findings", None)
+            produced.pop("interpretation", None)
         return produced
+
+    @staticmethod
+    def _produce_discussion_reply(assignment: dict[str, Any], output: Any) -> dict[str, Any]:
+        """UI-03. 준비 단계 응답에서 **해석 블록을 떼어 낸다.** 대화에 붙는 것은 글뿐이다.
+
+        블록이 없거나 틀려도 글은 남는다 — 해석 실패가 응답을 지우지 않는다(`missing`·
+        `invalid` 로 보고한다). 블록을 떼니 글이 비면 사람에게 보일 말이 없으므로 실행은
+        실패다. 업무 단계 응답은 건드리지 않는다(해석 규칙을 받지 않았다).
+        """
+        if assignment.get("conversation_stage") != CaseStage.DISCUSSION.value:
+            return {"produced": "discussion_reply"}
+        original = output.final_message
+        text, interpretation = convmod.split_interpretation(original)
+        if not text:
+            raise ValueError("응답 글이 비었다 — 해석 블록만으로는 대화에 붙일 말이 없다")
+        output.final_message = text
+        body = output.output_body
+        tail = original.encode("utf-8")
+        if tail and body.endswith(tail):
+            # 실행 결과 원문은 실행 정보 머리 + 최종 메시지다. 최종 메시지 자리만 바꾼다.
+            output.output_body = body[: len(body) - len(tail)] + text.encode("utf-8")
+        else:
+            output.output_body = (
+                body.decode("utf-8", errors="replace").replace(original, text).encode("utf-8")
+            )
+        return {"produced": "discussion_reply", "interpretation": interpretation.to_dict()}
 
     def _produce_implementation(self, output: Any) -> dict[str, Any]:
         """구현 실행의 산출물은 **작업공간의 실제 변화**다.

@@ -1686,3 +1686,41 @@ CREATE TABLE IF NOT EXISTS run_residual_observation (
     UNIQUE (run_id, seq),
     CHECK (terminated IS NULL OR terminated >= 0)
 );
+
+-- ===================================================================
+-- 스키마 v19 (UI-03) — 기본 대화 화면
+--
+-- 요청 처리기가 사용자 요청을 **읽기 전용 논의 응답**으로 처리한다. 준비 단계의 응답은 AI 가
+-- 사용자의 마지막 메시지를 어떻게 읽었는지(논의 / 업무 요청 + Profile)를 함께 보고하고, 처리기는
+-- 그것이 명확한 업무 요청이면 같은 Case 에서 업무화한다(D-69).
+--
+-- 이 표는 **해석과 그 적용 결과**만 남긴다. 본문·요약 컬럼은 없다 — AI 가 이해한 목표·범위는
+-- 소유 PC 에 있는 응답 글에 있다. 해석은 권한이 아니다: 업무화의 위임 근거는 여전히 사용자가
+-- 보낸 메시지 원문이다(`case_work_start`·`delegation_basis`).
+--
+-- 옛 요청·실행에는 행을 만들지 않는다. 해석하지 않은 응답에 해석을 지어내지 않는다.
+-- ===================================================================
+
+-- 논의 응답 실행 하나의 해석. `evaluated_at` 이 NULL 이면 처리기가 아직 적용 여부를 정하지
+-- 않았다(기동 복구가 이어서 본다). `refusal` 은 적용하지 않은 이유이며 해석 거부 코드이거나
+-- 업무화가 돌려준 거부 코드다.
+CREATE TABLE IF NOT EXISTS conversation_interpretation (
+    run_id             TEXT PRIMARY KEY REFERENCES run(run_id),
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    request_id         TEXT NOT NULL REFERENCES conversation_request(id),
+    opening_message_id TEXT NOT NULL REFERENCES conversation_message(id),
+    report_status      TEXT NOT NULL CHECK (report_status IN ('reported', 'missing', 'invalid')),
+    kind               TEXT CHECK (kind IS NULL OR kind IN ('discussion', 'work_request')),
+    profile            TEXT CHECK (profile IS NULL OR profile IN
+                           ('feature', 'defect_fix', 'root_cause_analysis', 'research',
+                            'refactoring', 'maintenance')),
+    applied            INTEGER NOT NULL DEFAULT 0 CHECK (applied IN (0, 1)),
+    refusal            TEXT CHECK (refusal IS NULL OR length(refusal) <= 64),
+    recorded_at        TEXT NOT NULL,
+    evaluated_at       TEXT,
+    CHECK (applied = 0 OR (report_status = 'reported' AND kind = 'work_request'
+                           AND profile IS NOT NULL AND evaluated_at IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_interpretation_case
+    ON conversation_interpretation(case_id, recorded_at);

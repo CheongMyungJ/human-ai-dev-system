@@ -20,6 +20,7 @@ from controller.api import router
 from controller.config import ControllerConfig, load_config
 from controller.relay import RelayBuffer
 from controller.repository import Repository
+from controller.request_processor import RequestProcessor
 
 LOGGER_NAME = "hads.controller"
 
@@ -43,7 +44,8 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        conn = dbmod.connect(config.db_path)
+        # UI-03. 요청 스레드들이 공유하는 연결은 **문장 단위로 직렬화한다**(`SerializedConnection`).
+        conn = dbmod.SerializedConnection(dbmod.connect(config.db_path))
         dbmod.migrate(conn)
         app.state.conn = conn
         app.state.config = config
@@ -67,11 +69,26 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
             repo.mark_read_expired(pending["id"])
             expired += 1
 
+        # UI-03. **처리 중인 요청에서 빠진 단계를 잇는다.** 저장 보고나 결과 보고를 받은 뒤
+        # 처리기가 돌기 전에 이전 프로세스가 끝났을 수 있다 — 응답 실행이 없는 요청은 만들고,
+        # 실행이 전부 끝난 요청은 끝낸다. 유실된 여는 메시지는 위의 복구가 이미 닫았다.
+        repo = Repository(
+            conn,
+            context_inline_limit=config.context_inline_limit_bytes,
+            runner_stale_seconds=config.runner_stale_seconds,
+            auto_process_requests=config.auto_process_requests,
+        )
+        processed = RequestProcessor(repo, enabled=config.auto_process_requests).recover()
+
         app.state.logger.info(
-            "startup db=%s lost_pending_intakes=%d expired_read_requests=%d",
+            "startup db=%s lost_pending_intakes=%d expired_read_requests=%d"
+            " auto_process_requests=%s requests_started=%d requests_finished=%d",
             config.db_path,
             recovered,
             expired,
+            config.auto_process_requests,
+            processed["started"],
+            processed["finished"],
         )
         try:
             yield

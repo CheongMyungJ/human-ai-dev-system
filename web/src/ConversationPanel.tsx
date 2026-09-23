@@ -1,8 +1,12 @@
 // 대화·요청 (UI-01).
 //
-// **이것은 새 대화 화면이 아니다.** 기본 대화 화면·초안 복구·알림은 UI-03 이다. 여기서는
-// UI-01 이 고정한 계약을 관리 화면에서 **보이게** 한다 — 준비 단계, 메시지와 접수 상태,
+// **이것은 기본 대화 화면이 아니다.** 기본 대화 화면·초안 복구는 `/`(UI-03, web/src/shell)이다.
+// 여기서는 UI-01 이 고정한 계약을 관리 화면에서 **보이게** 한다 — 준비 단계, 메시지와 접수 상태,
 // 현재 요청과 전송 잠금, 최초 업무화, 보관.
+//
+// UI-03 부터 제어부의 **요청 처리기**가 켜져 있으면(기본) 저장된 요청마다 논의 응답을 만들고
+// 요청을 끝낸다. 아래 "논의 응답 실행"·"처리 완료 기록"은 처리기를 끈 제어부의 경로이며, 처리기가
+// 이미 처리한 요청에는 서버가 거부로 답한다 — 그 답을 그대로 보인다.
 //
 // 이 화면이 지키는 것 넷.
 //
@@ -201,6 +205,11 @@ export function ConversationPanel(props: {
         {view.profile && ` · Profile ${view.profile} v${view.profile_version} (${view.profile_source})`}
         {view.visibility.archived && ' · 보관됨(종료 아님)'}
         {view.needs_response && ' · 답변이 필요한 질문이 있다'}
+      </p>
+      <p className="muted small">
+        {view.processing?.auto
+          ? '요청 처리: 제어부 처리기가 자동으로 논의 응답을 만들고 요청을 끝낸다(UI-03). 아래 수동 버튼은 처리기가 꺼진 제어부의 경로다.'
+          : '요청 처리: 자동 처리기 꺼짐 — 아래 버튼으로 응답 실행을 만들고 종료를 적는다.'}
       </p>
       {notice && <div className="notice">{notice}</div>}
       <p className={connection.state === 'connected' ? 'small' : 'warn small'}>

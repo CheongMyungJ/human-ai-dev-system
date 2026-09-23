@@ -23,6 +23,9 @@ ENV_WEB_DIST = "HADS_WEB_DIST"
 ENV_CONTEXT_INLINE_LIMIT = "HADS_CONTEXT_INLINE_LIMIT_BYTES"
 #: UI-02. 이만큼(초) heartbeat 가 없으면 PC 미연결로 본다. 상세 설계 제안값이다.
 ENV_RUNNER_STALE_SECONDS = "HADS_RUNNER_STALE_SECONDS"
+#: UI-03. 사용자 요청을 제어부가 논의 응답으로 자동 처리하는가. 기본 켜짐. 끄면 UI-01 의
+#: 명시 처리 계약(처리하는 쪽이 실행을 만들고 종료를 적는다) 그대로다.
+ENV_AUTO_PROCESS_REQUESTS = "HADS_AUTO_PROCESS_REQUESTS"
 
 DEFAULT_HOST = "127.0.0.1"  # 로컬 기본 접점은 루프백이다(implementation-baseline 2절)
 DEFAULT_PORT = 8765
@@ -38,6 +41,9 @@ class ControllerConfig:
     context_inline_limit_bytes: int = DEFAULT_INLINE_LIMIT_BYTES
     #: UI-02. PC 미연결 판정 기준(초). 미연결 PC 로 가는 사용자 입력은 받지 않는다(D-75).
     runner_stale_seconds: float = DEFAULT_RUNNER_STALE_SECONDS
+    #: UI-03. 요청 처리기. 켜져 있으면 저장된 사용자 요청마다 읽기 전용 논의 응답 하나를 만들고
+    #: 그 결과로 요청을 끝낸다. 운영 설정이며 시험 분기가 아니다.
+    auto_process_requests: bool = True
 
     @property
     def db_path(self) -> Path:
@@ -70,6 +76,10 @@ def load_config() -> ControllerConfig:
     if stale_seconds <= 0:
         # 0 이하면 모든 PC 가 늘 미연결이다. 기동 시점에 드러낸다.
         raise ValueError(f"{ENV_RUNNER_STALE_SECONDS} must be a positive number of seconds")
+    auto_raw = (os.environ.get(ENV_AUTO_PROCESS_REQUESTS) or "1").strip().lower()
+    if auto_raw not in ("1", "0", "true", "false", "on", "off"):
+        # 모르는 값을 켜짐·꺼짐 어느 쪽으로도 읽지 않는다. 기동 시점에 드러낸다.
+        raise ValueError(f"{ENV_AUTO_PROCESS_REQUESTS} must be 1 or 0")
     return ControllerConfig(
         data_root=data_root,
         host=os.environ.get(ENV_HOST, DEFAULT_HOST),
@@ -77,4 +87,5 @@ def load_config() -> ControllerConfig:
         web_dist=web_dist,
         context_inline_limit_bytes=inline_limit,
         runner_stale_seconds=stale_seconds,
+        auto_process_requests=auto_raw in ("1", "true", "on"),
     )

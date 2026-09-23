@@ -19,6 +19,7 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from controller.relay import content_hash
+from controller.request_processor import RequestProcessor
 from controller.repository import (
     AcceptanceRefused,
     ConflictError,
@@ -90,7 +91,28 @@ def _repo(request: Request) -> Repository:
         request.app.state.conn,
         context_inline_limit=request.app.state.config.context_inline_limit_bytes,
         runner_stale_seconds=request.app.state.config.runner_stale_seconds,
+        auto_process_requests=request.app.state.config.auto_process_requests,
     )
+
+
+def _processor(request: Request, repo: Repository) -> RequestProcessor:
+    """UI-03. 요청 처리기. 설정으로 꺼져 있으면 아무 것도 하지 않는다."""
+    return RequestProcessor(repo, enabled=request.app.state.config.auto_process_requests)
+
+
+def _after_report(request: Request, step: str, fn: Any, *args: Any) -> None:
+    """UI-03. Runner 보고 **뒤에** 처리기를 부른다. 처리기의 실패가 보고를 실패시키지 않는다.
+
+    보고는 이미 기록됐다 — 여기서 예외를 올리면 Runner 가 같은 보고를 되풀이하고, 처리기의
+    결함 하나가 원문 저장·결과 보고를 막는다. 실패는 로그에 남기고(본문 없음) 요청은 처리
+    중으로 남는다. 다음 보고나 제어부 기동 복구가 다시 본다.
+    """
+    try:
+        fn(*args)
+    except Exception as exc:  # noqa: BLE001 — 보고 경로를 지키는 경계다
+        request.app.state.logger.error(
+            "request_processor_error step=%s error=%s", step, type(exc).__name__
+        )
 
 
 def _handle(exc: Exception) -> HTTPException:
@@ -277,6 +299,9 @@ class ResultIn(BaseModel):
     residual_terminated: int | None = Field(default=None, ge=0)
     #: UI-02. 결과 보고(`result`)인가, 재시작한 Runner 의 원장 대조(`reconcile`)인가.
     residual_source: ResidualSource = ResidualSource.RESULT
+    #: UI-03. 준비 단계 논의 응답의 **해석**(`{status, kind?, profile?}`). 본문이 아니다 — AI 가
+    #: 사용자의 마지막 메시지를 논의로 읽었는지, 어느 Profile 의 업무 요청으로 읽었는지뿐이다.
+    interpretation: dict[str, Any] | None = None
 
 
 class ExecutingIn(BaseModel):
@@ -380,7 +405,13 @@ def create_project(
 
 @router.get("/api/projects")
 def list_projects(request: Request) -> list[dict[str, Any]]:
-    return _repo(request).list_projects()
+    """프로젝트 목록. UI-03 부터 행마다 **주의 상태**(답변 필요·실행 상태 확인 필요·처리 중
+    수)를 싣는다 — 선택기가 다른 프로젝트의 상태를 알리되 자동으로 옮기지 않는다(D-68)."""
+    repo = _repo(request)
+    return [
+        {**project, "attention": repo.project_attention(project["id"])}
+        for project in repo.list_projects()
+    ]
 
 
 @router.get("/api/projects/{project_id}")
@@ -472,6 +503,18 @@ def get_case(request: Request, case_id: str) -> dict[str, Any]:
     return case
 
 
+def _relay_first(request: Request, body: bytes) -> str:
+    """UI-03. 접수 식별자를 먼저 정하고 본문을 **기록 전에** 중계 버퍼에 넣는다.
+
+    UI-01 은 메시지 경로만 이 순서였다. 나머지 경로는 커밋 뒤에 넣어서, 그 사이에 Runner 가
+    폴링하면 본문 없는 접수가 `lost_before_persist` 로 표시됐다. 호출자는 기록이 실패하면
+    버퍼에서 뺀다 — 거부된 입력이 버퍼에 남지 않는다.
+    """
+    intake_id = ids.new_intake_id()
+    request.app.state.relay.put(intake_id, body)
+    return intake_id
+
+
 @router.post("/api/cases/{case_id}/artifacts", status_code=202)
 def submit_artifact(request: Request, case_id: str, payload: ArtifactIn) -> dict[str, Any]:
     """원문을 접수한다. **저장 완료가 아니다.**
@@ -482,6 +525,8 @@ def submit_artifact(request: Request, case_id: str, payload: ArtifactIn) -> dict
     repo = _repo(request)
     body = payload.content.encode("utf-8")
     digest = content_hash(body)
+    # UI-03. 본문을 **기록보다 먼저** 중계한다(메시지 경로와 같은 순서). 기록되지 않으면 뺀다.
+    intake_id = _relay_first(request, body)
     try:
         intake = repo.open_intake(
             case_id=case_id,
@@ -490,10 +535,14 @@ def submit_artifact(request: Request, case_id: str, payload: ArtifactIn) -> dict
             expected_hash=digest,
             byte_size=len(body),
             summary=payload.summary,
+            intake_id=intake_id,
         )
     except (NotFoundError, ConflictError) as exc:
+        request.app.state.relay.drop(intake_id)
         raise _handle(exc)
-    request.app.state.relay.put(intake["id"], body)
+    except BaseException:
+        request.app.state.relay.drop(intake_id)
+        raise
     return {
         "intake_id": intake["id"],
         "artifact_id": intake["artifact_id"],
@@ -674,7 +723,13 @@ def reassign(request: Request, run_id: str) -> dict[str, Any]:
 
 @router.get("/api/runners")
 def list_runners(request: Request) -> list[dict[str, Any]]:
-    return _repo(request).list_runners()
+    """Runner 목록. UI-03 부터 행마다 **연결 상태**를 싣는다 — 대화 조회와 같은 도출
+    (`runner_connection_state`)이다. 화면이 heartbeat 시각으로 따로 판단하지 않는다."""
+    repo = _repo(request)
+    return [
+        {**runner, "connection": repo.runner_connection_state(runner["id"], "listed")}
+        for runner in repo.list_runners()
+    ]
 
 
 # ------------------------------------------------------------ runner-facing
@@ -784,6 +839,8 @@ def runner_intake_stored(request: Request, intake_id: str, payload: StoredIn) ->
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
     request.app.state.relay.drop(intake_id)  # 중계 본문은 즉시 버린다
+    # UI-03. 요청을 연 메시지가 저장됐으면 처리기가 논의 응답을 만든다(저장 전에는 만들지 않는다).
+    _after_report(request, "intake_stored", _processor(request, repo).on_intake_stored, intake)
     return intake
 
 
@@ -824,8 +881,9 @@ def runner_events(request: Request, run_id: str, payload: EventsIn) -> dict[str,
 
 @router.post("/api/runner/runs/{run_id}/result")
 def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str, Any]:
+    repo = _repo(request)
     try:
-        return _repo(request).report_result(
+        run = repo.report_result(
             run_id=run_id,
             generation=payload.generation,
             outcome=payload.outcome,
@@ -842,9 +900,13 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             residual_terminated=payload.residual_terminated,
             residual_source=payload.residual_source,
             reporter=payload.runner_id,
+            interpretation=payload.interpretation,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # UI-03. 요청의 마지막 실행이 끝났으면 처리기가 (해석을 적용하고) 요청을 끝낸다.
+    _after_report(request, "run_finished", _processor(request, repo).on_run_finished, run_id)
+    return repo.get_run(run_id)
 
 
 @router.post("/api/runner/runs/{run_id}/context-receipt")
@@ -1099,6 +1161,7 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
         raise HTTPException(status_code=400, detail=str(exc))
 
     digest = content_hash(body)
+    intake_id = _relay_first(request, body)
     try:
         intake = repo.open_intake(
             case_id=case_id,
@@ -1107,6 +1170,7 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
             expected_hash=digest,
             byte_size=len(body),
             summary=payload.summary,
+            intake_id=intake_id,
         )
         intent = repo.create_intent_version(case_id, intake["artifact_id"], intake["revision"])
         if payload.reflects_feedback or payload.not_reflected:
@@ -1114,9 +1178,14 @@ def submit_intent_draft(request: Request, case_id: str, payload: IntentDraftIn) 
                 payload.reflects_feedback, intent["id"], payload.not_reflected
             )
     except (NotFoundError, ConflictError) as exc:
+        # 접수까지 기록됐다면 그 접수는 본문 없이 남아 유실로 표시된다 — 이전과 같다. 의도
+        # 버전 없는 원문을 PC 에 저장하지 않는다.
+        request.app.state.relay.drop(intake_id)
         raise _handle(exc)
+    except BaseException:
+        request.app.state.relay.drop(intake_id)
+        raise
 
-    request.app.state.relay.put(intake["id"], body)
     return {
         "intake_id": intake["id"],
         "artifact_id": intake["artifact_id"],
@@ -1248,6 +1317,10 @@ def submit_feedback(request: Request, case_id: str, payload: FeedbackIn) -> dict
         _guard_user_input(repo, case_id)
         # UI-02. 원문을 저장할 PC 가 미연결이면 받지 않는다(D-75).
         repo.guard_runner_connected(payload.target_runner_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    intake_id = _relay_first(request, body)
+    try:
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -1255,6 +1328,7 @@ def submit_feedback(request: Request, case_id: str, payload: FeedbackIn) -> dict
             expected_hash=digest,
             byte_size=len(body),
             summary=payload.summary,
+            intake_id=intake_id,
         )
         feedback = repo.record_feedback(
             case_id=case_id,
@@ -1265,8 +1339,11 @@ def submit_feedback(request: Request, case_id: str, payload: FeedbackIn) -> dict
             summary=payload.summary,
         )
     except (NotFoundError, ConflictError) as exc:
+        request.app.state.relay.drop(intake_id)
         raise _handle(exc)
-    request.app.state.relay.put(intake["id"], body)
+    except BaseException:
+        request.app.state.relay.drop(intake_id)
+        raise
     return {
         "intake_id": intake["id"],
         "feedback": feedback,
@@ -1354,6 +1431,10 @@ def answer_question(
         repo.check_question_answerable(case_id, question_id)
         # UI-02. 카드 답변도 PC 가 미연결이면 받지 않는다(D-75). 원문을 열기 전이다.
         repo.guard_runner_connected(payload.target_runner_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    intake_id = _relay_first(request, body)
+    try:
         intake = repo.open_intake(
             case_id=case_id,
             kind=ArtifactKind.FEEDBACK,
@@ -1361,11 +1442,15 @@ def answer_question(
             expected_hash=digest,
             byte_size=len(body),
             summary=payload.summary,
+            intake_id=intake_id,
         )
         answered = repo.answer_question(question_id, payload.actor, intake["artifact_id"])
     except (NotFoundError, ConflictError) as exc:
+        request.app.state.relay.drop(intake_id)
         raise _handle(exc)
-    request.app.state.relay.put(intake["id"], body)
+    except BaseException:
+        request.app.state.relay.drop(intake_id)
+        raise
     return {
         "question": answered,
         "intake_id": intake["id"],

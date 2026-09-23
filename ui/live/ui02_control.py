@@ -114,6 +114,9 @@ class System:
     def _env(self, **extra: str) -> dict[str, str]:
         env = dict(os.environ)
         env.update({"PYTHONPATH": str(REPO_ROOT), "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+        # UI-03. 이 하네스는 요청을 **스스로 처리한다**(실행을 만들고 종료를 적는다). 제어부의
+        # 요청 처리기가 켜져 있으면 같은 요청에 응답이 둘 생긴다 — UI-01 명시 계약으로 둔다.
+        env["HADS_AUTO_PROCESS_REQUESTS"] = "0"
         env.update(extra)
         return env
 
