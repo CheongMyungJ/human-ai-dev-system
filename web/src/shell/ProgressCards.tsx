@@ -676,6 +676,10 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
       <div className="sh-muted">
         앞으로 이 프로젝트의 해당 작업에 원문과 함께 주입된다. 옮긴 내용이 다르면 무효로 하고 다시 말한다. 주입은 준수의 증거가 아니다.
       </div>
+      <div className="sh-muted" data-testid="knowledge-card-storage">
+        이 규칙의 적용 내용과 이 대화에서 한 그 말 한 건은 <strong>서버에 저장된다</strong>(어느 PC 의 작업에도 주입하기
+        위해). 비밀값이 들어 있으면 무효로 한다.
+      </div>
       {live && r.knowledge_id && (
         <div className="sh-composer-bar">
           <a className="sh-link" href={admin}>

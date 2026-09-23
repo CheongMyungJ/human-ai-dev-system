@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 
 def utc_now() -> str:
@@ -466,6 +466,11 @@ def migrate(conn: sqlite3.Connection) -> None:
         "knowledge_report_json",
         "TEXT CHECK (knowledge_report_json IS NULL OR length(knowledge_report_json) <= 8000)",
     )
+
+    # v23: 지식 원문의 서버 저장(P4-06b, 사용자 결정 2026-09-24). 표 하나(`knowledge_body`)는
+    #      schema.sql 이 만든다. **기존 표를 바꾸지 않고 데이터 이행도 없다** — v22 의 지식 원문과
+    #      권위 메시지는 소유 PC 에 있고, 그 PC 가 연결될 때 올린다(`knowledge_uploads_for`). 없는
+    #      본문을 지어내지 않으며 그때까지 조회는 `storage = runner` 다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

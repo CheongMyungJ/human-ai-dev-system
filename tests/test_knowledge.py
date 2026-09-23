@@ -12,9 +12,10 @@ Manifest 가 무엇을 주고 무엇을 왜 주지 않았는지를 남긴다.
     다른 저장소를 섞지 않는다          같은 경로 이름이라도 다른 저장소의 항목은 주지 않는다
     충돌은 사람이 푼다                적용되는 필수 사이의 열린 충돌은 그 작업만 보류한다
     주입은 준수가 아니다              기준 판정·완료 조건이 지식 제공으로 바뀌지 않는다
-    원문은 PC 에 있다                 서버 DB·로그에 지식 원문이 없다
+    원문은 서버에 있다(P4-06b)        지식 원문은 `knowledge_body` 에만 있고 로그에는 없다 — 다른 표에는 없다
 
-시험 이름 옆의 AC 번호는 P4-PLAN-06 4절이다.
+시험 이름 옆의 AC 번호는 P4-PLAN-06 4절이다. **P4-06b(사용자 결정 2026-09-24)** 로 지식 원문의 집이
+Runner 에서 서버로 옮겨졌다 — 그에 따라 바뀐 단언은 `tests/test_knowledge_server.py` 머리에 적었다.
 """
 
 from __future__ import annotations
@@ -36,6 +37,36 @@ from tests.test_work_progressor import WORK_BLOCK, _agree, _drive, _runs, _wait_
 MARK = "KNOW-7f3a-MARKER"
 
 # ---------------------------------------------------------------- 도우미
+
+
+def marker_tables(db_path: Path, marker: str) -> set[str]:
+    """제어부 DB 에서 표식을 담은 **표 이름**들(P4-06b). 파일 바이트가 아니라 행을 본다 — 어느 표에
+    있는가가 경계의 질문이기 때문이다(`knowledge_body` 에만 있어야 한다)."""
+    raw = marker.encode("utf-8")
+    conn = sqlite3.connect(db_path)
+    try:
+        tables = [
+            r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        ]
+        found: set[str] = set()
+        for table in tables:
+            for row in conn.execute(f'SELECT * FROM "{table}"').fetchall():
+                for value in row:
+                    if isinstance(value, bytes) and raw in value:
+                        found.add(table)
+                    elif isinstance(value, str) and marker in value:
+                        found.add(table)
+        return found
+    finally:
+        conn.close()
+
+
+def forget_server_body(h, artifact_id: str, revision: int) -> None:
+    """서버 본문을 지운다(시험용 — 제품에 이 경로는 없다). 이행 전·손실을 흉내 낸다."""
+    conn = h.client.app.state.conn
+    conn.execute(
+        "DELETE FROM knowledge_body WHERE artifact_id = ? AND revision = ?", (artifact_id, revision)
+    )
 
 
 def _register(
@@ -262,12 +293,12 @@ def test_registered_rules_reach_every_work_run_as_originals_and_the_manifest_say
     }
     assert not any(r["role"].startswith("knowledge_") for r in h.context_refs(reply["run_id"]))
 
-    # AC-15 — 서버 DB·로그에 원문이 없다(원문은 Runner 저장소에만 있다).
-    root = h.client.app.state.config.data_root
-    for path in root.iterdir():
-        if path.is_file():
-            assert MARK.encode("utf-8") not in path.read_bytes(), path.name
-    assert any(MARK.encode("utf-8") in p.read_bytes() for p in h.agent.store.root.rglob("*.bin"))
+    # AC-15 (P4-06b 로 바뀐 의미) — 지식 원문은 서버 DB 의 **`knowledge_body` 에만** 있고 로그에는 없다.
+    # 사람이 등록한 원문은 Runner 저장소에 가지 않는다(집은 서버다).
+    assert marker_tables(Path(h.controller_config.db_path), MARK) == {"knowledge_body"}
+    assert MARK.encode("utf-8") not in Path(h.controller_config.log_path).read_bytes()
+    assert not any(MARK.encode("utf-8") in p.read_bytes() for p in h.agent.store.root.rglob("*.bin"))
+    assert all(r["body_source"] == "server" for r in h.context_refs(work[0]["run_id"]) if r["role"].startswith("knowledge_"))
 
 
 # ================================================== AC-4·8 저장소·경로 범위
@@ -320,14 +351,15 @@ def test_repository_scope_does_not_mix_repositories_and_follows_scope_expansion(
 
 def test_an_unreadable_required_rule_stops_the_run_and_a_reference_does_not(processing_harness):
     """AC-6 — 필수 원문을 Runner 가 읽지 못하면 CLI 를 부르지 않는다(시작하지 않음). 참고 원문을 못
-    읽으면 부분 문맥이며 응답은 나간다. 저장 전(`pending`)의 필수는 진입 전에 핵심 미확인이다.
+    읽으면 부분 문맥이며 응답은 나간다. P4-06b: 읽지 못함은 **서버 본문이 없고 이 PC 에도 없음**이다
+    (사람이 등록한 원문은 서버에만 있다). 등록은 저장 보고 없이 바로 `available` 이다.
     """
     h = processing_harness
     # 참고 — 막지 않는다.
     project = h.create_project("kn-ref")
     rules = h.create_conversation(project["id"], "규칙")["case_id"]
     ref = _register(h, rules, "참고 사실", "참고", obligation="reference", activities=["discussion"])
-    h.agent.store._path(ref["artifact_id"], ref["artifact_rev"]).unlink()
+    forget_server_body(h, ref["artifact_id"], ref["artifact_rev"])
     talk = h.create_conversation(project["id"], "대화")["case_id"]
     h.send_message(talk, "질문이 있어", "c-1")
     h.agent.poll_once()
@@ -339,7 +371,7 @@ def test_an_unreadable_required_rule_stops_the_run_and_a_reference_does_not(proc
     project = h.create_project("kn-req")
     rules = h.create_conversation(project["id"], "규칙")["case_id"]
     req = _register(h, rules, "필수 사실", "필수", activities=["discussion"])
-    h.agent.store._path(req["artifact_id"], req["artifact_rev"]).unlink()
+    forget_server_body(h, req["artifact_id"], req["artifact_rev"])
     talk = h.create_conversation(project["id"], "대화")["case_id"]
     h.send_message(talk, "질문이 있어", "c-1")
     h.agent.poll_once()
@@ -351,15 +383,19 @@ def test_an_unreadable_required_rule_stops_the_run_and_a_reference_does_not(proc
     receipt = [r for r in h.context_refs(reply["run_id"]) if r["role"] == "knowledge_required"]
     assert receipt[0]["receipt_status"] == "missing"
 
-    # 저장 전 — 진입 검사의 핵심 미확인이다.
-    pending = _register(h, rules, "아직 저장 전", "대기", activities=["discussion"], persist=False)
+    # P4-06b — 등록은 저장 보고 없이 바로 `available` 이고(`pending` 이 없다) 진입 검사의 핵심 미확인에
+    # 걸리지 않는다. 옛 P4-06 에서는 Runner 저장 보고 전까지 `pending` 이었다.
+    intakes_before = h.intake_count()
+    stored = _register(h, rules, "바로 저장됨", "즉시", activities=["discussion"], persist=False)
+    assert stored["storage"] == "server"
+    assert h.intake_count() == intakes_before  # 접수(중계) 경로를 쓰지 않는다
+    artifacts = h.client.get(f"/api/cases/{rules}").json()["artifacts"]
+    assert next(a for a in artifacts if a["artifact_id"] == stored["artifact_id"])["availability"] == "available"
     plan = _repo(h).plan_context_package(
         talk, RunPurpose.DISCUSSION_REPLY, None, _instruction(h, talk)
     )
-    unavailable = _repo(h)._unavailable_core(plan)
-    assert any(
-        u["artifact_id"] == pending["artifact_id"] and u["availability"] == "pending"
-        for u in unavailable
+    assert not any(
+        u["artifact_id"] == stored["artifact_id"] for u in _repo(h)._unavailable_core(plan)
     )
 
 

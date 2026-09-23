@@ -696,9 +696,15 @@ def test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated(stac
     expect(card).to_contain_text("필수")
     expect(card).to_have_attribute("data-state", "active")
     expect(page.locator('article[data-author="assistant"]').last).not_to_contain_text("hads-knowledge")
+    # P4-06b — 카드가 "서버에 저장됨" 을 알린다. 옮긴 글과 권위 메시지가 서버에 있다.
+    expect(card.locator('[data-testid="knowledge-card-storage"]')).to_contain_text("서버에 저장")
     view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
     current = view["items"][0]["current"]
     assert (current["authority_kind"], current["state"]) == ("user_statement", "active")
+    assert (current["storage"], current["source_storage"]) == ("server", "server")
+    with stack.db() as conn:
+        purposes = sorted(r["purpose"] for r in conn.execute("SELECT purpose FROM knowledge_body"))
+    assert purposes == ["authority_message", "knowledge"]
 
     card.locator('[data-testid="knowledge-invalidate"]').click()
     card.locator('[data-testid="knowledge-invalidate-reason"]').fill("옮긴 내용이 내 말과 다르다")
@@ -712,6 +718,9 @@ def test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated(stac
     panel = page.locator('[data-testid="knowledge-panel"]')
     expect(panel).to_be_visible(timeout=30_000)
     expect(panel.locator('[data-testid="knowledge-K-001"]')).to_contain_text("무효")
+    # P4-06b — 등록 안내: 서버 저장 · 비밀값 금지.
+    expect(panel.locator('[data-testid="knowledge-storage-note"]')).to_contain_text("서버에 저장")
+    expect(panel.locator('[data-testid="knowledge-storage-note"]')).to_contain_text("비밀값")
     panel.locator('[data-testid="knowledge-content"]').fill("배포 전에는 반드시 시험을 돌린다. 예외: 문서만 바뀐 경우")
     panel.locator('[data-testid="knowledge-summary"]').fill("배포 전 시험")
     panel.locator('[data-testid="knowledge-register"]').click()
@@ -719,4 +728,11 @@ def test_a_rule_said_in_the_conversation_gets_a_card_and_can_be_invalidated(stac
     view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
     second = view["items"][1]["current"]
     assert (second["authority_kind"], second["obligation"]) == ("user_registration", "required")
+    assert second["storage"] == "server"
+    expect(panel.locator('[data-testid="knowledge-storage-K-002"]')).to_contain_text("서버 저장")
+    # 내용 보기 — 열람 경로로 서버 본문이 온다.
+    panel.locator('[data-testid="knowledge-show-K-002"]').click()
+    expect(panel.locator('[data-testid="knowledge-body-K-002"]')).to_contain_text(
+        "배포 전에는 반드시 시험을 돌린다", timeout=15_000
+    )
     page.context.close()

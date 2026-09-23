@@ -1522,6 +1522,30 @@ class Harness:
         finally:
             conn.close()
 
+    # ------------------------------------------------------ P4-06b 도우미
+
+    def second_runner(self, runner_id: str = "runner-test-2") -> RunnerAgent:
+        """**둘째 PC**(P4-06b). 별도 원문 저장소·원장·가짜 CLI 를 가진 Runner 를 같은 제어부에 등록한다.
+
+        두 PC 를 흉내 내는 시험이 쓴다 — 한 PC 에서 등록한 지식이 다른 PC 의 실행에 들어가는가. 이
+        Runner 는 스스로 돌지 않는다(`poll_once` 를 부른다). `h.agent = h.second_runner()` 로 바꿔
+        두면 기존 도우미(`send_message` 는 `target_runner_id` 를 넘겨야 한다)가 그 PC 로 돈다.
+        """
+        config = RunnerConfig(
+            runner_id=runner_id,
+            controller_url="http://testserver",
+            data_root=self.tmp_path / runner_id,
+            host_name=f"host-{runner_id}",
+        )
+        agent = RunnerAgent(
+            config,
+            ControllerClient("http://testserver", client=self.client),
+            cli_executor=FakeCliExecutor(config.effects_dir),
+            capabilities=fake_capabilities(),
+        )
+        agent.register()
+        return agent
+
 
 #: UI-02. 시험 하네스의 PC 미연결 기준(초). 하네스의 Runner 는 `poll_once` 를 부를 때만
 #: heartbeat 를 보내므로 기본값(15초)이면 느린 시험이 우연히 "PC 미연결"에 걸린다. 미연결을

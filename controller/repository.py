@@ -4,11 +4,15 @@
 아래 두 가지는 여기서 지킨다.
 
   - 원문 본문을 저장하지 않는다. 본문을 받는 인자가 없다.
+    **예외 하나(P4-06b, 사용자 결정 2026-09-24):** 지식 원문과 자동 등록 규칙의 권위 사용자 메시지
+    한 건은 `knowledge_body` 에 저장한다 — 어느 PC 의 실행에도 주입하기 위해서다. 그 경로만 본문을
+    받는다(`store_knowledge_original`·`store_knowledge_body_from_runner`). 로그에는 남기지 않는다.
   - 같은 `run_id` 는 두 번 만들어지지 않는다.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import sqlite3
@@ -1383,6 +1387,18 @@ class Repository:
         # 영수증을 보고하고, 핵심을 못 읽으면 CLI 를 부르지 않는다. 지시 원문의 해시도
         # 같은 이유로 준다.
         run["context_refs"] = self.list_context_refs(run_id)
+        # P4-06b. **서버 본문이 있는 참조는 본문을 싣는다**(지식 원문·권위 메시지 — 사용자 결정
+        # 2026-09-24). 다른 PC 의 실행도 그 규칙을 읽을 수 있어야 한다. Runner 는 실린 본문을 참조의
+        # 해시와 대조해 맞을 때만 쓴다(영수증 `read`) — 다르면 읽지 못한 것이다. 다른 원문은
+        # 여전히 참조뿐이다.
+        for ref in run["context_refs"]:
+            if ref.get("body_source") != "server":
+                continue
+            if ref["inclusion"] != ContextInclusion.INLINE.value:
+                continue
+            held = self.knowledge_body_for(ref["artifact_id"], ref["revision"])
+            if held is not None:
+                ref["body_b64"] = base64.b64encode(held["body"]).decode("ascii")
         run["instruction_content_hash"] = self.get_artifact_ref(
             run["instruction_artifact_id"], run["instruction_artifact_rev"]
         )["content_hash"]
@@ -2439,33 +2455,64 @@ class Repository:
     # ------------------------------------------------------ 원문 열람 요청
 
     def open_read_request(
-        self, artifact_id: str, revision: int, requested_by: str
+        self,
+        artifact_id: str,
+        revision: int,
+        requested_by: str,
+        *,
+        request_id: str | None = None,
+        served_by_server: tuple[str, int] | None = None,
     ) -> dict[str, Any]:
         """원문 열람을 요청한다. 대상은 Case에 속한 (artifact_id, revision) 뿐이다.
 
         경로를 받지 않는다 — 임의 파일 다운로드 API로 만들지 않기 위해서다
         (data-boundary-review 3절).
+
+        P4-06b. `served_by_server=(해시, 크기)` 면 **서버가 본문을 가진 원문**(지식 원문·권위 메시지)
+        이다 — 요청을 만들면서 바로 `relayed` 로 두고 소유 PC 에는 넣지 않는다. 호출자가 본문을
+        중계 버퍼에 그 `request_id` 로 먼저 넣는다(기록 전 중계, `_relay_first` 와 같은 순서).
         """
         ref = self.get_artifact_ref(artifact_id, revision)
         if ref["availability"] == Availability.LOST_BEFORE_PERSIST.value:
             raise ConflictError("original was lost before it was persisted; nothing to read")
-        request_id = ids.new_read_request_id()
+        request_id = request_id or ids.new_read_request_id()
+        now = utc_now()
         with transaction(self.conn):
-            self.conn.execute(
-                "INSERT INTO artifact_read_request (id, case_id, artifact_id, revision,"
-                " owner_runner_id, requested_by, state, requested_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    request_id,
-                    ref["case_id"],
-                    artifact_id,
-                    revision,
-                    ref["owner_runner_id"],
-                    requested_by,
-                    ReadRequestState.PENDING.value,
-                    utc_now(),
-                ),
-            )
+            if served_by_server is None:
+                self.conn.execute(
+                    "INSERT INTO artifact_read_request (id, case_id, artifact_id, revision,"
+                    " owner_runner_id, requested_by, state, requested_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        request_id,
+                        ref["case_id"],
+                        artifact_id,
+                        revision,
+                        ref["owner_runner_id"],
+                        requested_by,
+                        ReadRequestState.PENDING.value,
+                        now,
+                    ),
+                )
+            else:
+                self.conn.execute(
+                    "INSERT INTO artifact_read_request (id, case_id, artifact_id, revision,"
+                    " owner_runner_id, requested_by, state, content_hash, byte_size, requested_at,"
+                    " relayed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        request_id,
+                        ref["case_id"],
+                        artifact_id,
+                        revision,
+                        ref["owner_runner_id"],
+                        requested_by,
+                        ReadRequestState.RELAYED.value,
+                        served_by_server[0],
+                        int(served_by_server[1]),
+                        now,
+                        now,
+                    ),
+                )
         return self.get_read_request(request_id)
 
     def get_read_request(self, request_id: str) -> dict[str, Any]:
@@ -7058,6 +7105,10 @@ class Repository:
             meta = knowledge_meta.get(item["seq"])
             if meta is not None:
                 item["knowledge"] = meta
+            # P4-06b. 본문이 어디에 있는가 — 서버(지식 원문·권위 메시지)면 배정이 본문을 싣는다.
+            item["body_source"] = (
+                "server" if self._has_server_body(item["artifact_id"], item["revision"]) else "runner"
+            )
             out.append(item)
         return out
 
@@ -12542,11 +12593,25 @@ class Repository:
 
     KNOWLEDGE_KEY_PREFIX = "K-"
 
-    @staticmethod
-    def _knowledge_version_row(row: Any) -> dict[str, Any]:
+    def _knowledge_version_row(self, row: Any) -> dict[str, Any]:
         item = dict(row)
         item["paths"] = json.loads(item.pop("paths_json", None) or "[]")
         item["activities"] = json.loads(item.pop("activities_json", None) or "[]")
+        # P4-06b. 본문이 어디에 있는가 — `server` 면 어느 PC 의 실행에도 주입된다. `runner` 는 소유 PC
+        # 에만 있는 옛 원문(이행 전)이다. 권위 메시지도 같다(없으면 `None`).
+        item["storage"] = (
+            "server" if self._has_server_body(item["artifact_id"], item["artifact_rev"]) else "runner"
+        )
+        item["source_storage"] = None
+        if item.get("source_message_id"):
+            row = self.conn.execute(
+                "SELECT artifact_id, artifact_rev FROM conversation_message WHERE id = ?",
+                (item["source_message_id"],),
+            ).fetchone()
+            if row is not None:
+                item["source_storage"] = (
+                    "server" if self._has_server_body(row["artifact_id"], row["artifact_rev"]) else "runner"
+                )
         return item
 
     def get_knowledge_item(self, knowledge_id: str) -> dict[str, Any]:
@@ -13133,9 +13198,11 @@ class Repository:
             "items": items,
             "conflicts": conflicts,
             "note": (
-                "원문(적용 내용·조건·예외)은 등록한 대화의 PC 에 있다. 필수는 실행의 범위·활동에"
-                " 해당할 때 원문으로 주입되고, 원문을 읽을 수 없으면 그 실행은 보류된다. 주입은 준수의"
-                " 증거가 아니며 모든 관련 지식을 찾았다는 뜻도 아니다"
+                "적용 내용(조건·예외)과 대화에서 자동 등록된 규칙의 권위 메시지 한 건은 서버에 저장된다"
+                " — 비밀값(토큰·비밀번호·키)을 적지 말 것. 필수는 실행의 범위·활동에 해당할 때 어느 PC 의"
+                " 실행에도 원문으로 주입되고, Runner 는 해시가 맞을 때만 쓴다. 'PC 에만' 인 옛 원문은"
+                " 소유 PC 가 연결되면 올라온다. 주입은 준수의 증거가 아니며 모든 관련 지식을 찾았다는"
+                " 뜻도 아니다"
             ),
         }
 
@@ -13262,6 +13329,11 @@ class Repository:
                     "refusal": None if version else refusal,
                 }
             )
+        # P4-06b. Runner 가 응답과 함께 올린 권위 메시지 본문은 **이 보고에서 하나라도 등록됐을 때만**
+        # 남긴다. 전부 거부됐으면 권위가 될 버전이 없으므로 지운다(다른 버전이 그 메시지를 권위로
+        # 가리키면 남는다). 서버가 갖는 사용자 메시지는 자동 등록 규칙의 권위 한 건뿐이어야 한다.
+        if opening_id is not None and out:
+            self.drop_unused_authority_body(opening_id)
         return out
 
     def knowledge_registrations_view(self, case_id: str) -> list[dict[str, Any]]:
@@ -13288,8 +13360,255 @@ class Repository:
                 current = self.current_knowledge_version(item["knowledge_id"])
                 item["current_version"] = current["version"] if current else None
                 item["current_state"] = current["state"] if current else None
+                # P4-06b. 등록된 버전의 본문·권위 메시지가 서버에 있는가(카드가 보인다).
+                registered = self.get_knowledge_version(item["version_id"])
+                item["storage"] = registered["storage"]
+                item["source_storage"] = registered["source_storage"]
             out.append(item)
         return out
+
+    # ================================================================== P4-06b
+    #
+    # 지식 원문의 서버 저장(사용자 결정 2026-09-24, D-67 보충). `knowledge_body` 는 이 DB 의 **유일한
+    # 본문 표**다 — 지식 원문(종류 `knowledge`)과 자동 등록 규칙의 권위 사용자 메시지 한 건만 들어간다.
+    # 다른 원문(대화 전체·응답·의도·설계·계획·코드)의 경계는 그대로다. 여기서는 본문을 로그·문자열로
+    # 만들지 않는다 — 바이트를 표에 넣고 배정·열람에 실을 뿐이다.
+
+    #: 지식 적용 내용의 상한(문자). Runner 의 자동 등록(`domain.knowledge.MAX_CONTENT_CHARS`)과 같다 —
+    #: 짧은 적용 내용이 계약이며 긴 문서를 지식으로 복제하지 않는다(project-knowledge 1절).
+    KNOWLEDGE_CONTENT_MAX_CHARS = knowmod.MAX_CONTENT_CHARS
+    #: 서버 본문 한 건의 바이트 상한(표의 CHECK 와 같다). P4-04 인라인 한도 기본값이다.
+    KNOWLEDGE_BODY_MAX_BYTES = 256 * 1024
+
+    def _has_server_body(self, artifact_id: str, revision: int) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM knowledge_body WHERE artifact_id = ? AND revision = ?",
+            (artifact_id, int(revision)),
+        ).fetchone()
+        return row is not None
+
+    def knowledge_body_for(self, artifact_id: str, revision: int) -> dict[str, Any] | None:
+        """서버가 보관하는 원문(본문 포함). 없으면 `None` — 소유 PC 에만 있거나(이행 전) 지식이 아니다."""
+        row = self.conn.execute(
+            "SELECT * FROM knowledge_body WHERE artifact_id = ? AND revision = ?",
+            (artifact_id, int(revision)),
+        ).fetchone()
+        if row is None:
+            return None
+        item = dict(row)
+        item["body"] = bytes(item["body"])
+        return item
+
+    def _insert_knowledge_body(
+        self,
+        artifact_id: str,
+        revision: int,
+        body: bytes,
+        digest: str,
+        purpose: str,
+        stored_by: str,
+        now: str,
+    ) -> None:
+        """본문 행을 넣는다. **호출자의 트랜잭션 안에서 돈다.** 이미 있으면 그대로다(같은 해시만 온다)."""
+        self.conn.execute(
+            "INSERT INTO knowledge_body (artifact_id, revision, body, content_hash, byte_size, purpose,"
+            " stored_by, stored_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(artifact_id, revision) DO NOTHING",
+            (artifact_id, int(revision), sqlite3.Binary(body), digest, len(body), purpose, stored_by, now),
+        )
+
+    def store_knowledge_original(
+        self,
+        case_id: str,
+        runner_id: str,
+        body: bytes,
+        summary: str,
+        *,
+        stored_by: str,
+        artifact_id: str | None = None,
+        revision: int = 1,
+    ) -> dict[str, Any]:
+        """지식 원문을 **서버에** 저장하고 참조를 만든다(중계·접수 없음). 만들 때부터 `available` 이다.
+
+        `runner_id` 는 등록한 대화의 PC(출처)이며 **연결돼 있을 필요가 없다** — 등록된 Runner 면 된다.
+        같은 참조·같은 해시는 그대로 돌려주고 다른 해시는 거부한다. 참조는 있는데 본문이 없는 옛
+        원문(이행 전)이면 본문만 채운다. 종료된 Case 에서도 저장된다 — 지식은 Project 의 것이고 그
+        Case 의 기록·판정을 바꾸지 않는다(P4-06).
+        """
+        self.get_case(case_id)
+        self.get_runner(runner_id)
+        if not body.strip():
+            raise ConflictError("knowledge content is empty")
+        if len(body.decode("utf-8", errors="replace")) > self.KNOWLEDGE_CONTENT_MAX_CHARS:
+            raise ConflictError(
+                f"knowledge content is limited to {self.KNOWLEDGE_CONTENT_MAX_CHARS} characters"
+            )
+        if len(body) > self.KNOWLEDGE_BODY_MAX_BYTES:
+            raise ConflictError("knowledge content is too large")
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        artifact_id = artifact_id or ids.new_artifact_id()
+        revision = int(revision)
+        existing = self.conn.execute(
+            "SELECT * FROM artifact_ref WHERE artifact_id = ? AND revision = ?",
+            (artifact_id, revision),
+        ).fetchone()
+        if existing is not None:
+            if existing["kind"] != ArtifactKind.KNOWLEDGE.value:
+                raise ConflictError(f"{artifact_id}@{revision} is not a knowledge original")
+            if existing["content_hash"] != digest:
+                raise ConflictError("artifact revision already registered with a different hash")
+            if existing["case_id"] != case_id:
+                raise ConflictError("the knowledge original belongs to another case")
+            if self._has_server_body(artifact_id, revision):
+                return dict(existing)
+        now = utc_now()
+        with transaction(self.conn):
+            if existing is None:
+                self.conn.execute(
+                    "INSERT INTO artifact_ref (artifact_id, revision, case_id, kind, content_hash,"
+                    " byte_size, owner_runner_id, availability, summary, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        artifact_id,
+                        revision,
+                        case_id,
+                        ArtifactKind.KNOWLEDGE.value,
+                        digest,
+                        len(body),
+                        runner_id,
+                        Availability.AVAILABLE.value,
+                        _summary(summary),
+                        now,
+                    ),
+                )
+            self._insert_knowledge_body(artifact_id, revision, body, digest, "knowledge", stored_by, now)
+        return self.get_artifact_ref(artifact_id, revision)
+
+    def store_knowledge_body_from_runner(
+        self,
+        runner_id: str,
+        case_id: str,
+        kind: str,
+        artifact_id: str,
+        revision: int,
+        body: bytes,
+        summary: str,
+    ) -> dict[str, Any]:
+        """Runner 가 올린 본문. 받는 것은 둘뿐이다 —
+
+        `knowledge`  새(또는 이행 중인) 지식 원문. 참조가 없으면 만들고, 있으면 해시가 같아야 한다.
+        `message`    자동 등록 규칙의 권위가 될 **사용자 메시지**. 참조가 이미 있어야 하고 해시가 참조와
+                     같아야 하며 소유 Runner 만 올린다. 본문만 채운다.
+
+        어느 쪽도 해시가 다르면 거부한다 — 다른 내용을 그 참조의 원문으로 적지 않는다. 다른 종류는
+        받지 않는다(이 끝점이 원문 경계의 예외를 넓히지 않게).
+        """
+        self.get_runner(runner_id)
+        revision = int(revision)
+        if kind == ArtifactKind.KNOWLEDGE.value:
+            ref = self.conn.execute(
+                "SELECT owner_runner_id FROM artifact_ref WHERE artifact_id = ? AND revision = ?",
+                (artifact_id, revision),
+            ).fetchone()
+            if ref is not None and ref["owner_runner_id"] != runner_id:
+                raise ConflictError("only the owning runner uploads a knowledge original")
+            stored = self.store_knowledge_original(
+                case_id,
+                runner_id,
+                body,
+                summary,
+                stored_by=f"runner:{runner_id}",
+                artifact_id=artifact_id,
+                revision=revision,
+            )
+            return {**stored, "storage": "server"}
+        if kind != ArtifactKind.MESSAGE.value:
+            raise ConflictError(
+                "only knowledge originals and authority user messages are stored on the server"
+            )
+        ref = self.get_artifact_ref(artifact_id, revision)
+        if ref["kind"] != ArtifactKind.MESSAGE.value or ref["case_id"] != case_id:
+            raise ConflictError("the authority message must be a message original of this case")
+        if ref["owner_runner_id"] != runner_id:
+            raise ConflictError("only the owning runner uploads an authority message")
+        if ref["availability"] != Availability.AVAILABLE.value:
+            raise ConflictError(f"the message original is {ref['availability']}")
+        user_message = self.conn.execute(
+            "SELECT 1 FROM conversation_message WHERE artifact_id = ? AND artifact_rev = ? AND author = ?",
+            (artifact_id, revision, MessageAuthor.USER.value),
+        ).fetchone()
+        if user_message is None:
+            raise ConflictError("the authority message must be a user message")
+        digest = "sha256:" + hashlib.sha256(body).hexdigest()
+        if ref["content_hash"] != digest:
+            raise ConflictError("uploaded content does not match the registered hash")
+        if len(body) > self.KNOWLEDGE_BODY_MAX_BYTES:
+            raise ConflictError("the authority message is too large to store on the server")
+        if not self._has_server_body(artifact_id, revision):
+            with transaction(self.conn):
+                self._insert_knowledge_body(
+                    artifact_id, revision, body, digest, "authority_message", f"runner:{runner_id}", utc_now()
+                )
+        return {**ref, "storage": "server"}
+
+    def knowledge_uploads_for(self, runner_id: str) -> list[dict[str, Any]]:
+        """이 Runner 가 올려야 할 원문(이행). **참조·해시뿐이다.**
+
+        소유하고 `available` 인데 서버 본문이 없는 것 중, 어느 지식 버전(상태 무관 — 이력 열람도
+        서버가 채운다)의 원문이거나 어느 버전의 권위 메시지인 것. v22 의 지식과 출처 메시지를 준 수동
+        등록이 여기로 온다. 올리기 전까지 그 원문은 `storage = runner` 다.
+        """
+        self.get_runner(runner_id)
+        rows = self.conn.execute(
+            "SELECT a.artifact_id, a.revision, a.content_hash, a.kind, a.case_id, a.byte_size"
+            " FROM artifact_ref a"
+            " WHERE a.owner_runner_id = ? AND a.availability = ?"
+            "   AND NOT EXISTS (SELECT 1 FROM knowledge_body b"
+            "                   WHERE b.artifact_id = a.artifact_id AND b.revision = a.revision)"
+            "   AND (EXISTS (SELECT 1 FROM knowledge_version v"
+            "                WHERE v.artifact_id = a.artifact_id AND v.artifact_rev = a.revision)"
+            "        OR EXISTS (SELECT 1 FROM knowledge_version v"
+            "                   JOIN conversation_message m ON m.id = v.source_message_id"
+            "                   WHERE m.artifact_id = a.artifact_id AND m.artifact_rev = a.revision))"
+            " ORDER BY a.created_at",
+            (runner_id, Availability.AVAILABLE.value),
+        ).fetchall()
+        return [
+            {
+                "artifact_id": r["artifact_id"],
+                "revision": r["revision"],
+                "content_hash": r["content_hash"],
+                "kind": r["kind"],
+                "case_id": r["case_id"],
+                "byte_size": r["byte_size"],
+            }
+            for r in rows
+        ]
+
+    def drop_unused_authority_body(self, message_id: str) -> bool:
+        """그 메시지를 권위로 가리키는 버전이 없으면 서버의 메시지 본문을 지운다. 하나라도 있으면 남긴다.
+
+        같은 원문을 가리키는 메시지 행이 둘일 수 있으므로(후속 대화의 옮겨 적기, P4-05) 원문 기준으로
+        본다. 지식 원문(`purpose = knowledge`)은 건드리지 않는다.
+        """
+        try:
+            message = self.get_message(message_id)
+        except NotFoundError:
+            return False
+        referenced = self.conn.execute(
+            "SELECT 1 FROM knowledge_version v JOIN conversation_message m ON m.id = v.source_message_id"
+            " WHERE m.artifact_id = ? AND m.artifact_rev = ? LIMIT 1",
+            (message["artifact_id"], message["artifact_rev"]),
+        ).fetchone()
+        if referenced is not None:
+            return False
+        with transaction(self.conn):
+            cursor = self.conn.execute(
+                "DELETE FROM knowledge_body WHERE artifact_id = ? AND revision = ?"
+                " AND purpose = 'authority_message'",
+                (message["artifact_id"], message["artifact_rev"]),
+            )
+        return cursor.rowcount > 0
 
     # ================================================================== P4-05
     #

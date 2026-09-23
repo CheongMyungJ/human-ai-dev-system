@@ -1,7 +1,9 @@
 // P4-06. 관리 화면의 **프로젝트 지식** 패널. 등록부(항목·현재 버전·원문 가용성·이력)와 충돌을 보이고,
 // 사람이 이 대화(Case)에서 지식을 등록·활성화·무효화하고 충돌을 기록·해소한다.
 //
-//   **원문은 PC 에 있다.** 이 패널은 요약·메타데이터·참조만 보인다. 원문은 결과물 열람 경로로 연다.
+//   **적용 내용은 서버에 있다**(P4-06b, 사용자 결정 2026-09-24 — 원문 PC 경계의 유일한 예외). 어느 PC 의
+//   실행에도 주입하기 위해서다. 그래서 비밀값을 적지 말라고 알린다. 옛 원문은 소유 PC 가 연결되면
+//   올라온다(`PC 에만`). 이 패널의 "내용 보기"는 열람 경로로 서버 본문을 받는다 — PC 연결과 무관하다.
 //   **등록은 실행 권한이 아니고 주입은 준수의 증거가 아니다.** 필수 규칙이 제공됐다고 지켰다고 보지
 //   않는다 — 준수는 기준 판정·검토가 따로 본다.
 //   **AI 제안은 후보로만** 들어온다. 활성 필수는 사람의 권위(등록·대화의 사용자 말·활성화)뿐이다.
@@ -13,6 +15,7 @@ import {
   KNOWLEDGE_AUTHORITY_LABEL,
   KNOWLEDGE_KIND_LABEL,
   KNOWLEDGE_STATE_LABEL,
+  intentApi,
   knowledgeApi,
   type KnowledgeKind,
   type KnowledgeObligation,
@@ -22,6 +25,24 @@ import {
 function describe(err: unknown): string {
   if (err instanceof ApiError) return `${err.status}: ${err.message}`
   return err instanceof Error ? err.message : String(err)
+}
+
+export const KNOWLEDGE_STORAGE_LABEL: Record<string, string> = {
+  server: '서버 저장',
+  runner: 'PC 에만(소유 PC 가 연결되면 서버로 올라온다)',
+}
+
+// 열람 경로로 본문 한 번 받기. 서버 본문이면 바로 오고, PC 에만 있으면 그 PC 가 올릴 때까지 기다린다.
+async function readBody(artifactId: string, revision: number): Promise<string> {
+  const request = await intentApi.openRead(artifactId, revision)
+  const deadline = Date.now() + 15_000
+  while (Date.now() < deadline) {
+    const result = await intentApi.fetchRead(request.id)
+    if (result.content !== null) return result.content
+    if (result.request.state === 'expired') throw new Error('열람 중계가 끊겼다 — 다시 시도한다')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+  }
+  throw new Error('원문이 제한 시간 안에 오지 않았다(PC 에만 있는 원문은 그 PC 가 연결돼야 한다)')
 }
 
 export function KnowledgePanel(props: { projectId: string; caseId: string; runnerId: string | undefined }) {
@@ -35,6 +56,7 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
   const [activities, setActivities] = useState('')
   const [reason, setReason] = useState('')
   const [pair, setPair] = useState({ a: '', b: '' })
+  const [bodies, setBodies] = useState<Record<string, string>>({})
 
   const load = useCallback(async () => {
     try {
@@ -60,7 +82,8 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
 
   const register = () =>
     guard(async () => {
-      if (!props.runnerId) throw new Error('원문을 보관할 PC(Runner)가 없다')
+      // 출처 PC 다 — 내용은 서버에 저장되므로 그 PC 가 지금 연결돼 있을 필요는 없다.
+      if (!props.runnerId) throw new Error('출처로 적을 PC(Runner)가 없다')
       await knowledgeApi.register(props.caseId, {
         content,
         summary,
@@ -106,6 +129,29 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
                 {current.availability ?? '-'} · <code>{current.artifact_id}@{current.artifact_rev}</code>
                 {current.invalid_reason ? ` · 무효 사유: ${current.invalid_reason}` : ''}
               </div>
+              <div className="muted" data-testid={`knowledge-storage-${item.knowledge_key}`}>
+                내용 {KNOWLEDGE_STORAGE_LABEL[current.storage ?? 'runner']}
+                {current.source_storage
+                  ? ` · 권위 메시지 ${KNOWLEDGE_STORAGE_LABEL[current.source_storage]}`
+                  : ''}{' '}
+                <button
+                  type="button"
+                  data-testid={`knowledge-show-${item.knowledge_key}`}
+                  onClick={() =>
+                    void guard(async () => {
+                      const text = await readBody(current.artifact_id, current.artifact_rev)
+                      setBodies((prev) => ({ ...prev, [item.id]: text }))
+                    })
+                  }
+                >
+                  내용 보기
+                </button>
+              </div>
+              {bodies[item.id] !== undefined && (
+                <pre className="small" data-testid={`knowledge-body-${item.knowledge_key}`}>
+                  {bodies[item.id]}
+                </pre>
+              )}
               {item.versions.length > 1 && (
                 <div className="muted">
                   이력:{' '}
@@ -172,9 +218,10 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
       )}
 
       <h4>이 대화에서 등록</h4>
-      <p className="muted small">
-        적용 내용(조건·예외 포함)은 이 대화의 원문으로 PC 에 저장된다. 사람이 등록한 확정 결정·규칙은 다시 승인받지
-        않고 바로 활성이다. AI 가 제안한 것은 후보로만 적는다.
+      <p className="muted small" data-testid="knowledge-storage-note">
+        적용 내용(조건·예외 포함)은 <strong>서버에 저장된다</strong> — 어느 PC 의 실행에도 주입하기 위해서다.{' '}
+        <strong>비밀값(토큰·비밀번호·키)을 적지 말 것.</strong> 사람이 등록한 확정 결정·규칙은 다시 승인받지 않고
+        바로 활성이다. AI 가 제안한 것은 후보로만 적는다.
       </p>
       <textarea
         rows={3}

@@ -85,6 +85,17 @@ class ControllerClient:
     def register_artifact(self, payload: dict) -> Any:
         return self._post("/api/runner/artifacts", payload)
 
+    # ------------------------------------------------------- P4-06b 지식 원문
+
+    def store_knowledge_original(self, payload: dict) -> Any:
+        """지식 원문·권위 메시지의 **본문**을 서버에 올린다(사용자 결정 2026-09-24). 이 클라이언트가
+        본문을 보내는 유일한 저장 경로다 — 열람 중계(`send_read_content`)는 저장이 아니다."""
+        return self._post("/api/runner/knowledge-originals", payload)
+
+    def knowledge_uploads(self, runner_id: str) -> list[dict]:
+        """서버가 이 Runner 에게 올려 달라는 원문(이행). 참조·해시뿐이다."""
+        return self._get(f"/api/runner/{runner_id}/knowledge-uploads")
+
     # ----------------------------------------------------------------- 실행
 
     def claim_assignments(self, runner_id: str) -> list[dict]:

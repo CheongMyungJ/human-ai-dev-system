@@ -1526,12 +1526,33 @@ def open_read_request(
 
     제어부는 Runner로 접속하지 않는다. 요청을 남겨 두면 소유 Runner가
     자기 요청을 가져가 본문을 올린다.
+
+    P4-06b. **서버가 본문을 가진 원문**(지식 원문·권위 메시지)은 PC 와 무관하게 바로 채운다 — 본문을
+    중계 버퍼에 먼저 넣고 요청을 `relayed` 로 만든다. 받아 가는 경로는 그대로다.
     """
+    repo = _repo(request)
+    held = repo.knowledge_body_for(artifact_id, revision)
+    if held is None:
+        try:
+            return repo.open_read_request(artifact_id, revision, payload.requested_by)
+        except (NotFoundError, ConflictError) as exc:
+            raise _handle(exc)
+    request_id = ids.new_read_request_id()
+    request.app.state.relay.put(request_id, held["body"])
     try:
-        read_request = _repo(request).open_read_request(artifact_id, revision, payload.requested_by)
+        return repo.open_read_request(
+            artifact_id,
+            revision,
+            payload.requested_by,
+            request_id=request_id,
+            served_by_server=(held["content_hash"], held["byte_size"]),
+        )
     except (NotFoundError, ConflictError) as exc:
+        request.app.state.relay.drop(request_id)
         raise _handle(exc)
-    return read_request
+    except BaseException:
+        request.app.state.relay.drop(request_id)
+        raise
 
 
 @router.get("/api/read-requests/{request_id}")
@@ -3733,14 +3754,16 @@ def resume_progress(request: Request, case_id: str, payload: ResumeIn) -> dict[s
 
 
 class KnowledgeIn(BaseModel):
-    """P4-06. 지식 등록. `content` 는 서버에 저장되지 않는다 — 중계 버퍼를 거쳐 Runner 로 간다.
+    """P4-06. 지식 등록. **P4-06b(사용자 결정 2026-09-24): `content` 는 서버에 저장된다** — 중계가
+    아니라 `knowledge_body` 다. 어느 PC 의 실행에도 주입하기 위해서이며, 비밀값을 적지 말라고 화면이
+    알린다. `target_runner_id` 는 등록한 대화의 PC(출처)이며 연결돼 있을 필요가 없다.
 
     `summary` 는 짧은 제목이며 원문 대체가 아니다. 권위는 등록하는 사람이다(`user_registration`,
     기존 확정 결정·규칙의 충실한 등록 — 재승인하지 않는다). AI 가 제안한 것을 적어 두려면
     `authority = ai_proposal` 로 적고 그것은 **후보로만** 들어간다.
     """
 
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=Repository.KNOWLEDGE_CONTENT_MAX_CHARS)
     summary: str = Field(min_length=1, max_length=200)
     kind: str
     obligation: str
@@ -3761,7 +3784,9 @@ class KnowledgeRevisionIn(BaseModel):
 
     reason_summary: str = Field(min_length=1, max_length=200)
     actor: str = Field(default="owner", min_length=1, max_length=120)
-    content: str | None = Field(default=None, min_length=1)
+    content: str | None = Field(
+        default=None, min_length=1, max_length=Repository.KNOWLEDGE_CONTENT_MAX_CHARS
+    )
     case_id: str | None = None
     target_runner_id: str | None = None
     summary: str | None = Field(default=None, min_length=1, max_length=200)
@@ -3786,44 +3811,33 @@ class KnowledgeConflictIn(BaseModel):
     reason_summary: str | None = Field(default=None, max_length=200)
 
 
-def _knowledge_intake(
-    request: Request, repo: Repository, case_id: str, content: str, summary: str, runner_id: str
+def _store_knowledge_content(
+    repo: Repository, case_id: str, content: str, summary: str, runner_id: str, actor: str
 ) -> dict[str, Any]:
-    """지식 원문을 **기록보다 먼저** 중계하고 접수를 연다(`/artifacts` 와 같은 순서)."""
-    body = content.encode("utf-8")
-    intake_id = _relay_first(request, body)
-    try:
-        return repo.open_intake(
-            case_id=case_id,
-            kind=ArtifactKind.KNOWLEDGE,
-            target_runner_id=runner_id,
-            expected_hash=content_hash(body),
-            byte_size=len(body),
-            summary=summary,
-            intake_id=intake_id,
-        )
-    except BaseException:
-        request.app.state.relay.drop(intake_id)
-        raise
+    """P4-06b. 지식 원문을 **서버에** 저장한다(중계·접수 없음). 만들 때부터 `available` 이다."""
+    return repo.store_knowledge_original(
+        case_id, runner_id, content.encode("utf-8"), summary, stored_by=actor
+    )
 
 
 @router.post("/api/cases/{case_id}/knowledge", status_code=201)
 def register_knowledge(request: Request, case_id: str, payload: KnowledgeIn) -> dict[str, Any]:
     """P4-06. 사람이 이 대화(Case)에서 프로젝트 지식을 등록한다.
 
-    원문은 이 Case 의 원문으로 PC 에 저장되고(저장 보고 전에는 `pending` — 필수면 그 사이 주입이
-    보류된다), 서버에는 요약·메타데이터·참조만 남는다. **종료된 Case 에서도 등록할 수 있다** — 지식은
-    Project 의 것이며 그 Case 의 기록·판정을 바꾸지 않는다. 등록은 실행 권한을 만들지 않는다.
+    **P4-06b:** 적용 내용은 이 Case 의 원문으로 **서버에 저장**되고(사용자 결정 2026-09-24) 바로
+    `available` 이다 — PC 가 미연결이어도 등록된다. `target_runner_id` 는 출처 PC 다. **종료된 Case
+    에서도 등록할 수 있다** — 지식은 Project 의 것이며 그 Case 의 기록·판정을 바꾸지 않는다. 등록은
+    실행 권한을 만들지 않는다.
     """
     repo = _repo(request)
     try:
-        intake = _knowledge_intake(
-            request, repo, case_id, payload.content, payload.summary, payload.target_runner_id
+        stored = _store_knowledge_content(
+            repo, case_id, payload.content, payload.summary, payload.target_runner_id, payload.actor
         )
         version = repo.register_knowledge(
             case_id,
-            artifact_id=intake["artifact_id"],
-            artifact_rev=intake["revision"],
+            artifact_id=stored["artifact_id"],
+            artifact_rev=stored["revision"],
             kind=payload.kind,
             obligation=payload.obligation,
             summary=payload.summary,
@@ -3839,7 +3853,7 @@ def register_knowledge(request: Request, case_id: str, payload: KnowledgeIn) -> 
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
-    return {"version": version, "intake_id": intake["id"]}
+    return {"version": version, "storage": "server"}
 
 
 @router.get("/api/projects/{project_id}/knowledge")
@@ -3862,15 +3876,15 @@ def revise_knowledge(
         if payload.content is not None:
             if not payload.case_id or not payload.target_runner_id:
                 raise ConflictError("a new original needs case_id and target_runner_id")
-            intake = _knowledge_intake(
-                request,
+            stored = _store_knowledge_content(
                 repo,
                 payload.case_id,
                 payload.content,
                 payload.summary or "지식 개정",
                 payload.target_runner_id,
+                payload.actor,
             )
-            artifact = (intake["artifact_id"], intake["revision"])
+            artifact = (stored["artifact_id"], stored["revision"])
         version = repo.revise_knowledge(
             knowledge_id,
             actor=payload.actor,
@@ -3946,6 +3960,66 @@ def get_run_knowledge(request: Request, run_id: str) -> dict[str, Any]:
     """P4-06. 한 실행의 지식 Manifest(선택·제공·생략·비적용·범위 미확정). 준수 판정이 아니다."""
     try:
         return _repo(request).run_knowledge_view(run_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+class KnowledgeOriginalIn(BaseModel):
+    """P4-06b. Runner 가 올리는 **서버 보관 본문** — 이 API 의 유일한 본문 저장 경로다.
+
+    `kind = knowledge` 는 옮겨 적은 지식 원문(새 참조 또는 이행 중인 옛 참조), `kind = message` 는
+    자동 등록 규칙의 권위가 될 사용자 메시지(참조가 이미 있어야 하고 해시가 같아야 한다). 다른 종류는
+    받지 않는다.
+    """
+
+    runner_id: str
+    case_id: str
+    kind: ArtifactKind
+    artifact_id: str
+    revision: int = 1
+    content_b64: str
+    content_hash: str
+    summary: str = Field(default="knowledge original", min_length=1, max_length=200)
+
+
+@router.post("/api/runner/knowledge-originals", status_code=201)
+def runner_store_knowledge_original(
+    request: Request, payload: KnowledgeOriginalIn
+) -> dict[str, Any]:
+    """P4-06b. Runner 가 지식 원문·권위 메시지 본문을 서버에 올린다(사용자 결정 2026-09-24).
+
+    해시가 다르면 409 — 다른 내용을 그 참조의 원문으로 적지 않는다. 같은 해시의 재전송은 그대로다.
+    본문은 로그에 남지 않는다(접근 로그는 경로·상태뿐).
+    """
+    body = base64.b64decode(payload.content_b64)
+    if content_hash(body) != payload.content_hash:
+        raise HTTPException(status_code=409, detail="uploaded content does not match its hash")
+    try:
+        stored = _repo(request).store_knowledge_body_from_runner(
+            payload.runner_id,
+            payload.case_id,
+            payload.kind.value,
+            payload.artifact_id,
+            payload.revision,
+            body,
+            payload.summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return {
+        "artifact_id": stored["artifact_id"],
+        "revision": stored["revision"],
+        "content_hash": stored["content_hash"],
+        "availability": stored["availability"],
+        "storage": "server",
+    }
+
+
+@router.get("/api/runner/{runner_id}/knowledge-uploads")
+def runner_knowledge_uploads(request: Request, runner_id: str) -> list[dict[str, Any]]:
+    """P4-06b. 이 Runner 가 서버에 올려야 할 지식 원문·권위 메시지(이행). **참조·해시뿐이다.**"""
+    try:
+        return _repo(request).knowledge_uploads_for(runner_id)
     except NotFoundError as exc:
         raise _handle(exc)
 

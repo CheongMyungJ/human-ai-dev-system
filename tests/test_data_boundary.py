@@ -744,6 +744,36 @@ def test_new_p3_r2_tables_have_no_body_columns(harness):
     conn.close()
 
 
+def test_the_knowledge_body_table_is_the_only_body_table_and_is_bounded(harness):
+    """P4-06b(사용자 결정 2026-09-24): 지식 원문과 자동 등록 규칙의 권위 사용자 메시지 한 건은 **서버에
+    저장된다** — `knowledge_body` 가 이 DB 의 유일한 본문 표다. 그 표는 크기·목적 CHECK 로 묶여 있고,
+    지식의 나머지 표와 `artifact_ref` 에는 여전히 본문 컬럼이 없다. 실제로 지식 외 원문이 그 표에 들어가지
+    않는지는 `tests/test_knowledge_server.py` 가 본다.
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(harness.controller_config.db_path)
+    conn.row_factory = sqlite3.Row
+    body_like = {"content", "body", "text", "raw", "payload", "diff", "log",
+                 "output", "command", "stdout", "stderr", "files", "paths"}
+    for table in ("artifact_ref", "knowledge_item", "knowledge_version", "knowledge_conflict",
+                  "knowledge_intake", "run_knowledge", "intake", "artifact_read_request"):
+        columns = {r["name"] for r in conn.execute(f'PRAGMA table_info("{table}")')}
+        assert columns, f"{table} 이 없다"
+        assert not (columns & body_like), f"{table} 에 본문 컬럼이 있다: {columns & body_like}"
+    body_tables = [
+        r["name"]
+        for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall()
+        if "body" in {c["name"] for c in conn.execute(f'PRAGMA table_info("{r["name"]}")')}
+    ]
+    assert body_tables == ["knowledge_body"]
+    sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'knowledge_body'").fetchone()["sql"]
+    assert "byte_size <= 262144" in sql
+    assert "purpose IN ('knowledge', 'authority_message')" in sql
+    assert "REFERENCES artifact_ref(artifact_id, revision)" in sql
+    conn.close()
+
+
 def test_a_second_repository_diff_body_also_stays_on_the_runner(harness):
     """P3-R2 AC-18: **두 번째 저장소의** 변경 내용도 제어부에 오지 않는다.
 

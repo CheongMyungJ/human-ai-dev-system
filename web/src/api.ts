@@ -195,6 +195,10 @@ export interface KnowledgeVersion {
   invalidated_by: string | null
   invalid_reason: string | null
   availability?: string
+  // P4-06b. 본문이 어디에 있는가 — `server` 면 어느 PC 의 실행에도 주입된다. `runner` 는 소유 PC 에만
+  // 있는 옛 원문(이행 대기)이다. 권위 메시지도 같다(없으면 null).
+  storage?: 'server' | 'runner'
+  source_storage?: 'server' | 'runner' | null
 }
 
 export interface KnowledgeItemView {
@@ -273,12 +277,15 @@ export interface KnowledgeRegistration {
   activities: string[]
   current_version?: number | null
   current_state?: KnowledgeState | null
+  storage?: 'server' | 'runner'
+  source_storage?: 'server' | 'runner' | null
 }
 
 export const knowledgeApi = {
   list: (projectId: string) => request<KnowledgeView>(`/api/projects/${projectId}/knowledge`),
 
-  // 사람의 등록 — 권위 승계, 재승인 없음. 원문은 PC 로 간다. 등록은 실행 권한을 만들지 않는다.
+  // 사람의 등록 — 권위 승계, 재승인 없음. **적용 내용은 서버에 저장된다**(P4-06b, 사용자 결정
+  // 2026-09-24) — 비밀값을 적지 말라고 화면이 알린다. 등록은 실행 권한을 만들지 않는다.
   register: (
     caseId: string,
     body: {

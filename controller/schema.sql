@@ -1960,3 +1960,35 @@ CREATE TABLE IF NOT EXISTS run_knowledge (
 );
 
 CREATE INDEX IF NOT EXISTS idx_run_knowledge_version ON run_knowledge(version_id);
+
+-- ===================================================================
+-- 스키마 v23 (P4-06b) — 지식 원문의 서버 저장 (사용자 결정 2026-09-24, D-67 보충)
+--
+-- **이 표가 이 DB 의 유일한 본문 표다.** 저장 경계 규칙(파일 머리)의 예외이며 사용자 결정으로
+-- 열었다 — 지식의 적용 내용(짧은 본문·조건·예외)과, 대화에서 자동 등록된 규칙의 **권위 원문(그
+-- 사용자 메시지 한 건)**만 들어간다. 다른 원문(대화 전체·응답·의도·설계·계획·코드·로그)은 여전히
+-- 소유 PC 에만 있다. 로그에는 본문을 남기지 않는다.
+--
+-- 왜 서버인가: 다른 PC 의 실행이 다른 PC 에서 등록한 필수 규칙을 읽지 못하면(영수증 `missing`)
+-- 그 실행이 보류됐다(P4-06 결과 4절). 지식은 Project 공통이라 어느 PC 의 실행에도 주입돼야 한다.
+--
+-- 참조(`artifact_ref`)는 그대로다 — `owner_runner_id` 는 등록한 대화의 PC(출처)이고, 서버가
+-- 저장한 원문은 만들 때부터 `available` 이다. Runner 는 배정에 실린 본문을 **해시가 맞을 때만**
+-- 쓴다(P4-04 영수증 그대로). 데이터 이행 없음: v22 의 지식 원문은 소유 PC 가 연결될 때 올린다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS knowledge_body (
+    artifact_id   TEXT NOT NULL,
+    revision      INTEGER NOT NULL,
+    body          BLOB NOT NULL,
+    content_hash  TEXT NOT NULL,
+    byte_size     INTEGER NOT NULL,
+    -- knowledge: 지식 원문(종류 `knowledge`) · authority_message: 자동 등록 규칙의 권위 사용자 메시지
+    purpose       TEXT NOT NULL CHECK (purpose IN ('knowledge', 'authority_message')),
+    stored_by     TEXT NOT NULL,
+    stored_at     TEXT NOT NULL,
+    PRIMARY KEY (artifact_id, revision),
+    FOREIGN KEY (artifact_id, revision) REFERENCES artifact_ref(artifact_id, revision),
+    CHECK (byte_size = length(body)),
+    CHECK (byte_size <= 262144)
+);

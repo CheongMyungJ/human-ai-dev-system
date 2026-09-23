@@ -46,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절, S-026 에 1.9절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -166,6 +166,15 @@ P4-05 의 재작성·재시도 상한을 **설정으로 바꾼다**. 사용자�
   `controller/work_progressor.py` 의 `advance`·`_wait`, `controller/repository.py` 의 `flow_state`·
   `set_budget_limit`(이력 방식), `controller/config.py`, `web/src/shell/ProgressCards.tsx` 의 `GenericWaitCard`.
 
+### 1.9 P4-06b — 지식 원문 서버 저장 (완료 — 당시 인계로 보존, S-026 에 옮김)
+
+**배경:** P4-06 은 지식 원문을 소유 PC(Runner)에만 두었다(원문 PC 경계). 그래서 **다른 PC 의 실행은 다른 PC 에서 등록한 지식을 쓰지 못한다** — 서버는 목록·메타데이터로 그 지식을 골라 주지만 실행 PC 의 영수증이 `missing` 이 되어 필수면 실행을 시작하지 않는다(진입 검사는 이것을 미리 알지 못해 실행이 늦게 실패하고 재시도까지 한다). 사용자가 이것을 묻고 **"지식만 예외로 두고 서버에 저장"** 으로 확정했다(2026-09-24, decisions.md D-67 보충). P4-07 이 지식 저장 위치를 전제로 짜이므로 **P4-07 전에** 한다.
+
+- **확정된 것:** (1) 지식의 적용 내용(짧은 본문·조건·예외)을 서버 DB 에 저장한다. (2) 대화에서 자동 등록된 규칙의 **권위 원문(그 사용자 메시지 한 건)**도 함께 저장한다 — 필수 규칙과 함께 핵심 입력으로 주입되므로, 빠지면 다른 PC 에서 여전히 보류된다. 대화 전체가 아니라 그 메시지 한 건이다. (3) Runner 의 해시 대조·영수증은 유지한다 — 서버가 배정에 본문을 싣고 Runner 는 해시가 맞을 때만 쓴다("실제로 읽은 것만 읽음"). (4) 서버 로그에는 본문을 남기지 않는다. (5) 등록 화면·카드에 "지식 내용은 서버에 저장됨, 비밀값을 적지 말 것"을 알린다. (6) 다른 원문(대화·의도·설계·계획·코드·로그)의 경계는 바꾸지 않는다.
+- **plan 에서 정할 것:** 스키마 v23(지식 버전의 본문·권위 원문 칸, 크기 상한 — 자동 등록 4,000자), 이미 등록된 지식의 본문을 소유 PC 가 연결될 때 올려 받는 이행, 배정 싣기와 해시 대조(`list_context_refs`·`load_context`), 원문 가용성 판정(지식 참조는 서버 본문이 있으면 PC 연결과 무관), 수동 등록·개정 경로(중계 대신 저장), 데이터 경계 시험의 범위 조정(지식 본문은 DB 에 있어야 하고 로그에는 없어야 함), 문서(data-boundary·project-knowledge 5절·AC-35·36 은 결정 표시만 해 두었다 — 구현 뒤 본문을 고친다).
+- **검증:** 두 PC 를 흉내 낸 시험 — PC A 에서 등록한 필수 규칙(권위 원문 포함)이 PC B 의 실행에 주입되고 영수증 `read`, PC A 미연결에서도 동작. 해시가 다른 본문은 읽지 않음. 서버 로그 표식 검사. 이행 v22 → v23.
+- 코드 대조 시작점: `controller/repository.py` 의 P4-06 절(`register_knowledge`·`_add_knowledge_refs`·`list_context_refs`·`_unavailable_core`), `runner/agent.py` 의 `load_context`·`_store_knowledge`, `controller/api.py` 의 `_knowledge_intake`, `tests/test_knowledge.py`·`tests/test_data_boundary.py`.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -203,6 +212,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 | [P3-PLAN-01](plans/P3-PLAN-01.md) | 완료, AC-1~15. [실행 결과](p3/evidence/P3-01-results.md) |
 
 ## 6. 이전 인계 (당시 10절)
+
+### 이전 개발 인계 — S-024 / 2026-09-23 / P4-05 업무 단계 자동 진행과 완료·예외·후속 (**완료**, S-026 에 옮김)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘." 다음 단계는 1.6절의 **P4-05** 였다(업무 단계 자동 진행 포함은 사용자 결정 2026-09-23).
+- **수행:** 시작 상태(`main`/`9e747a0`, clean, 로컬 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → 웹 빌드·웹 단위 18, pytest 613 통과 + 알려진 P4-02 흔들림 1 실패, P1 계약 18 통과)을 직접 확인한 뒤 [P4-PLAN-05](plans/P4-PLAN-05.md)를 **구현 전에 기록**하고(plan 안에서 엔진·완료/후속·화면·검증 네 단계로 나눔) 구현·검증했다. 상세 근거는 [P4-05 결과](p4/evidence/P4-05-results.md)다. 새 제품 판단 셋(기준 판정을 검증·분석 실행의 보고로 제품이 적는 규칙과 구조 검사, 자동 모드에서도 의도 동의는 사람, 재작성 2회·재시도 1회 상한)은 기존 결정·코드와 일치하는 쪽으로 정하고 아래 "사람에게 물어야 할 것"에 적었다.
+- **서버:** 업무 단계 진행기(`controller/work_progressor.py`, 판정 `domain/work_flow.py`) — 업무화 뒤 의도 초안→QG-01(가벼운 확인/독립 검토·지적 재작성 상한 2)→질문·동의→controlled 시작→결합 기록 또는 설계·계획→작업 그래프 순서의 조사·구현·검증(작업공간 요청·실패 1회 재시도)→기준 판정→자동 완료/controlled 결과/예외 수용을 잇고, 진입 검사를 그대로 지나며 거부를 사람·일시·환경 사유로 나눈다. 요청 잠금을 실행 사이에 유지하고 사람 대기·완료·막힘에서만 끝내며(`note_summary` 에 사유 코드) 사람의 결정 뒤에는 **진행 요청**(여는 메시지 없음, `origin`)을 연다. 검증·분석 실행의 기준 보고(`run.criteria_report_json`)를 구조 검사로 걸러 기록(`policy:work_progressor`). 종료 Case 의 설명 전용 진입(D-87, `explanation_only`)·종료 snapshot·종료 뒤 소비 구분·종료 뒤 예산 변경 이력, 후속 Case 로 메시지 옮김(D-33·D-78). 설정 `HADS_AUTO_PROGRESS_WORK`(기본 켜짐). 스키마 **v20**.
+- **Runner:** 배정의 `task`·`criteria`·`gate_findings`·`closed_case`, 지시문 블록(이 실행의 작업·확인할 기준·QG-01 지적·종료 Case 규칙), 검증·분석 응답의 `criteria` 파서와 결과 보고.
+- **화면:** `web/src/shell/ProgressCards.tsx` — 진행 배너, 확인 카드(의도 동의·controlled 시작/결과·delta·단계 검토·피드백·예외+인수·다시 시도·계속 진행), 이월 질문 카드, 종료 Case 설명 전용 안내, 후속 이동 카드·이전 업무 줄, 목록 배지, 진행 이력. 진행 상태가 바뀌면 상세를 바로 다시 묻는다.
+- **기존 시험의 의미 검토:** 다섯을 고쳤고 검사를 지우지 않았다 — 처리기 시험 2건(업무화 뒤 실행 없음 → 진행기가 같은 요청에 의도 초안 실행), `send.general` 의 `note`, 종료 뒤 예산 변경 허용(D-87), v18→v19 이행의 `== 19` → `>= 19`, 브라우저 시험의 업무 단계 배너. 옛 라이브 `ui/live/ui03_shell.py` 는 진행기만 끄고(`HADS_AUTO_PROGRESS_WORK=0`) UI-03 계약을 그대로 본다.
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **18**, pytest **633 통과·0 실패**(7분 38초, 기준선 614 에서 +19, 이번에는 흔들리는 P4-02 시험도 통과), P1 계약 unittest **18** 통과. 첫 전체 실행은 가짜 codex 의 저장소 밖 실패 2건(4절)과 흔들리는 시험 1건으로 실패했고, 고친 뒤 마지막 코드 변경 뒤에 다시 돌린 결과다. 새 pytest 19건(`test_work_progressor` 14, `test_closure_follow_up` 4, `test_web_shell` +1). 구현 중 찾아 고친 것 일곱(결과 4절): 결과 보고 뒤에 오는 독립 검토 보고, 가짜 codex 의 표지 범위, 동의 카드의 옛 상세, 처리기·진행기의 종료 기록 겹침, 대화 조회가 두 SELECT 사이에 열린 요청을 반쯤 본 것(한 번 읽은 행에서 판정), 실제 AI 의 이월 질문 앞에서 멈추는 자리(제품 규칙대로였고 라이브 스크립트만 고침), 저장소 밖에서 죽던 가짜 codex(어댑터 시험 2건이 드러냄, 시험 도구).
+- **실제 CLI·실제 브라우저:** `ui/live/p405_progress.py`(제품 코드 import 없음)로 **통과** — 제품 규칙 **16/16**, 관찰 15, 남은 프로세스 0(네 번째 시도, 앞선 셋은 결과 3절). 업무화→의도 초안→QG-01 독립 검토→동의 카드(원문을 연 뒤 열림)→진행 요청→이월 질문 카드→진행 요청→설계·계획→구현 2·검증 3(실행 11개 전부 요청에 붙음)→기준 셋 `unverified`(codex 샌드박스 셸이 `python` 을 찾지 못함, AI 판단 불가 → 제품 그대로)→예외 카드(자동 정책 거부)→사람 예외 수용으로 종료·snapshot→설명 전용 응답(종료 뒤 소비 구분)→후속 메시지는 AI 가 논의로 읽어 옮겨지지 않음(관찰). 데이터 `%LOCALAPPDATA%\Temp\hads-p4-05-live\000941413`, 증거 `p4/evidence/P4-05-live*`.
+- **경계:** 강제 축은 넷 그대로(`publish` 만 P5). 진행기·기준 기록·설명·후속 대화가 권한·동의·인수를 만들지 않는다. QG-02~07 자동 실행·검증 1회 중단·시간 예산 자동 중단·D-86·상세 설정·알림·검색·권한 확대 카드는 넣지 않았다(9절).
+- **다음 행동:** **P4-05b(진행 상한 설정, 1.8절)** 를 작은 plan 으로 먼저 하고 **P4-06(지식 관리·적용, 1.7절)** 을 같은 세션에서 한다(사용자 결정 2026-09-24). 완료된 plan 을 다시 열지 않고 P4-07·UI-04 로 자동 확대하지 않는다.
+- **사람에게 물어야 할 것:** (1) **기준 판정을 제품이 적는 규칙** — 검증·분석 실행이 보고한 기준별 판정을 구조 검사(완료 실행·종료 코드 0 명령·`verifies` 연결·의무별 방식·결론 요구) 뒤에 `policy:work_progressor` 로 기록한다. 명령·종료 코드의 진위는 여전히 AI 자기보고다(9절). 이 범위가 맞는지. (2) **자동 모드에서도 의도 동의는 사람**이 한다(진입 조건 `intent_not_agreed` 유지, 1.6절 "사람이 필요한 곳"). 동의를 자동화하려면 제품 판단이다. (3) **재작성 2회·Task 재시도 1회** 상한(D-29 기본값 준용). **사용자의 답(2026-09-24):** (1)·(2)는 그대로 간다. (3)은 설정으로 바꾸되 지금이 아니라 다음 작업과 함께 — 제안(설정 둘, 환경 변수 기본값 + Case 별 이력 조정, 상한 카드의 "한도를 올리고 계속", Project 층은 UI-04)대로 **P4-05b** 다(1.8절).
+- **사용자 지시로 한 일:** 작업 보고 뒤 사용자 지시("…그렇게 문서 작성해서 커밋 푸시까지 해줘.")로 **결정 기록과 P4-05 변경·인계 기록의 커밋·`origin/main` push**. P4-05 는 `b475146`, 인계 기록은 그 다음 커밋이다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`9e747a0` clean. 이 세션의 변경은 `b475146`(P4-05)과 인계 기록 커밋으로 `origin/main` 에 push됐다 — 새 파일 `domain/work_flow.py`, `controller/work_progressor.py`, `plans/P4-PLAN-05.md`, `tests/{test_work_progressor,test_closure_follow_up}.py`, `ui/live/p405_progress.py`, `web/src/shell/ProgressCards.tsx`, `p4/evidence/P4-05-*`(결과·라이브 로그·결과 JSON·화면). 수정 파일 `controller/{api,app,config,db,repository,request_processor,admission,schema.sql}`, `domain/conversation.py`, `runner/{agent,prompts}.py`, `tests/{conftest,test_request_processor,test_conversation,test_migration,test_policy,test_web_shell}.py`, `tests/fake_cli/fake_codex.py`, `ui/live/ui03_shell.py`, `web/src/api.ts`, `web/src/shell/{ConversationView,Composer,Sidebar,ReviewPanel,Shell}.tsx`, `web/src/shell/{useCaseData.ts,events.ts,shell.css}`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`·`README.md`·`ui-conversation-design.md`·`completion-lifecycle.md`. `web/dist` 는 빌드 산출물이며 `.gitignore` 대상이다. `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner·codex·Edge 는 스크립트가 내렸다(종료 뒤 남은 프로세스 0). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p4-05-live\000941413`(통과한 시도, 앞선 세 시도의 폴더도 같은 자리에 남아 있다) 에 남아 있고 저장소 `var\` 는 건드리지 않았다. 새 의존성은 없다.
+- **다음 세션이 이어서 할 때:** 진행기 시험은 `processing_harness` 위에서 `_start`(업무화까지)·`_drive`(멈출 때까지 Runner 를 돌림)·`_agree` 를 쓴다(`tests/test_work_progressor.py`). 검증 Task 가 기준을 `verifies` 로 잇는 계획은 `FAKE_PLAN_VERIFIED`·`FAKE_COMBINED_VERIFIED` 다. 진행기가 만든 실행 id 는 `wp-<case>-<걸음>-<시도>` 다. 진행기가 잇는 것은 `case_progress` 행이 있는 Case 뿐이며 관리 화면·API 로 만든 Case 는 그대로 사람이 진행한다.
 
 ### 이전 개발 인계 — S-023 / 2026-09-23 / UI-03 기본 대화 화면 (**완료**)
 

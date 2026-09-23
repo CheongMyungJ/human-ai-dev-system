@@ -543,10 +543,13 @@ class RunnerAgent:
                 produced["commands"],
             )
 
-        # P4-06. 등록 블록의 원문을 이 Runner 에 저장하고 보고 항목을 만든다(결과보다 먼저 — 결과
-        # 기록이 원문 참조를 가리킨다).
+        # P4-06. 등록 블록의 원문을 저장하고 보고 항목을 만든다(결과보다 먼저 — 결과 기록이 원문 참조를
+        # 가리킨다). P4-06b: 저장 위치는 **서버**이고 권위가 될 사용자 메시지(이 실행의 지시 원문)도
+        # 함께 올린다.
         knowledge_report = (
-            self._store_knowledge(case_id, run_id, produced.pop("knowledge_items"))
+            self._store_knowledge(
+                case_id, run_id, produced.pop("knowledge_items"), assignment, instruction
+            )
             if produced.get("knowledge_items")
             else None
         )
@@ -720,14 +723,26 @@ class RunnerAgent:
         return output, produced
 
     def _read_verified(
-        self, artifact_id: str, revision: int, expected_hash: str | None
+        self,
+        artifact_id: str,
+        revision: int,
+        expected_hash: str | None,
+        served: bytes | None = None,
     ) -> tuple[bytes | None, str]:
         """원문을 읽고 **해시를 대조한다**(P4-04). `(본문 또는 None, 영수증 상태)`.
 
         해시가 다른 본문은 다른 원문이다 — 부분 복원으로 다른 버전이 그 자리에 돌아온
         경우가 대표다. 읽은 것으로 다루지 않고 지시문에 넣지 않는다. 기대 해시를 모르면
         (P4-04 이전 제어부) 대조하지 못한 채 읽음으로 둔다.
+
+        P4-06b. `served` 는 **서버가 배정에 실은 본문**(지식 원문·권위 메시지)이다. 그것도 같은 대조를
+        지난다 — 맞으면 읽음, 다르면 `hash_mismatch` 이고 **자기 저장소로 대신하지 않는다**(서버가 준
+        것이 다른 원문이면 그 실행에 넣지 않는다).
         """
+        if served is not None:
+            if expected_hash and content_hash(served) != expected_hash:
+                return None, ContextReceiptStatus.HASH_MISMATCH.value
+            return served, ContextReceiptStatus.READ.value
         try:
             body = self.store.get(artifact_id, revision)
         except FileNotFoundError:
@@ -752,16 +767,23 @@ class RunnerAgent:
 
         P4-04. 해시를 대조하고(`status`), 제어부가 **크기 한도로 생략하기로 정한** 참조는
         읽지 않는다(`omitted`). 등급(`tier`)은 제어부가 정한 값을 그대로 쓴다.
+
+        P4-06b. 서버가 본문을 실은 참조(`body_b64` — 지식 원문·권위 메시지)는 그 본문을 해시와
+        대조해 쓴다. 이 PC 에 없는 다른 PC 의 규칙이 그렇게 들어온다. `source` 가 어디서 읽었는지를
+        남긴다(영수증에는 가지 않는다 — 영수증은 순번·역할·상태뿐이다).
         """
         context: list[dict[str, Any]] = []
         for ref in assignment.get("context_refs") or []:
             inclusion = ctxmod.effective_inclusion(ref.get("inclusion"))
+            served: bytes | None = None
+            if ref.get("body_b64"):
+                served = base64.b64decode(ref["body_b64"])
             if inclusion == ContextInclusion.OMITTED_SIZE_LIMIT.value:
                 body: bytes | None = None
                 status = ContextReceiptStatus.OMITTED.value
             else:
                 body, status = self._read_verified(
-                    ref["artifact_id"], ref["revision"], ref.get("content_hash")
+                    ref["artifact_id"], ref["revision"], ref.get("content_hash"), served=served
                 )
             context.append(
                 {
@@ -773,6 +795,7 @@ class RunnerAgent:
                     "inclusion": inclusion,
                     "status": status,
                     "body": body,
+                    "source": "server" if served is not None else "runner",
                     # P4-06. 지식 참조의 키·버전·효력·범위(지시문 머리). 제어부가 준 메타데이터다.
                     "knowledge": ref.get("knowledge"),
                 }
@@ -939,34 +962,44 @@ class RunnerAgent:
         return produced
 
     def _store_knowledge(
-        self, case_id: str, run_id: str, items: list[dict[str, Any]]
+        self,
+        case_id: str,
+        run_id: str,
+        items: list[dict[str, Any]],
+        assignment: dict[str, Any],
+        instruction: bytes | None,
     ) -> list[dict[str, Any]]:
-        """P4-06. 옮겨 적은 적용 내용을 **이 Runner 에** 원문으로 저장·등록하고 보고 항목을 만든다.
+        """P4-06. 옮겨 적은 적용 내용을 원문으로 저장·등록하고 보고 항목을 만든다.
 
-        보고에는 메타데이터와 원문 참조만 간다. 형식이 틀린 항목은 그대로 `format_error` 로 보낸다 —
-        제어부가 거부 사유로 남긴다(조용히 버리지 않는다).
+        **P4-06b: 집은 서버다**(사용자 결정 2026-09-24). 항목마다 본문을 서버에 올리고(해시 동봉, 이
+        Runner 에는 사본을 두지 않는다) 보고에는 메타데이터와 원문 참조만 간다. 이어 **이 응답의 지시
+        원문 — 요청을 연 사용자 메시지**를 권위 원문으로 올린다(이미 해시를 대조해 읽은 바이트 그대로).
+        서버가 그것을 받지 않으면(사용자 메시지가 아님 등) 건너뛴다 — 등록이 되면 서버가 "올릴 것"으로
+        다시 청한다. 형식이 틀린 항목은 그대로 `format_error` 로 보낸다 — 제어부가 거부 사유로 남긴다
+        (조용히 버리지 않는다).
         """
         report: list[dict[str, Any]] = []
+        uploaded = 0
         for raw in items[: knowmod.MAX_REPORT_ITEMS + 5]:
             if raw.get("format_error"):
                 report.append({"format_error": str(raw["format_error"])[:120]})
                 continue
             body = str(raw.get("content") or "").strip().encode("utf-8")
             artifact_id = ids.new_artifact_id()
-            stored = self.store.put(artifact_id, 1, body)
             self._send(
-                self.client.register_artifact,
+                self.client.store_knowledge_original,
                 {
                     "runner_id": self.config.runner_id,
                     "case_id": case_id,
                     "kind": "knowledge",
                     "artifact_id": artifact_id,
                     "revision": 1,
-                    "content_hash": stored.content_hash,
-                    "byte_size": stored.byte_size,
+                    "content_b64": base64.b64encode(body).decode("ascii"),
+                    "content_hash": content_hash(body),
                     "summary": f"knowledge original from {run_id}"[:200],
                 },
             )
+            uploaded += 1
             entry = {
                 key: raw.get(key)
                 for key in ("kind", "obligation", "summary", "repository", "paths", "activities", "supersedes")
@@ -975,7 +1008,69 @@ class RunnerAgent:
             entry["artifact_id"] = artifact_id
             entry["revision"] = 1
             report.append(entry)
+        if uploaded and instruction is not None and assignment.get("request_id"):
+            try:
+                self._send(
+                    self.client.store_knowledge_original,
+                    {
+                        "runner_id": self.config.runner_id,
+                        "case_id": case_id,
+                        "kind": "message",
+                        "artifact_id": assignment["instruction_artifact_id"],
+                        "revision": assignment["instruction_artifact_rev"],
+                        "content_b64": base64.b64encode(instruction).decode("ascii"),
+                        "content_hash": content_hash(instruction),
+                        "summary": "authority message",
+                    },
+                )
+            except httpx.HTTPStatusError as exc:
+                # 서버가 권위 원문으로 받지 않았다(4xx). 등록 자체는 막지 않는다 — 등록되면 서버가
+                # 올릴 것으로 다시 청하고, 그때까지 그 메시지는 이 PC 에만 있다.
+                print(
+                    f"[runner] {run_id}: authority message not stored on the server:"
+                    f" {exc.response.status_code if exc.response is not None else '?'}",
+                    flush=True,
+                )
         return report
+
+    def upload_knowledge_originals(self) -> list[str]:
+        """P4-06b. 서버가 청한 지식 원문·권위 메시지를 이 저장소에서 읽어 올린다(이행).
+
+        읽지 못하거나 해시가 다르면 올리지 않고 건너뛴다 — 없는 본문을 지어내지 않는다. 그 원문은
+        서버에 `storage = runner` 로 남는다. 제어 루프가 열람 다음에 부른다.
+        """
+        client = self.control_client
+        uploaded: list[str] = []
+        for wanted in client.knowledge_uploads(self.config.runner_id):
+            try:
+                body = self.store.get(wanted["artifact_id"], wanted["revision"])
+            except FileNotFoundError:
+                continue
+            digest = content_hash(body)
+            if digest != wanted["content_hash"]:
+                continue
+            try:
+                client.store_knowledge_original(
+                    {
+                        "runner_id": self.config.runner_id,
+                        "case_id": wanted["case_id"],
+                        "kind": wanted["kind"],
+                        "artifact_id": wanted["artifact_id"],
+                        "revision": wanted["revision"],
+                        "content_b64": base64.b64encode(body).decode("ascii"),
+                        "content_hash": digest,
+                        "summary": "knowledge original (migrated from the owning runner)",
+                    }
+                )
+            except httpx.HTTPStatusError as exc:
+                print(
+                    f"[runner] knowledge upload refused for {wanted['artifact_id']}@{wanted['revision']}:"
+                    f" {exc.response.status_code if exc.response is not None else '?'}",
+                    flush=True,
+                )
+                continue
+            uploaded.append(f"{wanted['artifact_id']}@{wanted['revision']}")
+        return uploaded
 
     def _produce_implementation(self, output: Any) -> dict[str, Any]:
         """구현 실행의 산출물은 **작업공간의 실제 변화**다.
@@ -1682,12 +1777,15 @@ class RunnerAgent:
             reconciled = self.reconcile_unfinished()
         stored = self.persist_pending_intakes()
         served = self.serve_read_requests()
+        # P4-06b. 서버가 청한 지식 원문·권위 메시지를 올린다(옛 지식의 이행).
+        uploaded = self.upload_knowledge_originals()
         controls = self.handle_controls(
             answer.get("controls") if isinstance(answer, dict) else None
         )
         return {
             "stored_intakes": stored,
             "served_reads": served,
+            "uploaded_knowledge": uploaded,
             "controls": controls,
             "reconciled": reconciled,
         }

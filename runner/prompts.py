@@ -902,6 +902,8 @@ KNOWLEDGE_REGISTRATION_RULE = """**프로젝트 규칙 등록.** 사용자의 **
 - activities: 특정 활동에만 해당하면 intent·design·plan·implementation·verification·
   investigation·review·discussion 중에서, 모든 작업이면 [].
 - supersedes: 사용자가 아래 **기존 지식** 하나를 바꾸라고 했으면 그 키, 아니면 null.
+- content 와 사용자의 그 메시지는 **서버에 저장된다.** 비밀값(토큰·비밀번호·키·개인정보)이 들어
+  있으면 블록을 붙이지 말고 글로 알린다.
 - 블록을 붙이면 글에 "프로젝트 규칙으로 등록한다"는 사실과 옮겨 적은 내용을 짧게 적는다.
 
 등록 저장소: {repositories}
