@@ -583,6 +583,17 @@ class WorkProgressor:
         self.repo.record_progress_event(
             case_id, step.code, "done", request_id=request_id, detail=step.detail
         )
+        # P4-10c(D-97). 기준 충족 등으로 닫혔는데 계획에 남은 작업이 있으면 **실행하지 않았다**는 사실을 한 번 적는다.
+        unrun = self.repo.unrun_tasks_at_closure(case_id)
+        if unrun and not any(e["step"] == "tasks_not_run" for e in self.repo.list_progress_events(case_id)):
+            self.repo.record_progress_event(
+                case_id, "tasks_not_run", "recorded", request_id=request_id,
+                detail=(
+                    "완료하지 않고 종료한 작업: " + ", ".join(t["task_key"] for t in unrun)
+                    + f" ({unrun[0]['reason']})"
+                )[:200],
+                codes=[t["task_key"] for t in unrun],
+            )
         self.repo.update_progress(
             case_id,
             state=workflow.ProgressState.DONE,

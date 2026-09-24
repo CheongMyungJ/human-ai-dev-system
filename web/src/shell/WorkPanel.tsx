@@ -21,6 +21,7 @@ import {
   TASK_KIND_LABEL,
   TASK_RELATION_LABEL,
   TASK_STATE_LABEL,
+  UNRUN_REASON_LABEL,
   WORK_GRAPH_SOURCE_LABEL,
   workGraphApi,
   type AdmissionCheck,
@@ -352,6 +353,11 @@ function TaskItem(props: {
               .join(', ')
           : '연결 없음'}
       </div>
+      {task.not_run_at_closure && (
+        <div className="sh-muted sh-warn" data-testid={`work-task-not-run-${task.task_key}`}>
+          완료하지 않고 종료 — {UNRUN_REASON_LABEL[task.not_run_at_closure] ?? task.not_run_at_closure}
+        </div>
+      )}
       {task.cancelled ? (
         <div className="sh-muted" data-testid={`work-task-cancelled-${task.task_key}`}>
           취소됨 — {task.cancel_reason || '이유 기록 없음'}

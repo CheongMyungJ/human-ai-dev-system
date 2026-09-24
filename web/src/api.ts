@@ -2023,6 +2023,8 @@ export interface TaskRow {
   criteria: TaskCriterionLink[]
   state: TaskState
   readiness: TaskReadiness | null
+  // D-97(P4-10c). 종료 때 실행하지 않고 끝났으면 그 종료 종류(조회의 도출값). 종료 전·완료·취소된 작업은 null.
+  not_run_at_closure?: string | null
 }
 
 export interface WorkGraphRevision {
@@ -2061,6 +2063,9 @@ export interface WorkGraphState {
   question_blocks: Record<string, string[]>
   // **해석되지 않은 참조는 버려지지 않는다.** 그 질문은 전부 막는다.
   unresolved_block_refs: { question_id: string; raw_ref: string }[]
+  // D-97(P4-10c). 종료 때 실행하지 않은 작업 키와 종료 종류.
+  not_run_at_closure?: string[]
+  closure_kind?: string | null
 }
 
 export const workGraphApi = {
@@ -3039,6 +3044,8 @@ export interface ConversationView {
   cancellation?: { by: string | null; reason: string | null; at: string | null; note?: string } | null
   // D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 — 알림(실패 아님).
   read_only_changes?: ReadOnlyChangeRow[]
+  // D-97(P4-10c). 종료 때 실행하지 않은 작업(이유 = 종료 종류).
+  unrun_tasks?: { task_key: string; kind: string; summary: string; reason: string }[]
   // P4-09(g). 제목의 출처(default|ai|user, 옛 행은 null)와 가벼운 이력.
   title_source?: 'default' | 'ai' | 'user' | null
   title_set_by?: string | null
@@ -3397,6 +3404,13 @@ export interface ReadOnlyChangeRow {
   finished_at: string | null
   where: ReadOnlyPlace[]
 }
+// D-97(P4-10c). 실행하지 않고 끝난 작업의 이유(종료 종류).
+export const UNRUN_REASON_LABEL: Record<string, string> = {
+  completed: '기준을 모두 충족해 종료',
+  closed_with_exceptions: '예외를 수용해 종료',
+  cancelled: '업무 취소',
+}
+
 export const READ_ONLY_PLACE_LABEL: Record<ReadOnlyPlace, string> = {
   workspace: '작업공간(worktree)',
   original_repo: '원래 저장소 폴더',

@@ -8489,9 +8489,17 @@ class Repository:
             ).to_dict()
             for node in nodes
         }
+        # P4-10c(D-97). **종료된 업무의 남은 작업** — 취소되지 않았고 완료되지 않은 작업은 실행하지 않고 끝났다. 저장하지 않고
+        # 도출한다(종료 뒤에는 그래프 수정이 거부되고 작업 실행이 생기지 않는다). 이유는 종료 종류다.
+        closure = self.get_closure(case_id)
+        not_run: list[str] = []
         for task in tasks:
             task["state"] = states.get(task["task_key"], TaskState.PLANNED.value)
             task["readiness"] = readiness.get(task["task_key"])
+            task["not_run_at_closure"] = None
+            if closure is not None and not task["cancelled"] and task["state"] != TaskState.DONE.value:
+                task["not_run_at_closure"] = closure["closure_kind"]
+                not_run.append(task["task_key"])
 
         links = [
             {"task_key": t["task_key"], **link} for t in tasks for link in t["criteria"]
@@ -8511,7 +8519,26 @@ class Repository:
             "deferred_open_questions": open_questions,
             "question_blocks": blocks,
             "unresolved_block_refs": unresolved,
+            # P4-10c(D-97). 종료 때 실행하지 않은 작업 키와 종료 종류(종료 전이면 빈 목록·None).
+            "not_run_at_closure": not_run,
+            "closure_kind": closure["closure_kind"] if closure else None,
         }
+
+    def unrun_tasks_at_closure(self, case_id: str) -> list[dict[str, Any]]:
+        """P4-10c(D-97). 종료된 업무에서 **실행하지 않고 끝난 작업**(요약·이유). 종료 전이면 빈 목록."""
+        if self.get_closure(case_id) is None:
+            return []
+        state = self.work_graph_state(case_id)
+        return [
+            {
+                "task_key": t["task_key"],
+                "kind": t["kind"],
+                "summary": t["summary"],
+                "reason": t["not_run_at_closure"],
+            }
+            for t in state.get("tasks") or []
+            if t.get("not_run_at_closure")
+        ]
 
     # ------------------------------------------------- P3-02 사람의 재계획
 
@@ -13942,6 +13969,8 @@ class Repository:
             "cancellation": self.cancellation_view(case_id),
             # D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 — 알림(실패 아님).
             "read_only_changes": self.read_only_changes(case_id),
+            # D-97(P4-10c). 종료 때 실행하지 않은 작업(이유 = 종료 종류).
+            "unrun_tasks": self.unrun_tasks_at_closure(case_id),
             # P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식. 요약·키·상태뿐이다.
             "knowledge_registrations": self.knowledge_registrations_view(case_id),
             # UI-04c(D-86). 업무 단계의 목적·유형 개정 이력(요약 — 대응 목록은 개정 조회에).

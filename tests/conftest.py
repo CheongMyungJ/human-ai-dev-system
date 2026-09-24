@@ -320,6 +320,21 @@ FAKE_TASKS_VERIFIED: list[dict[str, Any]] = [
 
 FAKE_PLAN_VERIFIED = fake_preparation_response("계획", FAKE_PLAN_SECTIONS, tasks=FAKE_TASKS_VERIFIED)
 
+#: P4-10c(D-97). **기준에 이어지지 않은** 작업 하나(README 갱신, T1 뒤) — 기준이 모두 충족되면 실행하지 않고 닫힌다.
+FAKE_EXTRA_TASK: dict[str, Any] = {
+    "key": "T3",
+    "kind": "implementation",
+    "purpose": "README 에 사용법을 적는다",
+    "purpose_summary": "README 갱신",
+    "deliverable": "README.md",
+    "deliverable_summary": "README 사용법 절",
+    "completion": "README 에 필터 사용법이 있다",
+    "completion_summary": "README 에 필터 사용법이 있다",
+    "relates_to": "goal",
+    "depends_on": ["T1"],
+    "criteria": [],
+}
+
 #: P4-05. Fast Lane 의 결합 기록 응답 — 결합 기록의 네 항목과 검증 Task 가 있는 계획.
 FAKE_COMBINED_SECTIONS: dict[str, str] = {
     "change_summary": "reader 모듈에 필터 함수를 더한다",

@@ -2023,3 +2023,28 @@ def test_a_read_only_run_that_changes_the_folder_shows_a_banner_not_a_failure(st
     expect(detail).to_have_attribute("data-run-id", run["run_id"], timeout=20_000)
     expect(detail.locator('[data-testid="run-detail-read-only"]')).to_have_attribute("data-changed", "true")
     page.context.close()
+
+
+def test_a_work_closed_by_its_criteria_shows_the_task_it_did_not_run(stack):
+    """P4-PLAN-10c AC-3 (D-97) — 기준에 이어지지 않은 작업 T3 이 있는 계획에서 기준이 모두 충족되면 업무가 닫히고(T3 을 돌리지
+    않는다), 진행 배너가 "완료하지 않은 작업 T3" 을, 작업 탭이 T3 의 "완료하지 않고 종료" 를 보인다.
+    """
+    project = stack.project("남은 작업")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_EXTRA_TASK 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+    unrun = page.locator('[data-testid="unrun-tasks"]')
+    expect(unrun).to_contain_text("완료하지 않은 작업 T3", timeout=20_000)
+    expect(unrun).to_contain_text("기준을 모두 충족해 종료")
+    runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+    assert not [r for r in runs if r["task_id"] == "T3"]
+    page.click('[data-testid="open-work"]')
+    expect(page.locator('[data-testid="work-task-not-run-T3"]')).to_contain_text("완료하지 않고 종료", timeout=20_000)
+    page.context.close()

@@ -24,6 +24,7 @@ import {
   PROGRESS_STEP_LABEL,
   qualityGateApi,
   START_BASIS_LABEL,
+  UNRUN_REASON_LABEL,
   WAIT_LABEL,
   workspaceApi,
   type ProgressLimitKey,
@@ -145,6 +146,12 @@ export function ProgressBanner(props: {
         <>
           {' '}· {conv.closure.closure_kind === 'closed_with_exceptions' ? `예외 ${conv.closure.exception_count}건을 수용하고 종료` : conv.closure.closure_kind === 'completed' ? '조건을 충족해 완료' : conv.closure.closure_kind}
           {' '}· 설명은 이 대화에서, 수정 요청은 연결된 새 대화로
+          {(conv.unrun_tasks ?? []).length > 0 && (
+            <span data-testid="unrun-tasks" data-count={(conv.unrun_tasks ?? []).length}>
+              {' '}· 완료하지 않은 작업 {(conv.unrun_tasks ?? []).map((t) => t.task_key).join(', ')}(
+              {UNRUN_REASON_LABEL[(conv.unrun_tasks ?? [])[0].reason] ?? (conv.unrun_tasks ?? [])[0].reason} — 필요하면 새 대화로 요청)
+            </span>
+          )}
         </>
       )}
       {action.error && <span className="sh-error-text"> {action.error}</span>}

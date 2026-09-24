@@ -25,6 +25,8 @@
     HADS_FAKE_GATE_FAIL      (UI-05a) 품질 게이트(QG-02~07) 검토가 기준 C-01 의 필수·확정 지적 하나를 낸다(실패)
     HADS_FAKE_SLOW_VERIFY=<초> (P4-10) 그 작업 디렉터리의 **첫** 검증 실행만 그만큼 잔다(손자 프로세스와 함께) — 짧은 제한
                              시간에 걸리게 한다. 다시 시도한 검증은 자지 않는다(표지 파일은 임시 폴더에 둔다)
+    HADS_FAKE_EXTRA_TASK     (P4-10c, D-97) 결합 기록이 기준에 이어지지 않은 작업 T3(README 갱신, T1 뒤)을 하나 더 정의한다 —
+                             기준이 모두 충족되면 실행하지 않고 닫힌다
     HADS_FAKE_RO_WRITE       (P4-10b, D-96) 논의 응답(읽기 전용 실행)이 작업 디렉터리에 `RO-STRAY.txt` 를 쓴다 — 권한 확인을
                              건너뛰는 CLI 가 읽기 전용을 어기는 경우. Runner 의 전후 대조가 알린다
     HADS_FAKE_VERIFY_NOT_MET (P4-10) 검증이 C-02 를 명령·요약과 함께 `not_met` 으로 보고한다 — 작업 디렉터리에
@@ -109,6 +111,10 @@ def work_stage_reply(prompt: str) -> str | None:
                      "decide_at": "plan", "blocks": []}
                 ],
                 tasks=canned.FAKE_TASKS_VERIFIED,
+            )
+        if "HADS_FAKE_EXTRA_TASK" in prompt:
+            return canned.fake_preparation_response(
+                "결합", canned.FAKE_COMBINED_SECTIONS, tasks=[*canned.FAKE_TASKS_VERIFIED, canned.FAKE_EXTRA_TASK]
             )
         return canned.FAKE_COMBINED_VERIFIED
     if starts(templates.DESIGN_AUTHORING_PROMPT):
