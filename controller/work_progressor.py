@@ -127,6 +127,31 @@ class WorkProgressor:
         active = self.repo.active_request(case_id)
         return self.advance(case_id, active["id"] if active else None)
 
+    def on_start_basis_decided(self, case_id: str, *, actor: str, basis: str) -> dict[str, Any] | None:
+        """UI-04d(D-77). 사람이 시작 기준을 골랐다 — 작업공간은 `requested` 로 돌아갔고 Runner 가 다음
+        회차에 만든다. 대기(`workspace_start_basis`)는 끝났으므로 진행을 다시 `running` 으로 두고 한 걸음
+        본다(준비 보고가 오면 구현이 이어진다). 선택은 권한·동의가 아니다."""
+        if not self.enabled:
+            return None
+        progress = self.repo.progress_state(case_id)
+        if progress is None:
+            return None
+        self.repo.record_progress_event(
+            case_id, "workspace_start_basis", "decided", detail=f"{basis} by {actor}",
+        )
+        if progress["state"] == workflow.ProgressState.WAITING_HUMAN and any(
+            w.get("code") == workflow.WaitReason.WORKSPACE_START_BASIS for w in progress.get("wait") or []
+        ):
+            self.repo.update_progress(
+                case_id,
+                state=workflow.ProgressState.RUNNING,
+                step="workspace_pending",
+                detail="시작 기준을 정했다 — 작업공간 준비를 기다린다",
+                keep_request=True,
+            )
+            self.repo.set_progress_case_status(case_id, CaseStatus.IN_PROGRESS)
+        return self.on_workspace_reported(case_id)
+
     def resume(self, case_id: str, *, actor: str) -> dict[str, Any] | None:
         """사람이 멈춘·막힌·실패한 진행을 다시 잇는다(D-76·D-79)."""
         if not self.enabled:

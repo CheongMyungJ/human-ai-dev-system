@@ -124,7 +124,13 @@ def test_the_users_own_working_tree_is_left_alone(harness):
     before_head = _git(repo, "rev-parse", "HEAD").strip()
     before_body = (repo / "reader.py").read_text(encoding="utf-8")
 
-    harness.prepare_workspace(case["id"])
+    # UI-04d(D-77). 더러운 트리는 **선택 없이 만들어지지 않는다** — Runner 가 묻고 사람이 "커밋된 코드에서
+    # 시작" 을 고른 뒤에야 만든다. 그 뒤의 단언은 P3-03 그대로다(포함하지 않은 변경은 원래 폴더에만 남는다).
+    asked = harness.prepare_workspace(case["id"], basis=None)
+    assert asked["state"] == "awaiting_basis" and asked["base_commit"] == ""
+    assert _git(repo, "status", "--porcelain") == before_status
+    harness.decide_start_basis(case["id"], asked["repository_id"], "committed")
+    harness.agent.prepare_workspaces()
 
     assert _git(repo, "status", "--porcelain") == before_status
     assert _git(repo, "rev-parse", "HEAD").strip() == before_head
@@ -135,6 +141,8 @@ def test_the_users_own_working_tree_is_left_alone(harness):
     # 관측은 했다. **정리하지 않았다는 사실**이 기록으로 남는다.
     assert workspace["user_tree_dirty"] is True
     assert workspace["user_tree_entries"] == 2
+    assert workspace["state"] == "ready" and workspace["start_basis"] == "committed"
+    assert workspace["committed_base"] == workspace["base_commit"] == before_head
 
     worktree = Path(workspace["worktree_path"])
     # 기준 커밋에는 사용자의 미커밋 변경이 없다.

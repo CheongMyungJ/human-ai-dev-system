@@ -1483,3 +1483,143 @@ def test_time_limits_default_to_execution_time_and_the_workspace_row_names_the_w
     assert effects and effects[0]["external_change_before_run"] is None
     expect(page.locator(f'[data-testid="effect-{effects[0]["run_id"]}"]')).to_have_attribute("data-external", "null")
     page.context.close()
+
+
+# ================================================== UI-04d 대화 검색(D-84)·미커밋 포함 시작(D-77)
+
+
+def _db_has(stack: Stack, needle: str) -> bool:
+    """제어부 DB 의 모든 표·모든 글 칸에 이 글이 있는가."""
+    with stack.db() as conn:
+        for (table,) in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall():
+            for row in conn.execute(f'SELECT * FROM "{table}"'):
+                if any(isinstance(v, str) and needle in v for v in row):
+                    return True
+    return False
+
+
+def test_search_finds_titles_rules_and_pc_bodies_and_leads_to_the_message(stack):
+    """UI-04d AC-5 — 왼쪽 검색 → 가운데 검색 화면(범위 줄·대화별 묶음·발췌 강조). 본문 일치는 작업 PC 가 올린 뒤
+    도착하고(`relayed`), 보관된 대화도 든다. 메시지 일치를 누르면 그 대화의 그 메시지가 강조되고, 규칙 일치를 누르면
+    규칙 화면의 그 항목이 열린다. 검색어는 주소·DB 에 없다."""
+    project = stack.project("검색")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    first = _new_conversation(page)
+    _send(page, "quokka 낱말이 든 첫 메시지")
+    expect(page.locator('[data-testid="message-2"] [data-testid="message-body"]')).to_contain_text("가짜 응답", timeout=60_000)
+    expect(page.locator('[data-testid="send-refusal"]')).to_have_count(0, timeout=30_000)
+    registered = stack.http.post(
+        f"/api/cases/{first}/knowledge",
+        json={
+            "content": "배포 전에 lint 를 돌린다",
+            "summary": "배포 전 lint 규칙",
+            "kind": "constraint",
+            "obligation": "required",
+            "target_runner_id": RunnerProcessId.get(stack),
+        },
+    )
+    assert registered.status_code == 201, registered.text
+    rule_key = registered.json()["version"]["knowledge_key"] if "knowledge_key" in registered.json()["version"] else None
+    second = _new_conversation(page)
+    _send(page, "둘째 대화에도 quokka 가 있다")
+    expect(page.locator('[data-testid="message-2"] [data-testid="message-body"]')).to_contain_text("가짜 응답", timeout=60_000)
+    assert stack.http.post(f"/api/cases/{second}/archive", json={"actor": "owner"}).status_code == 200
+
+    page.fill('[data-testid="search-input"]', "quokka")
+    page.click('[data-testid="search-submit"]')
+    screen = page.locator('[data-testid="search-screen"]')
+    expect(screen).to_be_visible()
+    assert "screen=search" in _address(page) and "quokka" not in _address(page)
+    assert page.locator('[data-testid="review-panel"]').count() == 0
+    scope = page.locator('[data-testid="search-scope"]')
+    expect(scope).to_have_attribute("data-bodies", "relayed", timeout=40_000)
+    expect(scope).to_contain_text("본문(PC)")
+    results = page.locator('[data-testid="search-results"]')
+    expect(results.locator(f'[data-testid="search-case-{first}"]')).to_be_visible()
+    expect(results.locator(f'[data-testid="search-case-{second}"]')).to_contain_text("보관됨")
+    hit = results.locator(f'[data-testid="search-case-{first}"] [data-kind="body"]').first
+    expect(hit).to_have_attribute("data-seq", "1")
+    expect(hit.locator("mark.sh-hit")).to_have_text("quokka")
+    hit.click()
+    page.wait_for_selector('[data-testid="conversation-title"]')
+    expect(page.locator('[data-testid="message-1"]')).to_have_attribute("data-focus", "1", timeout=30_000)
+    assert f"case={first}" in _address(page)
+
+    # 규칙 일치 → 규칙 화면의 그 항목.
+    page.fill('[data-testid="search-input"]', "lint 규칙")
+    page.click('[data-testid="search-submit"]')
+    rule_hit = page.locator('[data-testid="search-results"] [data-kind="rule"]').first
+    expect(rule_hit).to_be_visible(timeout=20_000)
+    rule_hit.click()
+    expect(page.locator('[data-testid="rules-screen"]')).to_be_visible()
+    assert "screen=rules" in _address(page)
+    if rule_key:
+        expect(page.locator(f'[data-testid="rule-{rule_key}"]')).to_be_visible()
+    # 검색어·발췌는 DB 에 없다(본문은 PC 에만 있다).
+    assert not _db_has(stack, "quokka")
+    page.context.close()
+
+
+def test_a_dirty_repository_asks_for_the_start_basis_and_including_keeps_the_original(stack):
+    """UI-04d AC-11 — 원래 폴더에 커밋하지 않은 변경이 있으면 동의 뒤 진행기가 "어느 코드에서 시작할까" 카드(목록·기준
+    커밋·두 버튼)에서 멈춘다. 포함해서 시작을 고르면 이어져 완료되고, 작업공간 절이 시작 기준(포함 2건·스냅샷·커밋 기준)을
+    서버 값 그대로 보인다. 원래 폴더는 그대로이고 파일 경로는 DB 에 없다."""
+    project = stack.project("미커밋 시작")
+    _git_repo(project)
+    repo = Path(project["repo_path"])
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()  # 사용자가 쓰던 중\n", encoding="utf-8")
+    (repo / "wip-note.txt").write_text("사용자의 미추적 메모\n", encoding="utf-8")
+    status = lambda: subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, check=True).stdout  # noqa: E731
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+    before = status()
+
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_CANDIDATE 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    card = page.locator('[data-testid="wait-card-workspace_start_basis"]')
+    expect(card).to_be_visible(timeout=90_000)
+    expect(card).to_have_attribute("data-available", "true", timeout=15_000)
+    expect(card.locator('[data-testid="basis-count"]')).to_have_text("2")
+    expect(card.locator('[data-testid="basis-entries"]')).to_contain_text("wip-note.txt")
+    expect(card.locator('[data-testid="basis-entries"]')).to_contain_text("reader.py")
+    expect(card).to_contain_text(head[:10])
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "waiting_human")
+    ws = stack.http.get(f"/api/cases/{case_id}/workspace").json()["workspaces"][0]
+    assert ws["state"] == "awaiting_basis" and ws["basis_entries"] == 2 and ws["start_basis"] is None
+    assert status() == before  # 원래 폴더는 그대로
+    assert not _db_has(stack, "wip-note.txt")
+
+    card.locator('[data-testid="basis-include"]').click()
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+    ws = stack.http.get(f"/api/cases/{case_id}/workspace").json()["workspaces"][0]
+    assert (ws["state"], ws["start_basis"], ws["included_entries"], ws["basis_decided_by"]) == ("ready", "include_uncommitted", 2, "owner")
+    assert ws["committed_base"] == head and ws["base_commit"] != head
+    assert status() == before and "사용자가 쓰던 중" in (repo / "reader.py").read_text(encoding="utf-8")
+    # 스냅샷 커밋(시작 상태)에는 사용자의 수정이 있고, 그 위에서 AI 구현이 `reader.py` 를 고쳤다(그것이 이 실행의 변경이다).
+    snapshot_reader = subprocess.run(
+        ["git", "show", f"{ws['base_commit']}:reader.py"], cwd=repo, capture_output=True, text=True, check=True, encoding="utf-8"
+    ).stdout
+    assert "사용자가 쓰던 중" in snapshot_reader
+    assert (Path(ws["worktree_path"]) / "wip-note.txt").read_text(encoding="utf-8") == "사용자의 미추적 메모\n"
+    assert not _db_has(stack, "wip-note.txt")
+
+    # 결과물 패널은 동의 때(`agreement-open`) 이미 열려 있을 수 있다 — `open-results` 는 토글이라 그때 누르면 닫힌다.
+    if not page.locator('[data-testid="result-list"], [data-testid="viewer"]').count():
+        page.click('[data-testid="open-results"]')
+    expect(page.locator('[data-testid="review-panel"]')).to_be_visible()
+    if page.locator('[data-testid="viewer"]').count():
+        page.click('[data-testid="viewer"] >> text=← 목록')  # 동의 때 연 의도 원문이 열려 있다 — 목록으로
+    expect(page.locator('[data-testid="result-list"]')).to_be_visible()
+    basis = page.locator(f'[data-testid="ws-basis-{ws["repository_id"]}"]')
+    expect(basis).to_have_attribute("data-basis", "include_uncommitted")
+    expect(basis).to_contain_text("포함해 시작")
+    expect(basis).to_contain_text("2건")
+    expect(basis).to_contain_text(ws["base_commit"][:10])
+    page.context.close()

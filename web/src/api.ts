@@ -2142,7 +2142,32 @@ export const OPEN_SUPPORT_LABEL: Record<string, string> = {
   doc_only: '문서만 있음(확인 안 됨)',
 }
 
-export type WorkspaceState = 'requested' | 'ready' | 'failed'
+// UI-04d(D-77). `awaiting_basis` — 사용자 트리에 커밋하지 않은 변경이 있어 사람이 시작 기준을 고르는 중(만들어지지 않음).
+export type WorkspaceState = 'requested' | 'ready' | 'failed' | 'awaiting_basis'
+
+// UI-04d(D-77). 어떤 코드에서 시작했는가. `null` 은 기록 없음(옛 작업공간·아직 안 정함)이며 `committed` 가 아니다.
+export type StartBasis = 'committed' | 'include_uncommitted'
+
+export const START_BASIS_LABEL: Record<StartBasis, string> = {
+  committed: '커밋된 코드에서 시작',
+  include_uncommitted: '커밋하지 않은 변경을 포함해 시작',
+}
+
+// 미커밋 변경 목록(메모리 중계). `available` 이 거짓이면 서버에 없다(재시작·만료) — PC 에서 다시 불러온다.
+export interface UncommittedList {
+  case_id: string
+  repository_id: string
+  state: WorkspaceState
+  start_basis: StartBasis | null
+  head: string | null
+  digest: string | null
+  entry_count: number | null
+  available: boolean
+  entries: { status: string; path: string }[] | null
+  truncated: boolean | null
+  stale_choice: boolean
+  note: string
+}
 
 // 저장소 **하나**의 작업공간(P3-R2·D-39).
 export interface RepositoryWorkspace {
@@ -2172,6 +2197,15 @@ export interface RepositoryWorkspace {
   runner?: { runner_id: string; name?: string; host: string | null; connection: RunnerConnectionState | null } | null
   open_support?: Record<'open_folder' | 'open_editor', { state: string; source: string }>
   open_requests?: WorkspaceOpenRequest[]
+  // UI-04d(D-77). 시작 기준(서버 값 그대로). 포함이면 `base_commit` 이 스냅샷 커밋이고 `committed_base` 가 그때의 HEAD 다.
+  start_basis?: StartBasis | null
+  basis_decided_by?: string | null
+  basis_decided_at?: string | null
+  committed_base?: string
+  included_entries?: number | null
+  included_tree_digest?: string
+  basis_tree_digest?: string
+  basis_entries?: number | null
 }
 
 // 저장소별 작업공간 전부와 조합·선택을 담은 조회 결과(P3-R2).
@@ -2239,6 +2273,7 @@ export const WORKSPACE_STATE_LABEL: Record<WorkspaceState, string> = {
   requested: '요청됨 (아직 만들어지지 않음)',
   ready: '준비됨',
   failed: '준비 실패',
+  awaiting_basis: '시작 기준 선택 대기 (아직 만들어지지 않음)',
 }
 
 export const workspaceApi = {
@@ -2262,6 +2297,17 @@ export const workspaceApi = {
     request<WorkspaceOpenRequest>(`/api/cases/${caseId}/workspaces/${repositoryId}/open`, {
       method: 'POST',
       body: JSON.stringify({ target, requested_by: 'owner' }),
+    }),
+
+  // UI-04d(D-77). 미커밋 변경 목록 — 서버 메모리에서 온다(저장되지 않는다). 없으면 `available: false`.
+  uncommitted: (caseId: string, repositoryId: string) =>
+    request<UncommittedList>(`/api/cases/${caseId}/workspaces/${repositoryId}/uncommitted`),
+
+  // 사람의 시작 기준 선택. `seen_digest` 는 본 목록의 지문이다 — 다르면 서버가 409 로 거부한다.
+  decideBasis: (caseId: string, repositoryId: string, basis: StartBasis, seenDigest: string) =>
+    request<RepositoryWorkspace>(`/api/cases/${caseId}/workspaces/${repositoryId}/start-basis`, {
+      method: 'POST',
+      body: JSON.stringify({ basis, actor: 'owner', seen_digest: seenDigest }),
     }),
 }
 
@@ -3305,6 +3351,82 @@ export {
   timeSummary,
 } from './lib/budget'
 
+// ===================================================================== UI-04d
+//
+// 대화 검색(D-84). **판단 값은 서버가 준다** — 무엇을 검색했는가(범위)·무엇이 제외됐는가(미연결 PC 의 본문 수)·
+// 본문 결과가 도착했는가는 서버가 도출한 값이며 화면은 그대로 보인다. 발췌는 서버 메모리로만 중계된 것이다.
+
+export type SearchMatchKind =
+  | 'title'
+  | 'message_summary'
+  | 'work_request'
+  | 'decision'
+  | 'profile_revision'
+  | 'rule'
+  | 'body'
+
+export const SEARCH_KIND_LABEL: Record<SearchMatchKind, string> = {
+  title: '제목',
+  message_summary: '메시지 요약',
+  work_request: '업무 요청',
+  decision: '결정',
+  profile_revision: '목적·유형 변경',
+  rule: '이 대화에서 정한 규칙',
+  body: '본문(PC)',
+}
+
+export interface SearchMatch {
+  kind: SearchMatchKind
+  case_id: string
+  case_title: string
+  archived: boolean
+  status: string
+  seq: number | null
+  author?: string
+  text: string
+  match_count: number
+  item_key: string | null
+  target: 'message' | 'decisions' | 'rule' | 'conversation'
+  source: 'server' | 'runner'
+}
+
+export type SearchBodyState = 'none' | 'pending' | 'partial' | 'relayed' | 'expired' | 'excluded'
+
+export interface SearchScope {
+  archived_included: boolean
+  server_fields: string[]
+  bodies: SearchBodyState
+  candidate_message_count: number
+  excluded_message_count: number
+  expired_message_count: number
+  unreadable_message_count: number
+  truncated: boolean
+  runners: { runner_id: string; host: string | null; connection: string | null; state: string; message_count: number }[]
+  note: string
+}
+
+export interface SearchView {
+  id: string
+  project_id: string
+  requested_at: string
+  query_length: number
+  words: string[]
+  scope: SearchScope
+  matches: SearchMatch[]
+  body: { state: SearchBodyState; matches: SearchMatch[]; scanned: number; unreadable: number }
+  not_stored: boolean
+}
+
+export const searchApi = {
+  start: (projectId: string, query: string) =>
+    request<SearchView>(`/api/projects/${projectId}/conversation-searches`, {
+      method: 'POST',
+      body: JSON.stringify({ query, requested_by: 'owner' }),
+    }),
+  // 본문 결과가 도착했는지 다시 본다. 404 는 만료·재시작이다 — 빈 결과가 아니다.
+  get: (searchId: string) => request<SearchView>(`/api/conversation-searches/${searchId}`),
+}
+
 export const shellApi = {
   projects: () => request<ProjectWithAttention[]>('/api/projects'),
 
@@ -3439,6 +3561,7 @@ export const WAIT_LABEL: Record<string, string> = {
   work_graph_missing: '작업 그래프 없음',
   tasks_blocked: '배정 가능한 작업 없음',
   repository_selection: '코드 쓰기 저장소 선택',
+  workspace_start_basis: '시작 코드 선택(커밋하지 않은 변경)',
   task_failed: '작업 실행 실패',
   unresolved_feedback: '미해결 피드백',
   controlled_result: '결과 확인(controlled)',

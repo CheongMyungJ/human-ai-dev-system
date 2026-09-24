@@ -21,6 +21,8 @@ from controller.config import ControllerConfig, load_config
 from controller.relay import RelayBuffer
 from controller.repository import Repository
 from controller.request_processor import RequestProcessor
+from controller.search import SearchRegistry
+from controller.transient import TransientStore
 from controller.work_progressor import WorkProgressor
 
 LOGGER_NAME = "hads.controller"
@@ -51,6 +53,10 @@ def create_app(config: ControllerConfig | None = None) -> FastAPI:
         app.state.conn = conn
         app.state.config = config
         app.state.relay = RelayBuffer()
+        # UI-04d. 검색 요청·발췌(D-84)와 미커밋 변경 목록(D-77)은 **이 프로세스의 메모리**에만 있다 —
+        # data-boundary 1·3절. 재시작하면 사라지고 사람이 다시 요청한다. DB 에 표가 없다.
+        app.state.searches = SearchRegistry(TransientStore())
+        app.state.uncommitted = TransientStore()
         app.state.logger = _setup_logging(config)
 
         # 이전 프로세스가 중계 중이던 원문은 이 프로세스의 메모리에 없다.

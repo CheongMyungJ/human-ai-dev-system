@@ -71,6 +71,9 @@ export function Sidebar(props: {
   // UI-04b. PC 알림(D-82) — 이 브라우저의 설정과 브라우저 권한 상태.
   notifications: boolean
   permission: PermissionState
+  // UI-04d(D-84). 대화 검색 — 제출하면 가운데가 검색 화면이 된다. 검색어는 주소·서버에 남지 않는다.
+  searchOpen: boolean
+  onSearch: (query: string) => void
   onSelectProject: (id: string) => void
   onSelectCase: (id: string) => void
   onNewConversation: () => void
@@ -81,6 +84,7 @@ export function Sidebar(props: {
   onCollapse: () => void
 }) {
   const [showArchived, setShowArchived] = useState(false)
+  const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
   const [path, setPath] = useState('')
@@ -142,6 +146,26 @@ export function Sidebar(props: {
       >
         ＋ 새 대화
       </button>
+      <form
+        className={props.searchOpen ? 'sh-search-form sh-search-form-on' : 'sh-search-form'}
+        data-testid="search-form"
+        onSubmit={(event) => {
+          event.preventDefault()
+          if (query.trim()) props.onSearch(query.trim())
+        }}
+      >
+        <input
+          value={query}
+          placeholder="대화 검색(보관 포함)"
+          disabled={!props.project}
+          onChange={(e) => setQuery(e.target.value)}
+          data-testid="search-input"
+          aria-label="대화 검색"
+        />
+        <button type="submit" disabled={!props.project || !query.trim()} data-testid="search-submit" title="제목·요약·결정·규칙은 서버에서, 본문은 작업 PC 에서">
+          검색
+        </button>
+      </form>
       <button
         type="button"
         className={props.settingsTab === 'defaults' || props.settingsTab === 'repositories' ? 'sh-row sh-row-active sh-rules-entry' : 'sh-row sh-rules-entry'}

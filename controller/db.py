@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 26
+SCHEMA_VERSION = 27
 
 
 def utc_now() -> str:
@@ -538,6 +538,22 @@ def migrate(conn: sqlite3.Connection) -> None:
         "TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200)",
     )
     _migrate_v26_interpretation(conn)
+
+    # v27: 미커밋 포함 시작(UI-04d, D-77). **`case_workspace` 컬럼 여덟뿐이다** — 새 표·재구성·데이터 이행 없음.
+    #      옛 행은 `start_basis` NULL 이며 그것은 "기록 없음" 이지 `committed` 가 아니다 — 당시에는 선택 경로가
+    #      없었고 준비는 HEAD 였다는 사실은 `base_commit`·`user_tree_dirty` 가 이미 말한다. 지어 채우지 않는다.
+    #      검색(D-84)은 표를 만들지 않는다 — 검색어·발췌·목록은 제어부 메모리에만 있다(`controller/transient.py`).
+    for column, ddl in (
+        ("start_basis", "TEXT"),
+        ("basis_decided_by", "TEXT"),
+        ("basis_decided_at", "TEXT"),
+        ("committed_base", "TEXT NOT NULL DEFAULT ''"),
+        ("included_entries", "INTEGER"),
+        ("included_tree_digest", "TEXT NOT NULL DEFAULT ''"),
+        ("basis_tree_digest", "TEXT NOT NULL DEFAULT ''"),
+        ("basis_entries", "INTEGER"),
+    ):
+        _add_column_if_missing(conn, "case_workspace", column, ddl)
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 import {
   conversationApi,
+  searchApi,
   shellApi,
   type ConversationRow,
   type ProjectRepository,
@@ -50,6 +51,7 @@ import { listen } from './events'
 import { permissionState, requestPermission, show, type PermissionState } from './notifier'
 import { ProjectSettings } from './ProjectSettings'
 import { ReviewPanel, type PanelTab } from './ReviewPanel'
+import { EMPTY_SEARCH, SearchScreen, type SearchState } from './SearchScreen'
 import { Sidebar } from './Sidebar'
 import { useCaseData } from './useCaseData'
 import './shell.css'
@@ -128,6 +130,8 @@ export function Shell() {
   const [focusSeq, setFocusSeq] = useState<number | null>(initial.current.seq)
   const [openRequest, setOpenRequest] = useState<{ ref: VersionRef; nonce: number } | null>(null)
   const [listNonce, setListNonce] = useState(0)
+  // UI-04d(D-84). 대화 검색 — 서버 일치는 바로, 본문 일치는 PC 가 올릴 때까지 조회를 반복한다(최대 30초).
+  const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH)
 
   // ------------------------------------------------------------ 알림(UI-04b)
   const [permission, setPermission] = useState<PermissionState>(() => permissionState())
@@ -287,6 +291,69 @@ export function Shell() {
     setPanel(null)
   }
 
+  // ------------------------------------------------------------ 대화 검색(UI-04d)
+  const startSearch = (query: string) => {
+    if (!projectId) return
+    setScreen('search')
+    setPanel(null)
+    setRulesItem(null)
+    setSearch({ query, view: null, status: 'searching', error: null })
+    void searchApi
+      .start(projectId, query)
+      .then((view) => {
+        const waiting = view.body.state === 'pending' || view.body.state === 'partial'
+        setSearch({ query, view, status: waiting ? 'searching' : 'done', error: null })
+      })
+      .catch((err) => setSearch({ query, view: null, status: 'error', error: err instanceof Error ? err.message : String(err) }))
+  }
+  const searchId = search.view?.id ?? null
+  const searchWaiting = search.status === 'searching' && searchId !== null
+  useEffect(() => {
+    if (!searchWaiting || !searchId) return
+    let stopped = false
+    const deadline = Date.now() + 30_000
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const tick = async () => {
+      try {
+        const view = await searchApi.get(searchId)
+        if (stopped) return
+        const waiting = view.body.state === 'pending' || view.body.state === 'partial'
+        if (!waiting) {
+          setSearch((prev) => ({ ...prev, view, status: 'done' }))
+          return
+        }
+        if (Date.now() >= deadline) {
+          setSearch((prev) => ({ ...prev, view, status: 'expired' }))
+          return
+        }
+        setSearch((prev) => ({ ...prev, view }))
+      } catch (err) {
+        if (stopped) return
+        setSearch((prev) => ({ ...prev, status: 'expired', error: err instanceof Error ? err.message : String(err) }))
+        return
+      }
+      if (!stopped) timer = setTimeout(() => void tick(), 500)
+    }
+    timer = setTimeout(() => void tick(), 500)
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [searchWaiting, searchId])
+  const openMessageFromSearch = (id: string, seq: number | null) => {
+    selectCase(id)
+    setFocusSeq(seq)
+  }
+  const openDecisionsFromSearch = (id: string) => {
+    selectCase(id)
+    setPanel('decisions')
+  }
+  const openRuleFromSearch = (itemKey: string) => {
+    setScreen('rules')
+    setRulesItem(itemKey)
+    setPanel(null)
+  }
+
   // 메시지의 참조를 누르면 결과물 패널에서 **그 버전**을 연다(D-85).
   useEffect(
     () =>
@@ -364,7 +431,8 @@ export function Shell() {
   }
 
   const settingsOpen = isSettingsScreen(screen)
-  const panelOpen = panel !== null && !settingsOpen
+  const searchOpen = screen === 'search'
+  const panelOpen = panel !== null && !settingsOpen && !searchOpen
   const layoutClass = [
     'sh-layout',
     prefs.sidebarCollapsed ? 'sh-sidebar-collapsed' : '',
@@ -402,6 +470,8 @@ export function Shell() {
             settingsTab={settingsOpen ? settingsTabOf(screen) : null}
             notifications={prefs.notifications}
             permission={permission}
+            searchOpen={searchOpen}
+            onSearch={startSearch}
             onSelectProject={selectProject}
             onSelectCase={selectCase}
             onNewConversation={createConversation}
@@ -435,7 +505,18 @@ export function Shell() {
         )}
         {topError && <div className="sh-banner sh-error">서버와 통신하지 못했다: {topError}</div>}
         <NoticeLog log={noticeLog} onOpen={openNotice} />
-        {settingsOpen && project ? (
+        {searchOpen && project ? (
+          <SearchScreen
+            key={project.id}
+            project={project}
+            search={search}
+            onSearch={startSearch}
+            onOpenMessage={openMessageFromSearch}
+            onOpenDecisions={openDecisionsFromSearch}
+            onOpenRule={openRuleFromSearch}
+            onBack={() => setScreen('conversation')}
+          />
+        ) : settingsOpen && project ? (
           <ProjectSettings
             key={project.id}
             project={project}

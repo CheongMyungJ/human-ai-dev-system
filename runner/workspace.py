@@ -209,6 +209,73 @@ class PreparedWorkspace:
     #: 준비 시점의 **사용자 원래 작업 트리**. 시스템이 정리하지 않았다는 기록이다.
     user_tree: TreeState | None = None
     reused: bool = False
+    #: UI-04d(D-77). 어떤 코드에서 시작했는가(`committed` | `include_uncommitted`). 재사용이면 처음 것.
+    start_basis: str | None = None
+    #: 그때 기준 ref 의 커밋(HEAD). 포함이면 `base_commit` 은 이 위의 스냅샷 커밋이다.
+    committed_base: str = ""
+    #: 포함한 미커밋 항목 수와 그 트리의 지문. 경로는 여기(Runner)에만 있다.
+    included_entries: int = 0
+    included_tree_digest: str = ""
+
+
+@dataclass(frozen=True)
+class NeedsBasis:
+    """만들지 않았다(UI-04d, D-77) — 사용자의 원래 트리에 커밋하지 않은 변경이 있어 **사람이 고른다.**
+
+    `entries` 는 `git status --porcelain` 줄이며 **이 Runner 에만 남고** 제어부로는 메모리 중계로만 간다.
+    `stale` 은 이미 고른 기준으로 만들려다 목록 때의 지문과 달라 멈췄다는 뜻이다 — 사람이 본 목록과
+    다른 것을 포함하지 않는다.
+    """
+
+    head: str
+    entries: tuple[str, ...]
+    digest: str
+    stale: bool = False
+
+
+#: 미커밋 포함 시작의 스냅샷 커밋 작성자. 사용자의 이름·설정을 쓰지 않는다 — 시스템이 만든 커밋이다.
+SNAPSHOT_AUTHOR = {
+    "GIT_AUTHOR_NAME": "hads",
+    "GIT_AUTHOR_EMAIL": "hads@local",
+    "GIT_COMMITTER_NAME": "hads",
+    "GIT_COMMITTER_EMAIL": "hads@local",
+}
+
+
+def snapshot_commit(repo: Path, head: str, entry_count: int) -> str:
+    """사용자의 현재 작업 트리(미커밋·미추적 포함, `.gitignore` 존중)를 **스냅샷 커밋**으로 만든다(UI-04d, D-77).
+
+    **원래 트리·인덱스·브랜치·HEAD 를 건드리지 않는다.** 임시 인덱스 파일(`GIT_INDEX_FILE`)에 HEAD 를 읽어
+    들이고 `add -A` 로 작업 트리를 얹어 `write-tree` → `commit-tree`(부모 = HEAD) 한다. 그 결과는 객체
+    저장소에 더해진 커밋 하나이며 어떤 ref 도 옮기지 않는다 — Case 브랜치가 그 커밋을 가리키게 되는 것은
+    호출자의 `worktree add` 다. 사용자에게는 `git log` 의 브랜치 첫 커밋으로 보인다(감추지 않는다).
+    """
+    repo = Path(repo)
+    index = repo / ".git" / f"hads-snapshot-{os.getpid()}-{int(time.time() * 1000)}.index"
+    git_dir = git(repo, "rev-parse", "--git-dir").strip()
+    index = (repo / git_dir).resolve() / index.name
+    env = {**os.environ, "GIT_INDEX_FILE": str(index), **SNAPSHOT_AUTHOR}
+
+    def run(*args: str) -> str:
+        proc = subprocess.run(
+            ["git", *args], cwd=str(repo), capture_output=True, timeout=GIT_TIMEOUT, env=env
+        )
+        if proc.returncode != 0:
+            err = proc.stderr.decode("utf-8", errors="replace").strip()
+            raise WorkspaceError(f"git {' '.join(args)} 실패 (exit {proc.returncode}): {err}")
+        return proc.stdout.decode("utf-8", errors="replace")
+
+    try:
+        run("read-tree", head)
+        run("add", "-A")
+        tree = run("write-tree").strip()
+        message = f"hads: 미커밋 변경 {entry_count}건을 포함해 시작 (스냅샷, 원래 폴더는 그대로)"
+        return run("commit-tree", tree, "-p", head, "-m", message).strip()
+    finally:
+        try:
+            index.unlink()
+        except OSError:
+            pass
 
 
 def prepare(
@@ -217,7 +284,9 @@ def prepare(
     branch: str,
     base_ref: str = "HEAD",
     known_base_commit: str = "",
-) -> PreparedWorkspace:
+    start_basis: str | None = None,
+    expected_tree_digest: str = "",
+) -> PreparedWorkspace | NeedsBasis:
     """Case 전용 브랜치와 worktree 를 만든다.
 
     순서가 중요하다.
@@ -227,7 +296,9 @@ def prepare(
       2. 사용자의 원래 작업 트리를 **관측만** 한다. 정리하지 않는다
       3. 기준 커밋을 해석한다. `HEAD` 는 커밋된 상태이며 미커밋 변경을 담지 않는다
       4. 소유 관계를 대조한다. 우리 것이면 재사용하고, 남의 것이면 거부한다
-      5. `git worktree add` 로 새 경로에 브랜치를 펼친다
+      5. (UI-04d, D-77) 트리가 더럽고 시작 기준이 정해지지 않았으면 **만들지 않고 묻는다**(`NeedsBasis`).
+         `include_uncommitted` 면 목록 때의 지문과 같을 때만 스냅샷 커밋을 만들어 그 위에서 편다
+      6. `git worktree add` 로 새 경로에 브랜치를 펼친다
 
     `known_base_commit` 은 앞선 준비가 이미 정한 기준이다. 재사용할 때 그 값을
     다시 쓰는 이유는, 재사용 시점의 HEAD 로 바꾸면 **이미 한 변경이 기준에 섞여**
@@ -264,18 +335,55 @@ def prepare(
             base_ref=base_ref,
             user_tree=user_tree,
             reused=True,
+            start_basis=start_basis,
         )
 
+    # UI-04d(D-77). **더러운 트리는 사람이 고른 뒤에만 만든다.** 깨끗하면 묻지 않는다(HEAD 기본).
+    if user_tree.dirty and not start_basis:
+        return NeedsBasis(head=user_tree.head, entries=user_tree.entries, digest=user_tree.digest)
+
+    included = 0
+    included_digest = ""
+    committed_base = base_commit
+    start_commit = base_commit
+    chosen = start_basis or "committed"
+    if chosen == "include_uncommitted":
+        if base_commit != user_tree.head:
+            # 사용자 트리는 HEAD 위의 변경이다 — 다른 기준과 합칠 수 없다. 조용히 다른 것을 만들지 않는다.
+            raise WorkspaceError(
+                f"미커밋 포함 시작은 현재 HEAD 기준에서만 뜻이 있다: base_ref={base_ref} 는"
+                f" HEAD 가 아니다"
+            )
+        if user_tree.digest != (expected_tree_digest or ""):
+            # 목록을 올린 뒤 트리가 바뀌었다. 사람이 본 것과 다른 것을 포함하지 않는다 — 다시 묻는다.
+            return NeedsBasis(
+                head=user_tree.head, entries=user_tree.entries, digest=user_tree.digest, stale=True
+            )
+        if user_tree.dirty:
+            start_commit = snapshot_commit(repo_path, user_tree.head, len(user_tree.entries))
+            included = len(user_tree.entries)
+            included_digest = user_tree.digest
+        else:
+            # 고르는 사이 사용자가 직접 커밋해 트리가 깨끗해졌을 수는 없다(지문이 같다) — 여기 오면 목록이 비어
+            # 있었던 것이므로 커밋된 코드와 같다.
+            chosen = "committed"
+    elif chosen != "committed":
+        raise WorkspaceError(f"모르는 시작 기준: {start_basis}")
+
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
-    git(repo_path, "worktree", "add", "-b", branch, str(worktree_path), base_commit)
+    git(repo_path, "worktree", "add", "-b", branch, str(worktree_path), start_commit)
     return PreparedWorkspace(
         repo_path=str(repo_path),
         worktree_path=str(worktree_path),
         branch=branch,
-        base_commit=base_commit,
+        base_commit=start_commit,
         base_ref=base_ref,
         user_tree=user_tree,
         reused=False,
+        start_basis=chosen,
+        committed_base=committed_base,
+        included_entries=included,
+        included_tree_digest=included_digest,
     )
 
 

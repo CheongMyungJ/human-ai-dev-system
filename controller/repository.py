@@ -173,9 +173,22 @@ from domain.models import (
     WorkStartDecider,
     WorkspaceAllowanceSource,
     WorkspaceState,
+    StartBasis,
 )
 
 MAX_SUMMARY = 200
+
+#: UI-04d(D-84). 결정 종류의 사람 말 — 검색이 결정 행을 글로 대조할 때 쓴다(화면의 이름표와 같다).
+DECISION_KIND_TEXT: dict[str, str] = {
+    "intent_agreement": "의도 동의",
+    "design_review": "설계 검토",
+    "plan_review": "계획 검토",
+    "final_acceptance": "최종 인수",
+    "exception_closure": "예외 수용 종료",
+    "push_approval": "push 승인",
+    "publication_grant": "게시 허용",
+    "material_delta_confirmation": "동의된 의도의 변경 확인",
+}
 
 #: 읽기 전용이 아닌 권한. 이 권한의 실행은 같은 Case 안에서 직렬화한다(FR-26).
 WRITE_PERMISSIONS = (
@@ -8293,6 +8306,10 @@ class Repository:
         user_tree_dirty: bool,
         user_tree_entries: int,
         repository_id: str | None = None,
+        start_basis: str | None = None,
+        committed_base: str = "",
+        included_entries: int = 0,
+        included_tree_digest: str = "",
     ) -> dict[str, Any]:
         """Runner 가 실제로 만든 결과를 기록한다.
 
@@ -8303,17 +8320,34 @@ class Repository:
         시스템이 그것을 정리하지 않았다는 사실을 남기기 위한 값이며, 파일 경로는
         올라오지 않고 수만 센다. **저장소마다 따로 센다** — 한 Case 가 두 저장소를
         쓰면 각 저장소의 사용자 변경은 서로 다른 것이다(P3-R2).
+
+        UI-04d(D-77). `start_basis` 는 **어떤 코드에서 시작했는가**다 — `committed`(기준 ref 의 커밋)
+        또는 `include_uncommitted`(그 커밋 위에 사용자의 미커밋 변경을 얹은 스냅샷 커밋이 `base_commit`).
+        옛 Runner 는 주지 않으며 그때는 NULL(기록 없음)로 남는다. 포함이면 `committed_base`(그때의 HEAD)·
+        `included_entries`·`included_tree_digest`(해시)가 "정확한 시작 상태" 의 기록이다. 파일 경로는 없다.
         """
         repository_id = self._workspace_target(case_id, repository_id)
         self.get_runner(runner_id)
         if not base_commit:
             raise ConflictError("a workspace cannot be ready without a base commit")
+        if start_basis is not None:
+            start_basis = StartBasis(start_basis).value
+        if start_basis == StartBasis.INCLUDE_UNCOMMITTED.value and not (
+            committed_base and included_tree_digest
+        ):
+            raise ConflictError(
+                "an included-changes workspace needs its committed base and tree digest"
+            )
+        if start_basis and not committed_base:
+            committed_base = base_commit  # 커밋된 코드에서 시작 — 기준 커밋이 곧 커밋 기준이다
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE case_workspace SET state = ?, runner_id = ?, repo_path = ?,"
                 " worktree_path = ?, branch = ?, base_commit = ?, base_ref = ?,"
                 " user_tree_dirty = ?, user_tree_entries = ?, failure_reason = '',"
-                " ready_at = ? WHERE case_id = ? AND repository_id = ?",
+                " ready_at = ?, start_basis = COALESCE(?, start_basis), committed_base = ?,"
+                " included_entries = ?, included_tree_digest = ?"
+                " WHERE case_id = ? AND repository_id = ?",
                 (
                     WorkspaceState.READY.value,
                     runner_id,
@@ -8324,6 +8358,104 @@ class Repository:
                     base_ref,
                     1 if user_tree_dirty else 0,
                     int(user_tree_entries),
+                    utc_now(),
+                    start_basis,
+                    committed_base,
+                    int(included_entries) if start_basis else None,
+                    included_tree_digest,
+                    case_id,
+                    repository_id,
+                ),
+            )
+        return self.get_workspace(case_id, repository_id)
+
+    # ------------------------------------------------ UI-04d 미커밋 포함 시작(D-77)
+
+    def report_workspace_uncommitted(
+        self,
+        case_id: str,
+        runner_id: str,
+        *,
+        head: str,
+        user_tree_digest: str,
+        entry_count: int,
+        stale: bool = False,
+        repository_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Runner 가 **만들지 않고 물었다**(UI-04d, D-77) — 사용자의 원래 트리에 커밋하지 않은 변경이 있다.
+
+        행은 `awaiting_basis` 가 된다: 준비됨이 아니고 실패도 아니다. 수·지문·그때의 HEAD 만 남는다 —
+        **파일 목록은 여기 오지 않는다**(API 가 제어부 메모리에만 둔다, D-43). `stale` 은 사람이 이미
+        골랐는데 포함 직전에 트리가 달라져 있었다는 뜻이다 — 그 선택을 지우고 새 목록으로 다시 묻는다.
+        사람이 본 목록과 다른 것을 포함하지 않는다.
+        """
+        repository_id = self._workspace_target(case_id, repository_id)
+        self.get_runner(runner_id)
+        if not head or not user_tree_digest:
+            raise ConflictError("an uncommitted-changes report needs the HEAD and a tree digest")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE case_workspace SET state = ?, runner_id = ?, committed_base = ?,"
+                " basis_tree_digest = ?, basis_entries = ?, user_tree_dirty = 1,"
+                " user_tree_entries = ?, failure_reason = '', ready_at = NULL"
+                + (", start_basis = NULL, basis_decided_by = NULL, basis_decided_at = NULL" if stale else "")
+                + " WHERE case_id = ? AND repository_id = ?",
+                (
+                    WorkspaceState.AWAITING_BASIS.value,
+                    runner_id,
+                    head,
+                    user_tree_digest,
+                    int(entry_count),
+                    int(entry_count),
+                    case_id,
+                    repository_id,
+                ),
+            )
+        return self.get_workspace(case_id, repository_id)
+
+    def decide_start_basis(
+        self,
+        case_id: str,
+        repository_id: str,
+        basis: str,
+        *,
+        actor: str,
+        seen_digest: str,
+    ) -> dict[str, Any]:
+        """사람이 시작 기준을 고른다(UI-04d, D-77). 선택은 **권한이 아니다** — 작업공간은 여전히 선택·허용
+        검사(`request_workspace`)를 지났고 실행은 진입 검사를 그대로 지난다.
+
+        `seen_digest` 는 사람이 본 목록의 트리 지문이다. 지금 행의 지문과 다르면 그 사이 PC 가 새 목록을
+        올렸다는 뜻이므로 받지 않는다(`basis_list_stale`) — 보지 않은 것을 포함하게 두지 않는다. 기록 뒤
+        행은 `requested` 로 돌아가 Runner 가 다음 회차에 만든다(포함이면 만들기 직전에 한 번 더 대조한다).
+        """
+        try:
+            chosen = StartBasis(basis)
+        except ValueError:
+            raise ConflictError(f"unknown start basis: {basis}")
+        workspace = self.get_workspace(case_id, repository_id)
+        if workspace is None:
+            raise NotFoundError(f"workspace not requested for case: {case_id}/{repository_id}")
+        if workspace["state"] != WorkspaceState.AWAITING_BASIS.value:
+            raise ConflictError(
+                f"workspace_not_awaiting_basis: the workspace is {workspace['state']} —"
+                " a start basis is chosen only while the PC is asking"
+            )
+        if not seen_digest or seen_digest != workspace.get("basis_tree_digest"):
+            raise ConflictError(
+                "basis_list_stale: the uncommitted-changes list you saw is not the current one —"
+                " reload the list and choose again"
+            )
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE case_workspace SET state = ?, start_basis = ?, basis_decided_by = ?,"
+                " basis_decided_at = ?, requested_at = ?, ready_at = NULL, failure_reason = ''"
+                " WHERE case_id = ? AND repository_id = ?",
+                (
+                    WorkspaceState.REQUESTED.value,
+                    chosen.value,
+                    actor,
+                    utc_now(),
                     utc_now(),
                     case_id,
                     repository_id,
@@ -8410,10 +8542,16 @@ class Repository:
             "ready": workspace["state"] == WorkspaceState.READY.value,
             "target_recorded": True,
             "repository_id": workspace["repository_id"],
+            "repository_name": workspace.get("repository_name"),
             "branch": workspace["branch"],
             "base_commit": workspace["base_commit"],
             "worktree_path": workspace["worktree_path"],
             "failure_reason": workspace["failure_reason"],
+            # UI-04d(D-77). 시작 기준 선택 대기의 카드 값 — 수·그때의 HEAD·정한 기준. 파일 경로는 없다.
+            "start_basis": workspace.get("start_basis"),
+            "committed_base": workspace.get("committed_base") or "",
+            "basis_entries": workspace.get("basis_entries"),
+            "user_tree_entries": workspace.get("user_tree_entries"),
         }
 
     def task_repository_state(self, case_id: str, task_key: str) -> dict[str, Any]:
@@ -12855,6 +12993,140 @@ class Repository:
         stamps = [t for t in (last, case.get("updated_at")) if t]
         case["last_activity_at"] = max(stamps) if stamps else None
         return case
+
+    # ------------------------------------------------------ UI-04d 대화 검색(D-84)
+
+    def search_candidates(self, project_id: str, body_limit: int) -> dict[str, Any]:
+        """검색이 읽는 **서버 필드**와 **본문 후보**(참조뿐). 본문은 없다(UI-04d, D-84).
+
+        서버 필드는 이미 서버에 있던 짧은 값이다 — 제목, 메시지 요약(호출자 문구 — 본문 발췌가 아니다),
+        업무화 요약, 결정(종류·대상·주체), Profile 개정 사유, 이 대화에서 등록한 규칙의 요약. 보관된 대화도
+        든다(D-84 "보관 포함"). 본문 후보는 메시지 원문 참조(`artifact_id/revision`)와 **소유 PC** 이며 그
+        PC 가 읽어 대조한다 — 최신순 상한을 넘으면 `truncated` 다.
+        """
+        self.get_project(project_id)
+        cases = [
+            {
+                "case_id": c["id"],
+                "title": c["title"],
+                "status": c["status"],
+                "archived": bool(c["archived"]),
+                "stage": c["effective_stage"],
+            }
+            for c in self.list_cases(project_id, "include")
+        ]
+        by_case = {c["case_id"]: c for c in cases}
+        if not cases:
+            return {"cases": [], "fields": [], "bodies": [], "truncated": False}
+        ids_ = list(by_case)
+        marks = ",".join("?" * len(ids_))
+        fields: list[dict[str, Any]] = [
+            {"kind": "title", "case_id": c["case_id"], "seq": None, "text": c["title"], "target": "conversation"}
+            for c in cases
+        ]
+        for row in self.conn.execute(
+            f"SELECT case_id, seq, author, message_kind, summary FROM conversation_message"
+            f" WHERE case_id IN ({marks}) ORDER BY case_id, seq",
+            ids_,
+        ).fetchall():
+            fields.append(
+                {
+                    "kind": "message_summary",
+                    "case_id": row["case_id"],
+                    "seq": row["seq"],
+                    "text": row["summary"],
+                    "target": "message",
+                }
+            )
+        for row in self.conn.execute(
+            f"SELECT w.case_id, w.summary, m.seq FROM case_work_start w"
+            f" LEFT JOIN conversation_message m ON m.id = w.request_message_id"
+            f" WHERE w.case_id IN ({marks})",
+            ids_,
+        ).fetchall():
+            fields.append(
+                {
+                    "kind": "work_request",
+                    "case_id": row["case_id"],
+                    "seq": row["seq"],
+                    "text": row["summary"],
+                    "target": "decisions",
+                }
+            )
+        for row in self.conn.execute(
+            f"SELECT case_id, kind, subject_type, subject_revision, actor FROM decision"
+            f" WHERE case_id IN ({marks}) AND revoked_at IS NULL",
+            ids_,
+        ).fetchall():
+            fields.append(
+                {
+                    "kind": "decision",
+                    "case_id": row["case_id"],
+                    "seq": None,
+                    "text": (
+                        f"{DECISION_KIND_TEXT.get(row['kind'], row['kind'])}"
+                        f" · {row['subject_type']} v{row['subject_revision']} · {row['actor']}"
+                    ),
+                    "target": "decisions",
+                }
+            )
+        for row in self.conn.execute(
+            f"SELECT r.case_id, r.reason_summary, r.from_profile, r.to_profile, m.seq"
+            f" FROM case_profile_revision r"
+            f" LEFT JOIN conversation_message m ON m.id = r.request_message_id"
+            f" WHERE r.case_id IN ({marks})",
+            ids_,
+        ).fetchall():
+            fields.append(
+                {
+                    "kind": "profile_revision",
+                    "case_id": row["case_id"],
+                    "seq": row["seq"],
+                    "text": f"{row['from_profile']} → {row['to_profile']} · {row['reason_summary'] or ''}",
+                    "target": "decisions",
+                }
+            )
+        # 이 대화에서 정한 규칙 — 출처 대화가 이 프로젝트의 대화인 지식 버전(자동 등록·수동 등록·후보 전부). 본문이
+        # 아니라 짧은 요약(kv.summary)만 대조한다; 무효·대체된 버전도 "그때 정한 것" 으로 찾힌다(상태는 화면이 보인다).
+        for row in self.conn.execute(
+            f"SELECT kv.source_case_id AS case_id, kv.summary, kv.state, item.knowledge_key, sm.seq"
+            f" FROM knowledge_version kv"
+            f" JOIN knowledge_item item ON item.id = kv.knowledge_id"
+            f" LEFT JOIN conversation_message sm ON sm.id = kv.source_message_id"
+            f" WHERE kv.source_case_id IN ({marks}) ORDER BY kv.created_at",
+            ids_,
+        ).fetchall():
+            fields.append(
+                {
+                    "kind": "rule",
+                    "case_id": row["case_id"],
+                    "seq": row["seq"],
+                    "text": row["summary"],
+                    "item_key": row["knowledge_key"],
+                    "target": "rule",
+                }
+            )
+        rows = self.conn.execute(
+            f"SELECT m.case_id, m.seq, m.author, m.artifact_id, m.artifact_rev,"
+            f" a.owner_runner_id, a.availability FROM conversation_message m"
+            f" JOIN artifact_ref a ON a.artifact_id = m.artifact_id AND a.revision = m.artifact_rev"
+            f" WHERE m.case_id IN ({marks}) ORDER BY m.created_at DESC, m.seq DESC LIMIT ?",
+            [*ids_, int(body_limit) + 1],
+        ).fetchall()
+        truncated = len(rows) > body_limit
+        bodies = [
+            {
+                "case_id": r["case_id"],
+                "seq": r["seq"],
+                "author": r["author"],
+                "artifact_id": r["artifact_id"],
+                "revision": r["artifact_rev"],
+                "owner_runner_id": r["owner_runner_id"],
+                "availability": r["availability"],
+            }
+            for r in rows[:body_limit]
+        ]
+        return {"cases": cases, "fields": fields, "bodies": bodies, "truncated": truncated}
 
 
     # ================================================================== UI-02

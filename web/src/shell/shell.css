@@ -177,6 +177,55 @@ textarea {
   min-height: 0;
 }
 
+/* UI-04d(D-84). 왼쪽 목록의 검색 폼과 검색 화면의 결과. */
+.sh-search-form {
+  display: flex;
+  gap: 4px;
+  margin: 4px 0;
+}
+
+.sh-search-form input {
+  flex: 1;
+  min-width: 0;
+}
+
+.sh-search-form-on input {
+  border-color: var(--sh-accent);
+}
+
+.sh-search-form-wide {
+  max-width: 720px;
+  margin: 12px 0;
+}
+
+.sh-search-group {
+  margin-bottom: 10px;
+}
+
+.sh-search-hit {
+  display: block;
+  text-align: left;
+  white-space: normal;
+}
+
+.sh-search-excerpt {
+  white-space: pre-wrap;
+}
+
+mark.sh-hit {
+  background: var(--sh-accent-soft, #ffe9a8);
+  color: inherit;
+  padding: 0 1px;
+  border-radius: 2px;
+}
+
+/* UI-04d(D-77). 시작 코드 선택 카드의 미커밋 변경 목록. */
+.sh-basis-list {
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
 .sh-list-title {
   font-size: 12px;
   font-weight: 600;

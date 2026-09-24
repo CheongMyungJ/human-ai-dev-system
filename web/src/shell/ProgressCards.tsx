@@ -21,7 +21,9 @@ import {
   PROGRESS_LIMIT_SOURCE_LABEL,
   PROGRESS_STATE_LABEL,
   PROGRESS_STEP_LABEL,
+  START_BASIS_LABEL,
   WAIT_LABEL,
+  workspaceApi,
   type ProgressLimitKey,
   type CaseRelationView,
   type KnowledgeRegistration,
@@ -29,6 +31,8 @@ import {
   type MaterialDeltaRow,
   type ProgressView,
   type ProgressWait,
+  type StartBasis,
+  type UncommittedList,
 } from '../api'
 import { rulesLink } from '../lib/address'
 import { autoReferenceText } from './ProjectRules'
@@ -217,6 +221,8 @@ function WaitCard(props: {
       return <FeedbackCard {...props} />
     case 'criteria_unresolved':
       return <ExceptionCard {...props} />
+    case 'workspace_start_basis':
+      return <StartBasisCard {...props} />
     default:
       // P4-05b. 상한에 걸린 대기는 한도·사용 수를 싣는다 — "한도를 올리고 계속" 카드.
       if (wait.limit_key === 'repair_limit' || wait.limit_key === 'task_retry_limit') {
@@ -509,6 +515,107 @@ function ExceptionCard(props: { wait: ProgressWait; caseId: string; detail: Shel
           data-testid="exception-accept"
         >
           선택한 예외를 수용하고 종료
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 시작 코드 선택 (UI-04d, D-77)
+
+function StartBasisCard(props: { wait: ProgressWait; caseId: string; onChanged: () => void }) {
+  // 어느 코드에서 시작할까 — 작업 PC 가 원래 폴더에서 커밋하지 않은 변경을 봤고 **만들지 않고 물었다.** 목록은 서버
+  // 메모리로만 중계된 것이다(저장되지 않는다). 어느 쪽을 골라도 원래 폴더는 바뀌지 않는다. 선택은 권한·동의가 아니다.
+  const action = useAction(props.onChanged)
+  const repositoryId = String(props.wait.repository_id ?? '')
+  const [list, setList] = useState<UncommittedList | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const [nonce, setNonce] = useState(0)
+  useEffect(() => {
+    if (!repositoryId) return
+    let stopped = false
+    void workspaceApi
+      .uncommitted(props.caseId, repositoryId)
+      .then((next) => {
+        if (!stopped) {
+          setList(next)
+          setLoadError(null)
+        }
+      })
+      .catch((err) => {
+        if (!stopped) setLoadError(err instanceof Error ? err.message : String(err))
+      })
+    return () => {
+      stopped = true
+    }
+  }, [props.caseId, repositoryId, nonce])
+  const decide = (basis: StartBasis) => {
+    if (!list?.digest) return
+    void action.run(() => workspaceApi.decideBasis(props.caseId, repositoryId, basis, list.digest as string))
+  }
+  const reload = () =>
+    void action.run(async () => {
+      // 목록이 이 서버에 없다(재시작·만료) — 작업공간을 다시 요청하면 PC 가 다시 관측해 올린다.
+      await workspaceApi.prepare(props.caseId, 'HEAD', repositoryId)
+      setNonce((n) => n + 1)
+    })
+  const head = String(props.wait.head ?? list?.head ?? '')
+  const count = Number(list?.entry_count ?? props.wait.entries ?? 0)
+  return (
+    <div className="sh-card sh-card-wait" data-testid="wait-card-workspace_start_basis" data-repository={repositoryId} data-available={list ? String(list.available) : 'loading'}>
+      <div className="sh-card-head">
+        <strong>어느 코드에서 시작할까</strong> · {String(props.wait.repository_name ?? repositoryId)}
+      </div>
+      <div className="sh-muted">
+        원래 폴더에 커밋하지 않은 변경 <strong data-testid="basis-count">{count}</strong>건이 있어 작업 PC 가 작업공간을 만들지
+        않고 물었다. 기준은 현재 브랜치의 마지막 커밋 <span className="sh-mono">{head.slice(0, 10) || '?'}</span> 이다.
+        <strong> 어느 쪽을 골라도 원래 폴더·인덱스·브랜치는 바뀌지 않는다</strong>(자동 커밋·stash·삭제 없음).
+      </div>
+      {loadError && <p className="sh-warn">목록을 불러오지 못했다: {loadError}</p>}
+      {list && list.stale_choice && (
+        <p className="sh-warn" data-testid="basis-stale">
+          고른 뒤 원래 폴더가 또 바뀌어 작업 PC 가 만들지 않았다 — 새 목록으로 다시 고른다.
+        </p>
+      )}
+      {list && list.available && (
+        <ul className="sh-result-list sh-basis-list" data-testid="basis-entries">
+          {(list.entries ?? []).map((entry, i) => (
+            <li key={`${entry.path}-${i}`} className="sh-mono sh-rule-line" data-testid={`basis-entry-${i}`}>
+              {entry.status} {entry.path}
+            </li>
+          ))}
+          {list.truncated && <li className="sh-muted sh-rule-line">… 목록이 상한을 넘어 일부만 보인다</li>}
+        </ul>
+      )}
+      {list && !list.available && (
+        <p className="sh-muted" data-testid="basis-unavailable">
+          {list.note}{' '}
+          <button type="button" className="sh-link" disabled={action.busy} onClick={reload} data-testid="basis-reload">
+            PC 에서 다시 불러온다
+          </button>
+        </p>
+      )}
+      <div className="sh-composer-bar">
+        {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+        <span className="sh-spacer" />
+        <button
+          type="button"
+          disabled={!list?.available || action.busy}
+          onClick={() => decide('committed')}
+          data-testid="basis-committed"
+          title="이 변경은 원래 폴더에만 남고 작업공간은 마지막 커밋에서 시작한다"
+        >
+          {START_BASIS_LABEL.committed}
+        </button>
+        <button
+          type="button"
+          className="sh-primary"
+          disabled={!list?.available || action.busy}
+          onClick={() => decide('include_uncommitted')}
+          data-testid="basis-include"
+          title="별도 작업공간에 이 변경을 스냅샷 커밋으로 얹어 시작한다. 원래 폴더는 그대로다"
+        >
+          {START_BASIS_LABEL.include_uncommitted}
         </button>
       </div>
     </div>

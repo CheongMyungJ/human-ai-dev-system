@@ -77,6 +77,7 @@ from domain.models import (
     RunPurpose,
     WorkLevel,
 )
+from domain import search as searchrules
 from runner import cli_adapter, cli_events, desktop, process_tree, prompts, workspace
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
@@ -303,6 +304,47 @@ class RunnerAgent:
                 content_hash(body),
             )
             served.append(request["id"])
+        return served
+
+    def serve_search_requests(self) -> list[dict[str, Any]]:
+        """사람이 청한 **본문 검색**을 이 PC 의 원문에서 한다(UI-04d, D-84).
+
+        제어부가 준 후보(고정 버전 `(artifact_id, revision)`)만 읽는다 — 경로를 받지 않고 후보 밖은 읽지
+        않는다(열람 중계와 같은 원칙). 일치 규칙은 제어부와 같은 `domain.search` 다. 발췌는 본문의 일부이며
+        제어부 메모리로만 중계된다. 이 PC 에 없는 원문은 `unreadable` 로 세고 일치로 적지 않는다.
+        """
+        served: list[dict[str, Any]] = []
+        for request in self.control_client.pending_search_requests(self.config.runner_id):
+            words = searchrules.tokens(request.get("query") or "")
+            matches: list[dict[str, Any]] = []
+            scanned = unreadable = 0
+            for candidate in request.get("candidates") or []:
+                try:
+                    body = self.store.get(candidate["artifact_id"], int(candidate["revision"]))
+                except (FileNotFoundError, ValueError, KeyError):
+                    unreadable += 1
+                    continue
+                scanned += 1
+                text = body.decode("utf-8", errors="replace")
+                if not searchrules.matches(text, words):
+                    continue
+                excerpt = searchrules.snippet(text, words)
+                matches.append(
+                    {
+                        "artifact_id": candidate["artifact_id"],
+                        "revision": int(candidate["revision"]),
+                        "snippet": excerpt["snippet"],
+                        "match_count": excerpt["match_count"],
+                    }
+                )
+            try:
+                self.control_client.send_search_results(
+                    request["id"], self.config.runner_id, matches, scanned=scanned, unreadable=unreadable
+                )
+            except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+                served.append({"id": request["id"], "error": f"{exc!r}"})
+                continue
+            served.append({"id": request["id"], "matches": len(matches), "scanned": scanned, "unreadable": unreadable})
         return served
 
     # ------------------------------------------------------------------ 실행
@@ -1443,6 +1485,9 @@ class RunnerAgent:
                     branch=request["branch"],
                     base_ref=request.get("base_ref") or "HEAD",
                     known_base_commit=request.get("base_commit") or "",
+                    # UI-04d(D-77). 사람이 고른 시작 기준과 그때 본 목록의 지문. 없으면 더러운 트리에서 묻는다.
+                    start_basis=request.get("start_basis") or None,
+                    expected_tree_digest=request.get("basis_tree_digest") or "",
                 )
             except (workspace.WorkspaceError, OSError, subprocess.SubprocessError) as exc:
                 self.client.report_workspace_failed(
@@ -1462,6 +1507,34 @@ class RunnerAgent:
                     }
                 )
                 continue
+            if isinstance(prepared, workspace.NeedsBasis):
+                # UI-04d(D-77). **만들지 않고 물었다.** 목록(상태·경로)은 제어부 메모리로만 가고 행에는 수·지문만
+                # 남는다. 사람이 고르면 다음 회차에 이 요청이 다시 내려온다.
+                entries = [
+                    {"status": line[:2].strip() or "?", "path": line[3:] if len(line) > 3 else line}
+                    for line in prepared.entries[: searchrules.MAX_ENTRIES]
+                ]
+                self.client.report_workspace_uncommitted(
+                    case_id,
+                    {
+                        "runner_id": self.config.runner_id,
+                        "repository_id": repository_id,
+                        "head": prepared.head,
+                        "user_tree_digest": prepared.digest,
+                        "entries": entries,
+                        "truncated": len(prepared.entries) > searchrules.MAX_ENTRIES,
+                        "stale": prepared.stale,
+                    },
+                )
+                results.append(
+                    {
+                        "case_id": case_id,
+                        "repository_id": repository_id,
+                        "action": "asked_basis_stale" if prepared.stale else "asked_basis",
+                        "entries": len(prepared.entries),
+                    }
+                )
+                continue
             user_tree = prepared.user_tree
             self.client.report_workspace_ready(
                 case_id,
@@ -1477,6 +1550,11 @@ class RunnerAgent:
                     # 경로는 올라가지 않고 수만 올라간다(D-43).
                     "user_tree_dirty": bool(user_tree and user_tree.dirty),
                     "user_tree_entries": len(user_tree.entries) if user_tree else 0,
+                    # UI-04d(D-77). 어떤 코드에서 시작했는가. 재사용이면 처음 값이 행에 남아 있다(덮지 않는다).
+                    "start_basis": prepared.start_basis,
+                    "committed_base": prepared.committed_base,
+                    "included_entries": prepared.included_entries,
+                    "included_tree_digest": prepared.included_tree_digest,
                 },
             )
             results.append(
@@ -1486,6 +1564,7 @@ class RunnerAgent:
                     "action": "reused" if prepared.reused else "created",
                     "branch": prepared.branch,
                     "base_commit": prepared.base_commit,
+                    "start_basis": prepared.start_basis,
                 }
             )
         return results
@@ -1881,6 +1960,8 @@ class RunnerAgent:
             reconciled = self.reconcile_unfinished()
         stored = self.persist_pending_intakes()
         served = self.serve_read_requests()
+        # UI-04d(D-84). 사람이 청한 본문 검색 — 후보 원문만 읽어 일치를 올린다.
+        searched = self.serve_search_requests()
         # P4-06b. 서버가 청한 지식 원문·권위 메시지를 올린다(옛 지식의 이행).
         uploaded = self.upload_knowledge_originals()
         controls = self.handle_controls(
@@ -1889,6 +1970,7 @@ class RunnerAgent:
         return {
             "stored_intakes": stored,
             "served_reads": served,
+            "served_searches": searched,
             "uploaded_knowledge": uploaded,
             "controls": controls,
             "reconciled": reconciled,

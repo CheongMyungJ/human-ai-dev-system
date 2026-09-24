@@ -187,6 +187,24 @@ class ControllerClient:
         """만들지 못했다. **실패를 준비됨으로 바꾸지 않는다.**"""
         return self._post(f"/api/runner/workspaces/{case_id}/failed", payload)
 
+    def report_workspace_uncommitted(self, case_id: str, payload: dict) -> Any:
+        """UI-04d(D-77). 만들지 않고 물었다 — 사용자 트리의 미커밋 변경 목록(메모리 중계)·수·지문."""
+        return self._post(f"/api/runner/workspaces/{case_id}/uncommitted", payload)
+
+    # ----------------------------------------------------------- UI-04d 검색
+
+    def pending_search_requests(self, runner_id: str) -> list[dict]:
+        """이 PC 가 맡을 본문 검색(검색어·후보 원문 참조)."""
+        return self._get(f"/api/runner/{runner_id}/search-requests")
+
+    def send_search_results(
+        self, search_id: str, runner_id: str, matches: list[dict], *, scanned: int, unreadable: int
+    ) -> Any:
+        return self._post(
+            f"/api/runner/search-requests/{search_id}/results",
+            {"runner_id": runner_id, "matches": matches, "scanned": scanned, "unreadable": unreadable},
+        )
+
     def send_commands(self, run_id: str, runner_id: str, generation: int, commands: list[dict]) -> Any:
         """그 실행이 실제로 실행한 명령. 결과 보고 **전에** 올린다 —
         검증 실행의 완료 판정이 이 기록의 존재를 보기 때문이다."""

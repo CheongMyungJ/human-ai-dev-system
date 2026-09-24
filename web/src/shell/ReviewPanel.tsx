@@ -30,6 +30,8 @@ import {
   profileRevisionApi,
   PROGRESS_ACTION_LABEL,
   PROGRESS_STEP_LABEL,
+  START_BASIS_LABEL,
+  WORKSPACE_STATE_LABEL,
   workspaceApi,
   type CaseKnowledgeUse,
   type ConversationView,
@@ -397,14 +399,27 @@ function WorkspaceRow(props: { caseId: string; ws: RepositoryWorkspace; runners:
       setError(describeApiError(err))
     }
   }
+  // UI-04d(D-77). 시작 기준 — 서버 값 그대로. NULL 은 "기록 없음"(옛 작업공간·아직 안 정함)이지 커밋된 코드가 아니다.
+  const basisText = (() => {
+    if (ws.state === 'awaiting_basis') return '시작 기준 선택 대기 — 대화의 카드에서 고른다(아직 만들어지지 않음)'
+    if (ws.start_basis === 'include_uncommitted') {
+      return `${START_BASIS_LABEL.include_uncommitted} — ${ws.included_entries ?? '?'}건, 스냅샷 ${ws.base_commit.slice(0, 10)} (커밋 기준 ${(ws.committed_base ?? '').slice(0, 10) || '?'})`
+    }
+    if (ws.start_basis === 'committed') return `${START_BASIS_LABEL.committed} ${ws.base_commit.slice(0, 10)}`
+    return ws.base_commit ? `기준 커밋 ${ws.base_commit.slice(0, 10)} · 시작 기준 기록 없음(옛 작업공간)` : '아직 만들어지지 않음'
+  })()
   return (
     <div className="sh-plain-row" data-testid={`workspace-${ws.repository_id}`} data-connection={connection ?? 'unknown'}>
       <div>
-        <strong>{ws.repository_name}</strong> · {ws.branch} · {ws.state === 'ready' ? '준비됨' : ws.state} · 작업 PC{' '}
+        <strong>{ws.repository_name}</strong> · {ws.branch} · {WORKSPACE_STATE_LABEL[ws.state] ?? ws.state} · 작업 PC{' '}
         <span data-testid={`ws-runner-${ws.repository_id}`}>
           {host ?? (ws.runner_id ? ws.runner_id : '기록 없음')}
           {connection ? ` (${connected ? '연결됨' : connection})` : ''}
         </span>
+      </div>
+      <div className="sh-muted" data-testid={`ws-basis-${ws.repository_id}`} data-basis={ws.start_basis ?? ''}>
+        시작 코드: {basisText}
+        {ws.user_tree_dirty && ws.start_basis === 'committed' && ' · 원래 폴더의 미커밋 변경은 그대로 남았다(포함하지 않음)'}
       </div>
       <div>
         경로 <span className="sh-mono" data-testid={`ws-path-${ws.repository_id}`}>{ws.worktree_path}</span>{' '}

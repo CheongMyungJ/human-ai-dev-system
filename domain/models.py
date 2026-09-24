@@ -1267,6 +1267,23 @@ class WorkspaceState(str, Enum):
     REQUESTED = "requested"
     READY = "ready"
     FAILED = "failed"
+    #: UI-04d(D-77). Runner 가 사용자의 원래 트리에서 **커밋하지 않은 변경**을 봤고 사람이 시작 기준
+    #: (포함 / 커밋된 코드만)을 아직 고르지 않았다. **아무 것도 만들어지지 않았다** — 준비됨이 아니다.
+    AWAITING_BASIS = "awaiting_basis"
+
+
+class StartBasis(str, Enum):
+    """작업공간이 **어떤 코드에서 시작했는가**(UI-04d, D-77).
+
+    `COMMITTED`           현재 브랜치의 마지막 커밋(기준 ref 의 커밋). 사용자의 미커밋 변경은 원래 폴더에만 남는다
+    `INCLUDE_UNCOMMITTED` 그 커밋 위에 사용자의 미커밋·미추적 변경을 **스냅샷 커밋**으로 얹어 시작했다. 원래
+                          폴더·인덱스·브랜치는 그대로이며 스냅샷은 객체 저장소에 더해졌을 뿐이다
+
+    옛 행(v27 이전)은 NULL 이다 — 선택 경로가 없었으므로 "기록 없음" 이지 `COMMITTED` 가 아니다.
+    """
+
+    COMMITTED = "committed"
+    INCLUDE_UNCOMMITTED = "include_uncommitted"
 
 
 class ClaimDeferral(str, Enum):

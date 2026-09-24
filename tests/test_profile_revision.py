@@ -552,7 +552,8 @@ def test_a_v25_database_gets_per_version_profiles_and_the_new_tables(tmp_path):
     conn = db.connect(path)
     db.migrate(conn)
     db.migrate(conn)  # 멱등
-    assert conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"] == db.SCHEMA_VERSION == 26
+    # UI-04d: v27 이 컬럼을 더했다 — 이 시험은 v26 의 이행을 보므로 "현재 판 이상" 으로 고정한다.
+    assert conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"] == db.SCHEMA_VERSION >= 26
     rows = {
         r["id"]: (r["profile"], r["profile_version"], r["retained_fields_json"])
         for r in conn.execute("SELECT id, profile, profile_version, retained_fields_json FROM intent_version")

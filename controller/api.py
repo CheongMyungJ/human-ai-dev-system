@@ -18,6 +18,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+from controller.db import utc_now
 from controller.relay import content_hash
 from controller.request_processor import RequestProcessor
 from controller.work_progressor import WorkProgressor
@@ -34,6 +35,7 @@ from domain import conversation as convmod
 from domain import ids, intent_doc
 from domain import knowledge as knowmod
 from domain import profiles as case_profiles
+from domain import search as searchrules
 from domain.models import (
     Satisfaction,
     AcceptanceMode,
@@ -2746,6 +2748,39 @@ class WorkspaceReadyIn(BaseModel):
     #: 준비 시점에 관측한 사용자의 원래 작업 트리. 파일 경로는 올라오지 않는다.
     user_tree_dirty: bool = False
     user_tree_entries: int = 0
+    #: UI-04d(D-77). 어떤 코드에서 시작했는가. 옛 Runner 는 주지 않는다(기록 없음).
+    start_basis: str | None = Field(default=None, pattern="^(committed|include_uncommitted)$")
+    committed_base: str = ""
+    included_entries: int = Field(default=0, ge=0)
+    included_tree_digest: str = Field(default="", max_length=128)
+
+
+class WorkspaceUncommittedEntryIn(BaseModel):
+    """미커밋 변경 한 항목(`git status --porcelain` 한 줄). **메모리로만 중계된다** — DB·로그에 가지 않는다."""
+
+    status: str = Field(min_length=1, max_length=4)
+    path: str = Field(min_length=1, max_length=1024)
+
+
+class WorkspaceUncommittedIn(BaseModel):
+    """UI-04d(D-77). Runner 가 **만들지 않고 물었다** — 사용자의 원래 트리에 커밋하지 않은 변경이 있다."""
+
+    runner_id: str
+    repository_id: str | None = None
+    head: str = Field(min_length=7)
+    user_tree_digest: str = Field(min_length=8, max_length=128)
+    entries: list[WorkspaceUncommittedEntryIn] = Field(default_factory=list, max_length=500)
+    truncated: bool = False
+    #: 사람이 골랐는데 포함 직전에 트리가 달라져 있었다 — 그 선택을 지우고 새 목록으로 다시 묻는다.
+    stale: bool = False
+
+
+class StartBasisIn(BaseModel):
+    """사람의 시작 기준 선택. `seen_digest` 는 본 목록의 트리 지문이다(동시 편집 보호)."""
+
+    basis: str = Field(pattern="^(committed|include_uncommitted)$")
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    seen_digest: str = Field(min_length=8, max_length=128)
 
 
 class WorkspaceFailedIn(BaseModel):
@@ -2877,12 +2912,118 @@ def runner_workspace_ready(
             user_tree_dirty=payload.user_tree_dirty,
             user_tree_entries=payload.user_tree_entries,
             repository_id=payload.repository_id,
+            start_basis=payload.start_basis,
+            committed_base=payload.committed_base,
+            included_entries=payload.included_entries,
+            included_tree_digest=payload.included_tree_digest,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # UI-04d. 목록은 더 필요 없다 — 메모리에서 지운다(만든 뒤에도 남겨 두지 않는다).
+    request.app.state.uncommitted.drop(f"{case_id}/{space['repository_id']}")
     # P4-05. 작업공간이 준비됐으면 진행기가 기다리던 구현·검증을 만든다.
     _after_report(
         request, "workspace_ready", _progressor(request, repo).on_workspace_reported, case_id
+    )
+    return space
+
+
+#: UI-04d(D-77). 미커밋 변경 목록이 제어부 메모리에 남는 시간(초). 그 뒤 카드는 "다시 불러온다" 를 보인다.
+UNCOMMITTED_LIST_TTL_SECONDS = 1800.0
+
+
+@router.post("/api/runner/workspaces/{case_id}/uncommitted")
+def runner_workspace_uncommitted(
+    request: Request, case_id: str, payload: WorkspaceUncommittedIn
+) -> dict[str, Any]:
+    """UI-04d(D-77). Runner 가 **만들지 않고 물었다** — 사용자의 원래 트리에 커밋하지 않은 변경이 있다.
+
+    수·지문·HEAD 는 행에 남고 **파일 목록은 이 프로세스의 메모리에만** 둔다(D-43 "파일 경로는 PC 에").
+    행은 `awaiting_basis` 가 되고 진행기가 사람 대기(`workspace_start_basis`)로 요청을 끝낸다. 준비됨이
+    아니다 — 그 사이 쓰기 실행은 `workspace_not_ready` 로 거부된다.
+    """
+    repo = _repo(request)
+    try:
+        space = repo.report_workspace_uncommitted(
+            case_id,
+            payload.runner_id,
+            head=payload.head,
+            user_tree_digest=payload.user_tree_digest,
+            entry_count=len(payload.entries),
+            stale=payload.stale,
+            repository_id=payload.repository_id,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    request.app.state.uncommitted.put(
+        f"{case_id}/{space['repository_id']}",
+        {
+            "head": payload.head,
+            "digest": payload.user_tree_digest,
+            "entries": [e.model_dump() for e in payload.entries],
+            "truncated": payload.truncated,
+            "stale": payload.stale,
+            "reported_at": utc_now(),
+        },
+        UNCOMMITTED_LIST_TTL_SECONDS,
+    )
+    _after_report(
+        request, "workspace_uncommitted", _progressor(request, repo).on_workspace_reported, case_id
+    )
+    return space
+
+
+@router.get("/api/cases/{case_id}/workspaces/{repository_id}/uncommitted")
+def get_uncommitted_list(request: Request, case_id: str, repository_id: str) -> dict[str, Any]:
+    """미커밋 변경 목록(상태·경로) — **메모리에서** 온다. 없으면(재시작·만료) `available = false` 이며 화면이
+    "PC 에서 다시 불러온다"(작업공간 재요청)를 보인다. 목록은 사람이 고르기 위한 것이고 저장되지 않는다."""
+    repo = _repo(request)
+    workspace = repo.get_workspace(case_id, repository_id)
+    if workspace is None:
+        raise HTTPException(status_code=404, detail=f"workspace not requested: {case_id}/{repository_id}")
+    held = request.app.state.uncommitted.get(f"{case_id}/{repository_id}")
+    current = held is not None and held["digest"] == (workspace.get("basis_tree_digest") or "")
+    return {
+        "case_id": case_id,
+        "repository_id": repository_id,
+        "state": workspace["state"],
+        "start_basis": workspace.get("start_basis"),
+        "head": workspace.get("committed_base") or None,
+        "digest": workspace.get("basis_tree_digest") or None,
+        "entry_count": workspace.get("basis_entries"),
+        "available": bool(current),
+        "entries": list(held["entries"]) if current else None,
+        "truncated": bool(held["truncated"]) if current else None,
+        "stale_choice": bool(held["stale"]) if current else False,
+        "note": (
+            "목록은 작업 PC 가 올린 것을 이 서버의 메모리로만 중계한다 — 저장하지 않는다"
+            if current
+            else "목록이 이 서버에 없다(재시작·만료) — PC 에서 다시 불러온다"
+        ),
+    }
+
+
+@router.post("/api/cases/{case_id}/workspaces/{repository_id}/start-basis")
+def decide_start_basis(
+    request: Request, case_id: str, repository_id: str, payload: StartBasisIn
+) -> dict[str, Any]:
+    """사람이 시작 기준을 고른다(UI-04d, D-77) — `포함해서 시작` / `커밋된 코드에서 시작`. 어느 쪽도 원래
+    폴더를 바꾸지 않는다. 본 목록의 지문이 지금 것과 다르면 409 `basis_list_stale`. 기록 뒤 진행기를 부른다
+    (준비 보고가 오면 구현이 이어진다). 선택은 권한·동의·인수가 아니다."""
+    repo = _repo(request)
+    try:
+        space = repo.decide_start_basis(
+            case_id, repository_id, payload.basis, actor=payload.actor, seen_digest=payload.seen_digest
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_report(
+        request,
+        "start_basis",
+        _progressor(request, repo).on_start_basis_decided,
+        case_id,
+        actor=payload.actor,
+        basis=payload.basis,
     )
     return space
 
@@ -4318,3 +4459,84 @@ def restore_case(request: Request, case_id: str, payload: VisibilityIn) -> dict[
         return _repo(request).set_visibility(case_id, VisibilityAction.RESTORE, payload.actor)
     except NotFoundError as exc:
         raise _handle(exc)
+
+
+# ===================================================================== UI-04d
+#
+# 대화 검색(D-84). **서버는 검색어·발췌를 저장하지 않는다** — 요청·후보·결과는 제어부 메모리(`SearchRegistry`)
+# 에만 있고 본문은 소유 PC 가 후보 원문만 읽어 올린다. 서버 필드(제목·요약·결정·규칙)는 즉시 대조한다.
+
+
+class SearchIn(BaseModel):
+    query: str = Field(min_length=1, max_length=searchrules.MAX_QUERY)
+    requested_by: str = Field(default="owner", min_length=1, max_length=120)
+
+
+class SearchBodyMatchIn(BaseModel):
+    """PC 가 올리는 본문 일치 하나. 발췌는 본문의 일부이며 메모리로만 중계된다."""
+
+    artifact_id: str
+    revision: int = Field(ge=1)
+    snippet: str = Field(default="", max_length=searchrules.SNIPPET_WIDTH + 2)
+    match_count: int = Field(default=0, ge=0)
+
+
+class SearchResultsIn(BaseModel):
+    runner_id: str
+    matches: list[SearchBodyMatchIn] = Field(default_factory=list, max_length=searchrules.MAX_CANDIDATES)
+    scanned: int = Field(default=0, ge=0)
+    unreadable: int = Field(default=0, ge=0)
+
+
+@router.post("/api/projects/{project_id}/conversation-searches", status_code=201)
+def start_conversation_search(request: Request, project_id: str, payload: SearchIn) -> dict[str, Any]:
+    """현재 프로젝트의 대화(보관 포함)를 검색한다. 서버 필드 일치는 이 응답에, 본문 일치는 소유 PC 가 올린
+    뒤 조회에 온다. PC 가 미연결이면 `body.state = excluded` 와 제외 수를 그대로 보인다 — 오프라인에서 본문을
+    찾았다고 말하지 않는다. 검색어는 DB·로그에 남지 않는다."""
+    repo = _repo(request)
+    try:
+        repo.get_project(project_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    try:
+        return request.app.state.searches.create(repo, project_id, payload.query, payload.requested_by)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@router.get("/api/conversation-searches/{search_id}")
+def get_conversation_search(request: Request, search_id: str) -> dict[str, Any]:
+    """검색 한 벌(서버 일치 + 도착한 본문 일치·범위). 만료·재시작으로 없으면 404 — 빈 결과로 보이지 않는다."""
+    view = request.app.state.searches.view(search_id)
+    if view is None:
+        raise HTTPException(status_code=404, detail=f"search not found or expired: {search_id}")
+    return view
+
+
+@router.get("/api/runner/{runner_id}/search-requests")
+def runner_search_requests(request: Request, runner_id: str) -> list[dict[str, Any]]:
+    """이 PC 가 맡을 본문 검색(검색어·후보 원문 참조). 경로는 없다 — PC 는 자기 저장소에서 그 원문만 읽는다."""
+    try:
+        _repo(request).get_runner(runner_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+    return request.app.state.searches.pending_for(runner_id)
+
+
+@router.post("/api/runner/search-requests/{search_id}/results")
+def runner_search_results(request: Request, search_id: str, payload: SearchResultsIn) -> dict[str, Any]:
+    """PC 의 본문 일치. 후보 밖의 일치·다른 PC·모르는 검색은 받지 않는다. 메모리에만 둔다."""
+    try:
+        return request.app.state.searches.record_results(
+            search_id,
+            payload.runner_id,
+            [m.model_dump() for m in payload.matches],
+            scanned=payload.scanned,
+            unreadable=payload.unreadable,
+        )
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"search not found or expired: {search_id}")
+    except PermissionError:
+        raise HTTPException(status_code=409, detail="this search has no part for that runner")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=f"this runner's part of the search is {exc}")

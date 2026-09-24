@@ -449,10 +449,15 @@ class FakeCliExecutor:
         # 요청받았으면 작업공간에 실제로 쓴다. **가짜 CLI 도 진짜 파일을 만든다** —
         # 실행 전후 대조가 실제 git 상태를 보기 때문에, 여기서 쓰지 않으면 변경
         # 감지 경로를 시험할 수 없다.
-        for rel, body in self.write_files.items():
-            target = Path(workspace) / rel
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(body, encoding="utf-8")
+        #
+        # UI-04d. **쓰기 권한의 실행에서만 쓴다.** 읽기 전용 실행(논의 응답·의도·설계 작성)은 작업공간이
+        # 없어 `workspace` 가 사용자의 원래 저장소이고, 거기에 쓰면 원래 트리가 더러워져 D-77 의 시작
+        # 기준 질문이 시험마다 튀어나온다 — 실제 읽기 전용 CLI 가 하지 않는 일이다(시험 도구의 특성).
+        if permission is not Permission.READ_ONLY:
+            for rel, body in self.write_files.items():
+                target = Path(workspace) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(body, encoding="utf-8")
 
         final = self._final_message(prompt)
         stopped = False
@@ -1306,12 +1311,41 @@ class Harness:
         return self.client.post(f"/api/cases/{case_id}/workspace", json=body)
 
     def prepare_workspace(
-        self, case_id: str, base_ref: str = "HEAD", repository_id: str | None = None
+        self,
+        case_id: str,
+        base_ref: str = "HEAD",
+        repository_id: str | None = None,
+        basis: str | None = "committed",
     ) -> dict[str, Any]:
-        """작업공간을 요청하고 Runner 가 실제로 만들게 한다."""
+        """작업공간을 요청하고 Runner 가 실제로 만들게 한다.
+
+        UI-04d(D-77). 사용자 트리가 더러우면 Runner 는 만들지 않고 묻는다(`awaiting_basis`). `basis` 가 있으면
+        이 도우미가 **사람의 선택**을 대신 보내고(`committed` 기본 — 옛 시험의 뜻 그대로: 미커밋 변경은 원래
+        폴더에만 남는다) 다시 준비시킨다. `basis=None` 이면 묻는 상태 그대로 돌려준다.
+        """
         assert self.request_workspace(case_id, base_ref, repository_id).status_code == 201
         self.agent.prepare_workspaces()
-        return self.workspace(case_id, repository_id)
+        workspace = self.workspace(case_id, repository_id)
+        if basis and workspace and workspace["state"] == "awaiting_basis":
+            self.decide_start_basis(case_id, workspace["repository_id"], basis)
+            self.agent.prepare_workspaces()
+            workspace = self.workspace(case_id, repository_id)
+        return workspace
+
+    def decide_start_basis(
+        self, case_id: str, repository_id: str, basis: str, seen_digest: str | None = None
+    ):
+        """UI-04d(D-77). 사람의 시작 기준 선택. `seen_digest` 를 주지 않으면 지금 목록의 지문을 쓴다."""
+        if seen_digest is None:
+            seen_digest = self.client.get(
+                f"/api/cases/{case_id}/workspaces/{repository_id}/uncommitted"
+            ).json()["digest"]
+        response = self.client.post(
+            f"/api/cases/{case_id}/workspaces/{repository_id}/start-basis",
+            json={"basis": basis, "actor": "owner", "seen_digest": seen_digest},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()
 
     def workspace_view(self, case_id: str) -> dict[str, Any] | None:
         """저장소별 작업공간 전부와 조합·선택을 담은 조회 결과(P3-R2)."""

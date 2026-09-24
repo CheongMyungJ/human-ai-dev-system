@@ -2,7 +2,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
-import { formatAddress, isSettingsScreen, messageLink, parseAddress, rulesLink, screenOfTab, settingsLink, settingsTabOf } from './address.ts'
+import { formatAddress, isSettingsScreen, messageLink, parseAddress, rulesLink, screenOfTab, searchLink, settingsLink, settingsTabOf } from './address.ts'
 
 test('parses project, case, screen, item and seq; ignores malformed values', () => {
   assert.deepEqual(parseAddress('?project=p1&case=c1'), {
@@ -58,4 +58,14 @@ test('settings screens: rules is a tab of the settings screen and keeps its addr
   assert.deepEqual(['conversation', 'rules', 'settings', 'repositories'].map((s) => isSettingsScreen(s as never)), [false, true, true, true])
   assert.deepEqual(['conversation', 'rules', 'settings', 'repositories'].map((s) => settingsTabOf(s as never)), ['defaults', 'rules', 'defaults', 'repositories'])
   assert.deepEqual((['defaults', 'rules', 'repositories'] as const).map(screenOfTab), ['settings', 'rules', 'repositories'])
+})
+
+// UI-04d. 검색 화면 — 검색어는 주소에 없고, 설정 화면이 아니다.
+test('search screen: an address without the query, not a settings screen', () => {
+  assert.equal(searchLink('p1'), '?project=p1&screen=search')
+  assert.deepEqual(parseAddress('?project=p1&screen=search&q=secret'), {
+    project: 'p1', case: null, screen: 'search', item: null, seq: null,
+  })
+  assert.equal(isSettingsScreen('search'), false)
+  assert.equal(formatAddress({ project: 'p1', case: 'c1', screen: 'search' }), '?project=p1&case=c1&screen=search')
 })

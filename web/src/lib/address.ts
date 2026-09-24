@@ -1,14 +1,16 @@
-// 화면 주소(UI-03 → UI-04a → UI-04b). **import 가 없다.**
+// 화면 주소(UI-03 → UI-04a → UI-04b → UI-04d). **import 가 없다.**
 //
-//   `?project=P[&case=C][&screen=rules|settings|repositories][&item=K-001][&seq=N]`
+//   `?project=P[&case=C][&screen=rules|settings|repositories|search][&item=K-001][&seq=N]`
 //
 //   `screen=settings` 는 가운데가 프로젝트 설정 화면(기본값 탭), `screen=rules` 는 그 화면의 프로젝트 규칙
 //   탭(UI-04a 의 주소 그대로 — 카드 링크·시험이 그것을 쓴다), `screen=repositories` 는 저장소 탭이다.
+//   `screen=search` 는 대화 검색 화면(UI-04d, D-84) — **검색어는 주소에 넣지 않는다**(검색어는 서버에도 남지
+//   않는 값이다; 새로 고침은 빈 검색 화면이다).
 //   `item` 은 규칙 탭에서 펼쳐 보일 항목이다. `seq` 는 대화를 연 뒤 **한 번** 소비하는 이동 요청(원래
 //   메시지로)이며 주소에 남기지 않는다 — 새로 고침이 같은 이동을 반복하지 않게. 읽던 위치 기억(D-68)보다
 //   우선한다.
 
-export type Screen = 'conversation' | 'rules' | 'settings' | 'repositories'
+export type Screen = 'conversation' | 'rules' | 'settings' | 'repositories' | 'search'
 
 //: 프로젝트 설정 화면의 탭. 화면 값 → 탭.
 export type SettingsTab = 'defaults' | 'rules' | 'repositories'
@@ -24,7 +26,7 @@ export interface Address {
 }
 
 function screenOf(raw: string | null): Screen {
-  return raw === 'rules' || raw === 'settings' || raw === 'repositories' ? raw : 'conversation'
+  return raw === 'rules' || raw === 'settings' || raw === 'repositories' || raw === 'search' ? raw : 'conversation'
 }
 
 export function parseAddress(search: string): Address {
@@ -86,4 +88,9 @@ export function settingsLink(projectId: string, tab: SettingsTab = 'defaults'): 
 /** 어느 대화의 어느 메시지로 가는 링크. `seq` 가 없으면 대화만 연다. */
 export function messageLink(projectId: string, caseId: string, seq?: number | null): string {
   return formatAddress({ project: projectId, case: caseId, seq: seq ?? null })
+}
+
+/** 대화 검색 화면의 링크(UI-04d). 검색어는 주소에 없다. */
+export function searchLink(projectId: string): string {
+  return formatAddress({ project: projectId, screen: 'search' })
 }

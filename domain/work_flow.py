@@ -127,6 +127,8 @@ class WaitReason(str):
     WORK_GRAPH_MISSING = "work_graph_missing"
     TASKS_BLOCKED = "tasks_blocked"
     REPOSITORY_SELECTION = "repository_selection"
+    #: UI-04d(D-77). 사용자의 원래 트리에 커밋하지 않은 변경이 있어 어느 코드에서 시작할지 사람이 고른다.
+    WORKSPACE_START_BASIS = "workspace_start_basis"
     TASK_FAILED = "task_failed"
     UNRESOLVED_FEEDBACK = "unresolved_feedback"
     CONTROLLED_RESULT = "controlled_result"
@@ -161,6 +163,10 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.WORK_GRAPH_MISSING: "개발계획이 작업을 정의하지 않아 작업 그래프가 없다",
     WaitReason.TASKS_BLOCKED: "배정 가능한 작업이 없다(막는 사유 참조)",
     WaitReason.REPOSITORY_SELECTION: "코드를 바꿀 저장소를 골라 쓰기를 허용해야 한다(관리 화면)",
+    WaitReason.WORKSPACE_START_BASIS: (
+        "저장소에 커밋하지 않은 변경이 있다. 포함해서 시작할지 커밋된 코드에서 시작할지 고른다"
+        " — 어느 쪽도 원래 폴더를 바꾸지 않는다"
+    ),
     WaitReason.TASK_FAILED: "작업 실행이 거듭 실패했다. 사유를 보고 다시 시도하거나 요청을 고친다",
     WaitReason.UNRESOLVED_FEEDBACK: "미해결 피드백이 남아 있다. 반영됨·미반영을 판단한다",
     WaitReason.CONTROLLED_RESULT: "controlled 업무다. 결과 후보를 확인하면 시스템이 종료를 확정한다",
@@ -802,6 +808,17 @@ def _graph_phase(state: FlowState) -> Step | None:
                 BlockReason.WORKSPACE_FAILED,
                 detail=space.get("failure_reason") or BLOCK_DETAIL[BlockReason.WORKSPACE_FAILED],
                 repository_id=repository_id,
+            )
+        if space.get("state") == WorkspaceState.AWAITING_BASIS.value:
+            # UI-04d(D-77). Runner 가 만들지 않고 물었다 — 사람이 시작 기준을 고르면 `requested` 로 돌아가
+            # 다음 회차에 만들어진다. 깨끗한 트리는 여기를 지나지 않는다.
+            return _wait(
+                WaitReason.WORKSPACE_START_BASIS,
+                repository_id=repository_id,
+                repository_name=space.get("repository_name"),
+                entries=space.get("basis_entries"),
+                head=space.get("committed_base"),
+                task_key=key,
             )
         if not space.get("ready"):
             return Step("busy", "workspace_pending", "작업공간 준비를 기다린다")

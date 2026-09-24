@@ -868,6 +868,22 @@ CREATE TABLE IF NOT EXISTS case_workspace (
     failure_reason    TEXT NOT NULL DEFAULT '',
     requested_at      TEXT NOT NULL,
     ready_at          TEXT,
+    -- UI-04d(D-77). **어떤 코드에서 시작했는가.** v27 컬럼(옛 행은 NULL/기본값 = 기록 없음).
+    --   `start_basis`           committed | include_uncommitted | NULL(아직 안 정함·옛 행). `state` 에
+    --                           `awaiting_basis` 가 더해졌다 — 사용자 트리가 더러워 사람이 고르는 중
+    --   `committed_base`        그때 기준 ref 의 커밋(HEAD). 포함이면 `base_commit` 은 그 위의 스냅샷 커밋이다
+    --   `included_entries`      포함한 미커밋 항목 수, `included_tree_digest` 포함한 트리의 지문(해시).
+    --                           **파일 경로는 없다** — 목록은 제어부 메모리로만 중계되고 PC 에 남는다(D-43)
+    --   `basis_tree_digest`     목록을 올릴 때의 트리 지문. 사람의 선택이 이 값을 되돌려 줘야 한다(동시 편집 보호)
+    --   `basis_entries`         그 목록의 항목 수
+    start_basis          TEXT,
+    basis_decided_by     TEXT,
+    basis_decided_at     TEXT,
+    committed_base       TEXT NOT NULL DEFAULT '',
+    included_entries     INTEGER,
+    included_tree_digest TEXT NOT NULL DEFAULT '',
+    basis_tree_digest    TEXT NOT NULL DEFAULT '',
+    basis_entries        INTEGER,
     PRIMARY KEY (case_id, repository_id),
     CHECK (length(failure_reason) <= 200)
 );
