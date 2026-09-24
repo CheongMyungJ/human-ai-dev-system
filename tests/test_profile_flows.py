@@ -264,10 +264,14 @@ def test_a_refactoring_without_a_preservation_criterion_waits_instead_of_closing
 
 
 def test_a_refactoring_whose_preservation_fails_keeps_the_verdict_and_waits(processing_harness):
-    """AC-3 — 보존 기준이 미충족이면 개선이 충족돼도 예외 카드에서 멈추고 원래 판정은 남는다."""
+    """AC-3 — 보존 기준이 미충족이면 개선이 충족돼도 예외 카드에서 멈추고 원래 판정은 남는다.
+
+    P4-10(이슈 #9) 부터 근거 있는 미충족은 먼저 수정 사이클을 연다 — 이 시험은 사이클을 끈 업무의 예외 카드를 본다."""
     h = processing_harness
     draft = _draft(c1="improvement_target", c2="preserved_contracts", fields={"preserved_contracts": "반환 형식"})
     case_id = _begin(h, "refactoring", draft=draft, text="read 함수의 구조를 정리하되 반환 형식은 그대로 둬")
+    off = h.client.put(f"/api/cases/{case_id}/progress/limits", json={"remediation_limit": 0})
+    assert off.status_code == 200, off.text
     _agree(h, case_id)
     h.agent.cli_executor.verification_response = _verification([("C-01", "met", None), ("C-02", "not_met", None)])
     conv = _drive(h, case_id)
@@ -372,6 +376,11 @@ def test_a_revised_case_closes_only_when_the_cause_and_the_fix_are_both_proven(p
         for key in ("C-01", "C-02"):
             assert (crits[key]["verdict"], crits[key]["conclusion"]) == ("not_met", "inconclusive")
         assert rows["cause"]["status"] == "open" and rows["restoration"]["status"] == "met"
+        # P4-10. 원인 결론의 미충족은 구현 수정으로 충족되지 않는다 — 수정 사이클을 열지 않고 이유를 카드에 싣는다.
+        excluded = conv["progress"]["wait"][0]["remediation"]["excluded"]
+        assert {(e["key"], e["reason"]) for e in excluded} == {
+            ("C-01", "investigation_obligation"), ("C-02", "investigation_obligation"),
+        }
 
 
 @pytest.mark.parametrize("both", [True, False], ids=["both-proven", "fix-only"])

@@ -111,7 +111,8 @@ function ProgressLimitsSection(props: {
   const [repair, setRepair] = useState(String(limits.repair_limit.value))
   const [retry, setRetry] = useState(String(limits.task_retry_limit.value))
   const [why, setWhy] = useState('')
-  const keys: ProgressLimitKey[] = ['repair_limit', 'task_retry_limit']
+  // 관리 화면은 옛 두 상한만 보인다(P4-10 의 수정 사이클·제한 시간은 새 화면 설정 탭 — 관리 화면은 UI-05b 가 지운다).
+  const keys: ('repair_limit' | 'task_retry_limit')[] = ['repair_limit', 'task_retry_limit']
   return (
     <div className="task" data-testid="progress-limits">
       <div className="task-head">

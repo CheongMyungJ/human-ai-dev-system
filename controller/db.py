@@ -20,7 +20,7 @@ from domain.knowledge import Decision as KnowledgeDecision
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 28
+SCHEMA_VERSION = 29
 
 
 def utc_now() -> str:
@@ -601,6 +601,22 @@ def migrate(conn: sqlite3.Connection) -> None:
         "TEXT CHECK (title IS NULL OR length(title) <= 80)",
     )
 
+    # v29: P4-10 — 이슈 #8·#9 진행기 보강. **새 표 없음, 데이터 이행 없음.** 옛 행의 새 컬럼은 NULL = 기록 없음.
+    #      `run.timeout_seconds`  그 실행에 적용한 CLI 제한 시간(실행을 만들 때의 유효값, D-95). 옛 실행은 NULL —
+    #                             당시 Runner 의 고정 600초였지만 기록이 아니므로 지어 적지 않는다.
+    #      `run.stop_reason`      Runner 가 끊은 이유(`timeout`·`stop_requested`). 옛 실행은 NULL.
+    #      `progress_limit_setting` 키 둘(`remediation_limit`·`run_timeout_seconds`)과 값 범위(표 재구성, 행 보존).
+    _add_column_if_missing(
+        conn, "run", "timeout_seconds", "INTEGER CHECK (timeout_seconds IS NULL OR timeout_seconds > 0)"
+    )
+    _add_column_if_missing(
+        conn,
+        "run",
+        "stop_reason",
+        "TEXT CHECK (stop_reason IS NULL OR stop_reason IN ('timeout', 'stop_requested'))",
+    )
+    _migrate_v29_progress_limit_setting(conn)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -698,6 +714,40 @@ def _migrate_v28_closure_record(conn: sqlite3.Connection) -> None:
     if row is None or "closure_kind = 'cancelled'" in (row["sql"] or ""):
         return
     _rebuild_table(conn, "closure_record", CLOSURE_RECORD_V28_DDL.strip(), "v28")
+
+
+#: v29 의 `progress_limit_setting`. v21 의 표에 키 둘과 키별 값 범위(재작성·재시도·수정 사이클 0~10, 제한 시간 초
+#: 10~86400 — DB 가 마지막 방어선이다). 컬럼 순서는 그대로다.
+PROGRESS_LIMIT_SETTING_V29_DDL = """
+CREATE TABLE IF NOT EXISTS progress_limit_setting (
+    id              TEXT PRIMARY KEY,
+    case_id         TEXT NOT NULL REFERENCES "case"(id),
+    revision        INTEGER NOT NULL,
+    limit_key       TEXT NOT NULL CHECK (limit_key IN ('repair_limit', 'task_retry_limit',
+                                                        'remediation_limit', 'run_timeout_seconds')),
+    limit_value     INTEGER NOT NULL CHECK (limit_value BETWEEN 0 AND 86400),
+    set_by          TEXT NOT NULL,
+    reason_summary  TEXT,
+    state           TEXT NOT NULL CHECK (state IN ('current', 'superseded')),
+    created_at      TEXT NOT NULL,
+    superseded_at   TEXT,
+    UNIQUE (case_id, revision),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200),
+    CHECK (limit_key = 'run_timeout_seconds' OR limit_value <= 10),
+    CHECK (limit_key <> 'run_timeout_seconds' OR limit_value >= 10)
+)
+"""
+
+
+def _migrate_v29_progress_limit_setting(conn: sqlite3.Connection) -> None:
+    """P4-10. `progress_limit_setting` 의 키 CHECK 에 `remediation_limit`·`run_timeout_seconds` 를 더하고 값 범위를
+    넓힌다(표 재구성, 행 보존). 이미 새 키가 있으면 아무 것도 하지 않는다(멱등). 옛 행은 0~10 이라 그대로 맞는다."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'progress_limit_setting'"
+    ).fetchone()
+    if row is None or "'run_timeout_seconds'" in (row["sql"] or ""):
+        return
+    _rebuild_table(conn, "progress_limit_setting", PROGRESS_LIMIT_SETTING_V29_DDL.strip(), "v29")
 
 
 def _migrate_v26_interpretation(conn: sqlite3.Connection) -> None:

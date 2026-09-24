@@ -24,6 +24,7 @@ import {
   timeSummary,
   preparationApi,
   progressApi,
+  PROGRESS_LIMIT_KEYS,
   PROGRESS_LIMIT_LABEL,
   PROGRESS_LIMIT_SOURCE_LABEL,
   qualityGateApi,
@@ -37,6 +38,7 @@ import {
   type WorkLevel,
 } from '../api'
 import { settingsLink } from '../lib/address'
+import { formatTimeout, minutesToSeconds } from '../lib/timeout'
 import type { ShellCaseDetail } from './useCaseData'
 
 function describe(err: unknown): string {
@@ -318,25 +320,41 @@ function LimitsSection(props: {
   closed: boolean
 }) {
   const limits = props.policy.progress_limits
+  // P4-10. 제한 시간은 초로 저장되고 여기서는 분으로 받는다. 옛 제어부는 새 두 키를 주지 않는다 — 있는 키만 그린다.
+  const shown = (key: ProgressLimitKey, value: number | undefined): string =>
+    value === undefined ? '' : key === 'run_timeout_seconds' ? String(value / 60) : String(value)
   const [values, setValues] = useState<Record<ProgressLimitKey, string>>({
-    repair_limit: String(limits?.repair_limit.value ?? ''),
-    task_retry_limit: String(limits?.task_retry_limit.value ?? ''),
+    repair_limit: shown('repair_limit', limits?.repair_limit.value),
+    task_retry_limit: shown('task_retry_limit', limits?.task_retry_limit.value),
+    remediation_limit: shown('remediation_limit', limits?.remediation_limit?.value),
+    run_timeout_seconds: shown('run_timeout_seconds', limits?.run_timeout_seconds?.value),
   })
   const [reason, setReason] = useState('')
   if (!limits) return null
-  const keys: ProgressLimitKey[] = ['repair_limit', 'task_retry_limit']
+  const keys = PROGRESS_LIMIT_KEYS.filter((key) => limits[key] !== undefined)
+  const display = (key: ProgressLimitKey, value: number | null | undefined): string =>
+    key === 'run_timeout_seconds' ? formatTimeout(value ?? null) : String(value ?? '없음')
+  const parse = (key: ProgressLimitKey, text: string): number | null =>
+    key === 'run_timeout_seconds' ? minutesToSeconds(text) : Number.isInteger(Number(text)) ? Number(text) : null
   return (
     <section data-testid="case-setting-limits">
-      <h3 className="sh-section-title">진행 상한(재작성·재시도)</h3>
+      <h3 className="sh-section-title">진행 상한(재작성·재시도·수정 사이클·제한 시간)</h3>
       <ul className="sh-result-list">
         {keys.map((key) => (
-          <li key={key} className="sh-rule-line" data-testid={`case-limit-${key}`} data-source={limits[key].source}>
-            {PROGRESS_LIMIT_LABEL[key]} <strong>{limits[key].value}</strong> ·{' '}
-            <span data-testid={`case-limit-source-${key}`}>{PROGRESS_LIMIT_SOURCE_LABEL[limits[key].source]}</span>
-            {limits[key].setting ? ` · ${when(limits[key].setting?.created_at)}` : ''}
+          <li
+            key={key}
+            className="sh-rule-line"
+            data-testid={`case-limit-${key}`}
+            data-source={limits[key]?.source}
+            data-value={limits[key]?.value}
+          >
+            {PROGRESS_LIMIT_LABEL[key]} <strong>{display(key, limits[key]?.value)}</strong> ·{' '}
+            <span data-testid={`case-limit-source-${key}`}>{PROGRESS_LIMIT_SOURCE_LABEL[limits[key]?.source ?? 'system_default']}</span>
+            {limits[key]?.setting ? ` · ${when(limits[key]?.setting?.created_at)}` : ''}
             {' · 프로젝트 기본값 '}
-            {limits.project_default?.[key] ?? '없음'} · 시스템 기본값 {limits.system_default[key]}
-            {!props.closed && limits[key].source === 'case_setting' && (
+            {limits.project_default?.[key] != null ? display(key, limits.project_default?.[key]) : '없음'} · 시스템 기본값{' '}
+            {display(key, limits.system_default[key])}
+            {!props.closed && limits[key]?.source === 'case_setting' && (
               <button
                 type="button"
                 className="sh-link"
@@ -353,7 +371,8 @@ function LimitsSection(props: {
         <div className="sh-composer-bar sh-rule-actions">
           {keys.map((key) => (
             <label key={key} className="sh-muted">
-              {PROGRESS_LIMIT_LABEL[key]}{' '}
+              {PROGRESS_LIMIT_LABEL[key]}
+              {key === 'run_timeout_seconds' ? '(분)' : ''}{' '}
               <input
                 size={3}
                 value={values[key]}
@@ -369,7 +388,9 @@ function LimitsSection(props: {
               void props.guard(async () => {
                 const changed: Partial<Record<ProgressLimitKey, number>> = {}
                 for (const key of keys) {
-                  if (Number(values[key]) !== limits[key].value) changed[key] = Number(values[key])
+                  const value = parse(key, values[key])
+                  if (value === null) throw new Error(`${PROGRESS_LIMIT_LABEL[key]} 값이 범위 밖이다`)
+                  if (value !== limits[key]?.value) changed[key] = value
                 }
                 if (Object.keys(changed).length === 0) return
                 await progressApi.setLimits(props.caseId, changed, reason)
@@ -381,7 +402,11 @@ function LimitsSection(props: {
           </button>
         </div>
       )}
-      <p className="sh-muted sh-rule-line">범위 {limits.range.min}~{limits.range.max}. 한도를 올리면 한 번 더 시도하고 다시 실패하면 새 한도에서 멈춘다.</p>
+      <p className="sh-muted sh-rule-line">
+        범위 {limits.range.min}~{limits.range.max}(제한 시간은 10초~24시간, 분으로 적는다). 한도를 올리면 한 번 더 시도하고 다시
+        실패하면 새 한도에서 멈춘다. 수정 사이클은 검증이 근거와 함께 미충족을 보고했을 때 진행기가 고치고 다시 검증하는 횟수(0 =
+        끔)이고, 제한 시간은 실행 하나의 CLI 시간(바꾸면 다음 실행부터)이다.
+      </p>
     </section>
   )
 }

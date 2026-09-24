@@ -105,6 +105,9 @@ export interface Run {
   // P4-04: CLI 를 부르기 **전에** 멈춘 이유. 있으면 소비가 0 으로 정산됐다.
   not_started_reason?: string | null
   context_inline_limit?: number | null
+  // P4-10(D-95): 이 실행에 적용한 CLI 제한 시간(초)과 끊긴 이유. `null` 은 기록 없음(옛 실행).
+  timeout_seconds?: number | null
+  stop_reason?: 'timeout' | 'stop_requested' | null
   // P4-04: 무엇을 주려 했고(계획) 무엇을 실제로 읽었는가(영수증). 서버가 도출한 값이다.
   context?: RunContext
 }
@@ -1974,6 +1977,7 @@ export const TASK_RELATION_LABEL: Record<string, string> = {
 export const WORK_GRAPH_SOURCE_LABEL: Record<string, string> = {
   plan_artifact: '개발계획이 정의함',
   human_replanning: '사람의 재계획',
+  progressor_remediation: '진행기 수정 사이클(검증 미충족)',
 }
 
 //: 차단 사유의 사람 문구. 진입 검사의 사유 코드와 **같은 값**을 쓴다.
@@ -2800,7 +2804,7 @@ export interface ProjectSettingsView {
   settings: Record<string, ProjectSettingValue>
   budget_defaults: ProjectBudgetDefault[]
   budget_metrics: Record<string, { unit: string; hard_guarantee: string }>
-  ranges: { progress_limit: { min: number; max: number } }
+  ranges: { progress_limit: { min: number; max: number } } & Partial<Record<ProgressLimitKey, { min: number; max: number }>>
   history: ProjectSettingRow[]
   applies_to: string
   note: string
@@ -2811,6 +2815,8 @@ export const PROJECT_SETTING_LABEL: Record<string, string> = {
   default_autonomy: '기본 확인 경계(Autonomy)',
   repair_limit: '재작성 상한',
   task_retry_limit: '재시도 상한',
+  remediation_limit: '검증 미충족 수정 사이클 한도',
+  run_timeout_seconds: '실행 제한 시간',
   context_inline_limit_bytes: '실행당 인라인 한도(바이트)',
 }
 
@@ -3554,7 +3560,14 @@ export interface ProgressEvent {
 }
 
 // P4-05b. 진행기의 재작성·재시도 상한. Case 명시 → 시스템 기본값(제어부 환경 변수).
-export type ProgressLimitKey = 'repair_limit' | 'task_retry_limit'
+// P4-10. 검증 미충족의 수정 사이클 한도와 실행 제한 시간(초)이 같은 자리에 더해졌다.
+export type ProgressLimitKey = 'repair_limit' | 'task_retry_limit' | 'remediation_limit' | 'run_timeout_seconds'
+export const PROGRESS_LIMIT_KEYS: ProgressLimitKey[] = [
+  'repair_limit',
+  'task_retry_limit',
+  'remediation_limit',
+  'run_timeout_seconds',
+]
 
 export interface ProgressLimitSettingRow {
   id: string
@@ -3579,10 +3592,15 @@ export interface ProgressLimitValue {
 export interface ProgressLimitsView {
   repair_limit: ProgressLimitValue
   task_retry_limit: ProgressLimitValue
+  // P4-10. 옛 제어부는 이 둘을 주지 않는다.
+  remediation_limit?: ProgressLimitValue
+  run_timeout_seconds?: ProgressLimitValue
   system_default: Record<ProgressLimitKey, number>
   // UI-04b. 프로젝트 기본값(없으면 null).
   project_default?: Record<ProgressLimitKey, number | null>
   range: { min: number; max: number }
+  // P4-10. 키별 범위(제한 시간은 초).
+  ranges?: Partial<Record<ProgressLimitKey, { min: number; max: number }>>
   history: ProgressLimitSettingRow[]
   closed: boolean
 }
@@ -3590,6 +3608,8 @@ export interface ProgressLimitsView {
 export const PROGRESS_LIMIT_LABEL: Record<ProgressLimitKey, string> = {
   repair_limit: '재작성',
   task_retry_limit: '재시도',
+  remediation_limit: '수정 사이클',
+  run_timeout_seconds: '제한 시간',
 }
 
 export const PROGRESS_LIMIT_SOURCE_LABEL: Record<ProgressLimitValue['source'], string> = {
@@ -3655,6 +3675,7 @@ export const WAIT_LABEL: Record<string, string> = {
   criteria_unresolved: '미충족·미검증 기준',
   objective_without_criteria: '목적 의무에 기준 없음',
   quality_gate: '명시 품질 게이트 미통과',
+  run_timed_out: '시간 초과 — 제한 시간 늘리기',
   admission_refused: '진입 검사 거부',
   tool_unavailable: '도구를 쓸 수 없음',
   workspace_failed: '작업공간 준비 실패',
@@ -3665,6 +3686,7 @@ export const WAIT_LABEL: Record<string, string> = {
 
 export const PROGRESS_STEP_LABEL: Record<string, string> = {
   work_started: '업무화',
+  remediation: '검증 미충족 → 수정 사이클',
   intent_authoring: '의도 초안 작성',
   intent_rewrite_answers: '답을 반영한 의도 재작성',
   intent_repair: 'QG-01 지적 반영 재작성',

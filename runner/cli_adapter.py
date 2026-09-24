@@ -289,6 +289,13 @@ class ExecutionOutput:
     residual_terminated: int | None = None
     #: UI-02. 실행을 끊은 이유(`stop_requested` · `timeout`). 끊지 않았으면 `None`.
     stop_reason: str | None = None
+    #: P4-10(D-95). 이 호출에 실제로 적용한 제한 시간(초). 결과 보고에 실린다.
+    timeout_seconds: float | None = None
+
+
+#: P4-10(D-95, 사용자 결정 2026-09-24). 배정이 제한 시간을 싣지 않을 때(옛 제어부)의 기본값 — 모든 실행 1시간.
+#: 그 전에는 600초 고정이었고 긴 빌드·에뮬레이터 검증이 매번 끊겼다(이슈 #8).
+DEFAULT_TIMEOUT_SECONDS = 3600.0
 
 
 class CliExecutor:
@@ -301,7 +308,7 @@ class CliExecutor:
     def __init__(
         self,
         effects_dir: Path,
-        timeout: float = 600.0,
+        timeout: float = DEFAULT_TIMEOUT_SECONDS,
         confirm_timeout: float = process_tree.DEFAULT_CONFIRM_TIMEOUT,
     ) -> None:
         self.effects_dir = effects_dir
@@ -341,8 +348,12 @@ class CliExecutor:
         on_launch: Callable[[dict[str, Any]], None] | None = None,
         stop_event: threading.Event | None = None,
         job_name: str | None = None,
+        timeout: float | None = None,
     ) -> ExecutionOutput:
         """CLI 를 실행한다. **UI-02: 프로세스 트리를 job 안에서 돌리고 끝을 확인한다.**
+
+        P4-10(D-95). `timeout` 은 이 호출의 제한 시간(초)이다 — 제어부가 실행을 만들 때 정해 배정에 실은 값.
+        없으면 실행기의 기본값(1시간). 걸리면 `stop_reason = timeout`·결과 `unknown`.
 
         순서가 규칙이다(Windows).
 
@@ -442,7 +453,8 @@ class CliExecutor:
                 # CLI 가 입력을 받기 전에 끝났다. 판정은 아래에서 이벤트·종료 코드로 한다.
                 pass
 
-            deadline = time.monotonic() + self.timeout
+            applied_timeout = float(timeout) if timeout else float(self.timeout)
+            deadline = time.monotonic() + applied_timeout
             stop_reason: str | None = None
             exit_code: int | None = None
             while True:
@@ -496,7 +508,7 @@ class CliExecutor:
             outcome = self._judge(stream, exit_code, stop_reason == "timeout")
         body = self._compose_output(
             run_id, case_id, tool_id, mode, permission, version, exit_code, outcome, stream,
-            stop_reason=stop_reason, observation=observation,
+            stop_reason=stop_reason, observation=observation, timeout_seconds=applied_timeout,
         )
         return ExecutionOutput(
             events=stream.events,
@@ -513,6 +525,7 @@ class CliExecutor:
             residual_basis=observation.basis,
             residual_terminated=observation.terminated,
             stop_reason=stop_reason,
+            timeout_seconds=applied_timeout,
         )
 
     @staticmethod
@@ -550,6 +563,7 @@ class CliExecutor:
         stream: cli_events.NormalizedStream,
         stop_reason: str | None = None,
         observation: process_tree.ResidualObservation | None = None,
+        timeout_seconds: float | None = None,
     ) -> bytes:
         """실행 결과 원문. **Runner에 저장되고 제어부에는 참조만 올라간다.**"""
         residual = (
@@ -566,6 +580,7 @@ class CliExecutor:
             f"exit_code={exit_code}\n"
             f"outcome={outcome.value}\n"
             f"stop_reason={stop_reason or 'none'}\n"
+            f"timeout_seconds={int(timeout_seconds) if timeout_seconds else 'unknown'}\n"
             f"residual_activity={residual}\n"
             f"normalized_events={len(stream.events)} unmapped={len(stream.unmapped)}\n"
             f"executed_at={_now()}\n"

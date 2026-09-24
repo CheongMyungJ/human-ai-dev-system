@@ -375,6 +375,10 @@ class FakeCliExecutor:
         self.hold: Any = None
         #: 세션 식별자를 고정하면 "작성과 검토가 같은 세션"을 만들 수 있다.
         self.fixed_session_ref: str | None = None
+        #: P4-10(D-95). 제한 시간에 걸린 실행을 흉내 낸다 — 함수가 참을 돌려주는 호출은 `unknown`·`stop_reason =
+        #: timeout`·받은 제한으로 끝난다(`lambda call: ...`, 인자는 `calls` 의 항목). 실제로 끊기는 모습은
+        #: `tests/test_run_timeout.py` 가 실제 실행기·가짜 codex 로 본다.
+        self.times_out: Any = None
         self.calls: list[dict[str, Any]] = []
 
     def _session_ref(self, run_id: str) -> str:
@@ -427,6 +431,7 @@ class FakeCliExecutor:
         on_launch: Any = None,
         stop_event: Any = None,
         job_name: str | None = None,
+        timeout: Any = None,
     ) -> ExecutionOutput:
         # UI-02. 실제 실행기와 같은 순서로 **시작 기록을 먼저** 남긴다. 가짜는 Runner
         # 프로세스 안에서 돌므로 job 이 없다(`in_process`).
@@ -444,8 +449,11 @@ class FakeCliExecutor:
                 "permission": permission.value,
                 "workspace": str(workspace),
                 "prompt": prompt,
+                # P4-10. Runner 가 넘긴 제한 시간(배정의 `timeout_seconds`).
+                "timeout": timeout,
             }
         )
+        timed_out = bool(self.times_out and self.times_out(self.calls[-1]))
         # 요청받았으면 작업공간에 실제로 쓴다. **가짜 CLI 도 진짜 파일을 만든다** —
         # 실행 전후 대조가 실제 git 상태를 보기 때문에, 여기서 쓰지 않으면 변경
         # 감지 경로를 시험할 수 없다.
@@ -453,7 +461,7 @@ class FakeCliExecutor:
         # UI-04d. **쓰기 권한의 실행에서만 쓴다.** 읽기 전용 실행(논의 응답·의도·설계 작성)은 작업공간이
         # 없어 `workspace` 가 사용자의 원래 저장소이고, 거기에 쓰면 원래 트리가 더러워져 D-77 의 시작
         # 기준 질문이 시험마다 튀어나온다 — 실제 읽기 전용 CLI 가 하지 않는 일이다(시험 도구의 특성).
-        if permission is not Permission.READ_ONLY:
+        if permission is not Permission.READ_ONLY and not timed_out:
             for rel, body in self.write_files.items():
                 target = Path(workspace) / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -487,6 +495,22 @@ class FakeCliExecutor:
         ]
         for event in events:
             event["ts"] = "2026-09-20T00:00:00.000000+00:00"
+        if timed_out:
+            # 끊긴 데까지의 출력 — 끝 이벤트도 최종 메시지도 없다(실제 실행기의 시간 초과와 같은 모양).
+            return ExecutionOutput(
+                events=events[:3],
+                output_body=f"fake run {run_id}\nstop_reason=timeout\n".encode("utf-8"),
+                outcome=RunOutcome.UNKNOWN,
+                exit_code=None,
+                usage=self.usage,
+                residual_activity=self.residual_activity,
+                residual_basis=self.residual_basis,
+                stop_reason="timeout",
+                timeout_seconds=float(timeout) if timeout else None,
+                session_ref=self._session_ref(run_id),
+                observed_tool_version=f"{tool_id}/fake-for-tests",
+                final_message="",
+            )
         return ExecutionOutput(
             events=events,
             output_body=f"fake run {run_id}\n{final}".encode("utf-8"),

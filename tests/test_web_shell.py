@@ -1894,3 +1894,105 @@ def test_an_explicit_quality_gate_is_reviewed_by_itself_and_the_card_raises_the_
     qg04 = next(g for g in gates if g["gate"] == "QG-04")
     assert qg04["setting"] == "off" and qg04["latest_run"]["verdict"] == "fail"
     page.context.close()
+
+
+def test_a_timed_out_verification_waits_on_a_card_and_a_longer_limit_finishes_the_work(stack):
+    """P4-PLAN-10 AC-10 (이슈 #8, D-95) — 제한 시간(이 업무 20초)에 걸린 검증은 실패가 아니라 시간 초과로 기록되고, 진행기가
+    같은 제한으로 다시 돌리지 않고 `run_timed_out` 카드에서 멈춘다. 카드에서 끊긴 실행의 상세를 보고(시간 초과·제한),
+    제한을 늘리면(분) 그 검증이 새 제한으로 다시 돌아 업무가 끝난다. 가짜 codex 는 그 작업 디렉터리의 첫 검증만 잔다.
+    """
+    project = stack.project("시간 초과")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_SLOW_VERIFY=60 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    response = stack.http.put(
+        f"/api/cases/{case_id}/progress/limits",
+        json={"run_timeout_seconds": 20, "reason_summary": "시험: 짧은 제한"},
+    )
+    assert response.status_code == 200, response.text
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    card = page.locator('[data-testid="wait-card-run_timed_out"]')
+    expect(card).to_be_visible(timeout=180_000)
+    expect(card.locator('[data-testid="timeout-usage"]')).to_contain_text("작업 T2")
+    expect(card.locator('[data-testid="timeout-usage"]')).to_contain_text("20초")
+    runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+    [cut] = [r for r in runs if r["purpose"] == "verification_run"]
+    assert (cut["outcome"], cut["stop_reason"], cut["timeout_seconds"]) == ("unknown", "timeout", 20)
+    assert card.get_attribute("data-run-id") == cut["run_id"]
+
+    # 끊긴 실행의 상세 — 작업 탭에서 시간 초과와 적용 제한을 본다.
+    card.locator('[data-testid="timeout-open-run"]').click()
+    detail = page.locator('[data-testid="run-detail"]')
+    expect(detail).to_have_attribute("data-run-id", cut["run_id"], timeout=20_000)
+    expect(detail.locator('[data-testid="run-detail-timeout"]')).to_have_attribute("data-stop-reason", "timeout")
+    expect(detail.locator('[data-testid="run-detail-timeout"]')).to_contain_text("시간 초과")
+
+    # 제한을 늘려(2분) 다시 시도 → 검증이 새 제한으로 다시 돌고 업무가 끝난다.
+    card = page.locator('[data-testid="wait-card-run_timed_out"]')
+    card.locator('[data-testid="timeout-minutes"]').fill("2")
+    card.locator('[data-testid="timeout-raise"]').click()
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    assert case["result"]["closure"]["closure_kind"] == "completed"
+    verify = [r for r in reversed(case["runs"]) if r["purpose"] == "verification_run"]
+    assert [(r["outcome"], r["timeout_seconds"]) for r in verify] == [("unknown", 20), ("completed", 120)]
+    history = stack.http.get(f"/api/cases/{case_id}/progress").json()["limits"]["history"]
+    assert [(r["limit_key"], r["limit_value"]) for r in history] == [("run_timeout_seconds", 20), ("run_timeout_seconds", 120)]
+    page.context.close()
+
+
+def test_a_not_met_verification_is_fixed_and_reverified_by_the_progressor_and_the_card_raises_a_zero_limit(stack):
+    """P4-PLAN-10 AC-11 (이슈 #9) — 검증이 근거와 함께 C-02 미충족을 보고하면 사람 없이 수정 구현(FIX1)·재검증(REVERIFY1)이
+    작업 그래프 새 리비전(진행기 수정 사이클)으로 더해져 돌고 업무가 끝난다. 작업 탭에 그 리비전 출처와 작업이 보인다.
+    수정 한도가 0 인 업무는 미충족 카드가 사이클 정보(끔 0/0)를 보이고, 카드에서 한도를 올리면 이어 가 끝난다.
+    """
+    project = stack.project("수정 사이클")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_VERIFY_NOT_MET 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=180_000)
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    assert case["result"]["closure"]["closure_kind"] == "completed"
+    tasks = [r["task_id"] for r in reversed(case["runs"]) if r["purpose"] in ("feature_implementation", "verification_run")]
+    assert tasks == ["T1", "T2", "FIX1", "REVERIFY1"]
+    page.click('[data-testid="open-work"]')
+    graph = page.locator('[data-testid="work-graph"]')
+    expect(graph).to_contain_text("진행기 수정 사이클", timeout=20_000)
+    expect(graph.locator('[data-testid="work-task-FIX1"]')).to_be_visible()
+    expect(graph.locator('[data-testid="work-task-REVERIFY1"]')).to_be_visible()
+
+    # 한도 0 인 업무 — 카드가 사이클 정보를 보이고, 올리면 이어 간다.
+    page2 = stack.page()
+    _open(stack, page2, project["id"])
+    case2 = _new_conversation(page2)
+    _send(page2, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_VERIFY_NOT_MET 경로 처리도 구현해줘")
+    expect(page2.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    response = stack.http.put(f"/api/cases/{case2}/progress/limits", json={"remediation_limit": 0})
+    assert response.status_code == 200, response.text
+    page2.click('[data-testid="agreement-open"]')
+    expect(page2.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page2.click('[data-testid="agreement-agree"]')
+    card = page2.locator('[data-testid="exception-card"]')
+    expect(card).to_be_visible(timeout=180_000)
+    info = card.locator('[data-testid="remediation-info"]')
+    expect(info).to_have_attribute("data-status", "off")
+    expect(info.locator('[data-testid="remediation-usage"]')).to_contain_text("0/0")
+    info.locator('[data-testid="remediation-raise"]').click()
+    expect(page2.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=180_000)
+    runs2 = [r["task_id"] for r in reversed(stack.http.get(f"/api/cases/{case2}").json()["runs"])
+             if r["purpose"] in ("feature_implementation", "verification_run")]
+    assert runs2 == ["T1", "T2", "FIX1", "REVERIFY1"]
+    page.context.close()
+    page2.context.close()

@@ -636,6 +636,11 @@ class RunnerAgent:
         # P4-06. 등록 보고. 원장에도 남아 재전송이 같은 보고(같은 원문 참조)를 보낸다.
         if knowledge_report:
             result_payload["knowledge_report"] = knowledge_report
+        # P4-10(이슈 #8, D-95). 끊긴 이유와 적용한 제한 시간 — 제어부가 시간 초과를 실패와 나눠 적는다.
+        if getattr(output, "stop_reason", None):
+            result_payload["stop_reason"] = output.stop_reason
+        if getattr(output, "timeout_seconds", None):
+            result_payload["timeout_seconds"] = int(output.timeout_seconds)
         # UI-02. 잔류 값의 근거와 종료한 수. 근거를 모르는 실행기는 보내지 않는다.
         if getattr(output, "residual_basis", None):
             result_payload["residual_basis"] = output.residual_basis
@@ -764,6 +769,8 @@ class RunnerAgent:
                 job_name=process_tree.job_name_for(
                     self.config.runner_id, run_id, assignment["assignment_generation"]
                 ),
+                # P4-10(D-95). 제어부가 실행을 만들 때 정한 제한 시간. 옛 제어부면 없고 실행기 기본값(1시간)이다.
+                timeout=assignment.get("timeout_seconds"),
             )
         finally:
             if lock is not None:
@@ -785,7 +792,14 @@ class RunnerAgent:
                 last_effect_run_id=space.get("last_effect_run_id"),
             )
 
+        cut_outcome = output.outcome
         produced = self._produce_for_purpose(assignment, purpose, output, context)
+        if getattr(output, "stop_reason", None) == "timeout":
+            # P4-10(D-95). **제한 시간에 끊긴 실행은 `unknown` 그대로다.** 목적별 산출물 검사(명령 없음·변경 없음 →
+            # 실패)가 끊긴 출력을 실패로 바꾸지 않게 한다 — 끊긴 것은 결과가 아니라 이유다. 부분 결과의 기준 보고는
+            # 싣지 않는다(판정에 쓰지 않는다 — 제어부도 같은 규칙으로 거른다).
+            output.outcome = cut_outcome
+            produced.pop("criteria_report", None)
         return output, produced
 
     def _read_verified(

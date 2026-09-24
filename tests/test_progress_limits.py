@@ -218,7 +218,10 @@ def test_a_case_setting_overrides_the_system_default_and_keeps_its_history(harne
     got = h.client.get(f"/api/cases/{case_id}/progress").json()["limits"]
     assert (got["repair_limit"]["value"], got["repair_limit"]["source"]) == (2, "system_default")
     assert (got["task_retry_limit"]["value"], got["task_retry_limit"]["source"]) == (1, "system_default")
-    assert got["system_default"] == {"repair_limit": 2, "task_retry_limit": 1}
+    # P4-10 이 수정 사이클 한도·실행 제한 시간(초)을 같은 자리에 더했다.
+    assert got["system_default"] == {
+        "repair_limit": 2, "task_retry_limit": 1, "remediation_limit": 2, "run_timeout_seconds": 3600,
+    }
     assert got["range"] == {"min": 0, "max": 10} and got["history"] == []
 
     first = h.client.put(

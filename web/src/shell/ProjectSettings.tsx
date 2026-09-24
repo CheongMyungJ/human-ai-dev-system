@@ -26,6 +26,7 @@ import {
   type RunnerWithConnection,
 } from '../api'
 import type { SettingsTab } from '../lib/address'
+import { formatTimeout } from '../lib/timeout'
 import { ProjectRules } from './ProjectRules'
 
 function describe(err: unknown): string {
@@ -200,7 +201,7 @@ function DefaultsTab(props: { project: ProjectWithAttention; runners: RunnerWith
         }
         onReset={settings.default_autonomy.setting ? () => void change({ default_autonomy: null }) : null}
       />
-      {(['repair_limit', 'task_retry_limit'] as const).map((key) => (
+      {(['repair_limit', 'task_retry_limit', 'remediation_limit'] as const).filter((key) => view.settings[key]).map((key) => (
         <SettingRow
           key={key}
           keyName={key}
@@ -217,6 +218,24 @@ function DefaultsTab(props: { project: ProjectWithAttention; runners: RunnerWith
           onReset={settings[key].setting ? () => void change({ [key]: null }) : null}
         />
       ))}
+      {view.settings.run_timeout_seconds && (
+        <SettingRow
+          keyName="run_timeout_seconds"
+          view={view}
+          display={(v) => formatTimeout(Number(v))}
+          form={
+            <NumberForm
+              initial={String(Number(settings.run_timeout_seconds.value ?? 3600) / 60)}
+              min={1}
+              max={1440}
+              testId="setting-input-run_timeout_seconds"
+              onSet={(n) => change({ run_timeout_seconds: Math.round(n * 60) })}
+            />
+          }
+          extra={<span className="sh-muted"> · 분으로 적는다(1~1440). 그 뒤 만든 실행부터</span>}
+          onReset={settings.run_timeout_seconds.setting ? () => void change({ run_timeout_seconds: null }) : null}
+        />
+      )}
       <SettingRow
         keyName="context_inline_limit_bytes"
         view={view}

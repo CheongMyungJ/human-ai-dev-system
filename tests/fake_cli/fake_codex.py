@@ -23,6 +23,10 @@
     HADS_FAKE_PLAN_QUESTION  (UI-05a) 결합 기록이 **연결 없는** 계획 질문(`d1`, 사람이 정할 출력 형식) 하나를 낸다 —
                              모든 작업이 그 결정을 기다린다
     HADS_FAKE_GATE_FAIL      (UI-05a) 품질 게이트(QG-02~07) 검토가 기준 C-01 의 필수·확정 지적 하나를 낸다(실패)
+    HADS_FAKE_SLOW_VERIFY=<초> (P4-10) 그 작업 디렉터리의 **첫** 검증 실행만 그만큼 잔다(손자 프로세스와 함께) — 짧은 제한
+                             시간에 걸리게 한다. 다시 시도한 검증은 자지 않는다(표지 파일은 임시 폴더에 둔다)
+    HADS_FAKE_VERIFY_NOT_MET (P4-10) 검증이 C-02 를 명령·요약과 함께 `not_met` 으로 보고한다 — 작업 디렉터리에
+                             `REMEDIATED.txt` 가 생기기 전까지. 미충족 블록을 받은 구현(수정 사이클)이 그 파일을 쓴다
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -34,11 +38,13 @@ P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설�
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -108,6 +114,10 @@ def work_stage_reply(prompt: str) -> str | None:
     if starts(templates.PLAN_AUTHORING_PROMPT):
         return canned.FAKE_PLAN_VERIFIED
     if starts(templates.FEATURE_IMPLEMENTATION_PROMPT):
+        if "--- 검증이 보고한 미충족 ---" in prompt:
+            # P4-10. 수정 사이클의 수정 구현 — 실제로 무언가를 바꾼다(재검증이 이것을 본다).
+            Path("REMEDIATED.txt").write_text("fixed after the verification report\n", encoding="utf-8")
+            return canned.FAKE_IMPLEMENTATION_RESPONSE
         if "HADS_FAKE_IMPL_NOCHANGE" in prompt:
             return canned.FAKE_IMPLEMENTATION_RESPONSE  # 바뀐 것이 없다 → 제품이 실패로 본다
         Path("reader.py").write_text(
@@ -116,6 +126,25 @@ def work_stage_reply(prompt: str) -> str | None:
         )
         return canned.FAKE_IMPLEMENTATION_RESPONSE
     if starts(templates.VERIFICATION_RUN_PROMPT):
+        if "HADS_FAKE_VERIFY_NOT_MET" in prompt and not Path("REMEDIATED.txt").exists():
+            return (
+                "확인했습니다.\n\n```json\n"
+                + json.dumps(
+                    {
+                        "commands": [
+                            {"command": "python -m pytest tests/test_reader.py -k filter", "summary": "필터 시험", "exit_code": 0},
+                            {"command": "python -m pytest tests/test_reader.py -k path", "summary": "경로 시험", "exit_code": 1},
+                        ],
+                        "result_summary": "시험 2건 중 1건이 실패했다",
+                        "criteria": [
+                            {"key": "C-01", "verdict": "met", "summary": "필터 시험 통과"},
+                            {"key": "C-02", "verdict": "not_met", "summary": "NOT-MET-MARK 로컬 경로 시험 실패"},
+                        ],
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n```\n"
+            )
         text = canned.FAKE_VERIFICATION_RESPONSE
         if "HADS_FAKE_CANDIDATE" in prompt and "hads-knowledge" in prompt:
             text += candidate_block(prompt)
@@ -128,6 +157,14 @@ def work_stage_reply(prompt: str) -> str | None:
             ' "conclusion": "determined", "summary": "경로 확인"}]}\n```\n'
         )
     return None
+
+
+def is_verification(prompt: str) -> bool:
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from runner import prompts as templates
+
+    return prompt[:60].startswith(templates.VERIFICATION_RUN_PROMPT[:40])
 
 
 def candidate_block(prompt: str) -> str:
@@ -180,6 +217,21 @@ def main() -> int:
                 "item": {"id": "item_1", "type": "command_execution", "command": "sleep"},
             }
         )
+
+    slow = re.search(r"HADS_FAKE_SLOW_VERIFY=(\d+)", prompt)
+    if slow and is_verification(prompt):
+        # P4-10. 이 작업 디렉터리의 첫 검증만 잔다 — 제한 시간에 걸린 뒤 늘린 제한으로 다시 도는 실행은 자지 않는다.
+        marker = Path(tempfile.gettempdir()) / (
+            "hads-fake-slow-" + hashlib.sha1(os.getcwd().lower().encode("utf-8")).hexdigest()[:16]
+        )
+        if not marker.exists():
+            marker.write_text("slept\n", encoding="utf-8")
+            seconds = int(slow.group(1))
+            child = subprocess.Popen([sys.executable, "-c", f"import time; time.sleep({seconds})"])
+            note_pid("grandchild", child.pid)
+            emit({"type": "item.started", "item": {"id": "item_3", "type": "command_execution", "command": "sleep"}})
+            time.sleep(seconds)
+            child.wait()
 
     if "HADS_FAKE_LEAVE_CHILD" in prompt:
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])

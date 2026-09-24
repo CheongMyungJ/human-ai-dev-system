@@ -228,6 +228,9 @@ class WorkProgressor:
                     case_id, step.purpose, step.task_id if step.task_id != "conversation" else ""
                 )
                 step = workflow.quality_gate_step(step, gates, state) or step
+            # P4-10(이슈 #8, D-95). 같은 목적·작업이 같은 제한으로 시간 초과를 되풀이하려 하면 사람에게(제한을 늘린다).
+            if step.kind == "run":
+                step = workflow.run_timeout_step(step, state) or step
             outcome["steps"].append(step.to_dict())
             if step.kind == "busy":
                 # 결과 보고 **뒤에** 오는 보고(독립 검토)를 기다리는 자리다. 요청을 끝내지 않는다 — 그
@@ -282,6 +285,35 @@ class WorkProgressor:
                         ),
                     )
                     return outcome
+                continue
+            if step.kind == "remediation":
+                # P4-10(이슈 #9). 검증 미충족의 수정 사이클 — 작업 그래프 새 리비전(출처 `progressor_remediation`)에
+                # 수정 구현·재검증 작업을 더하고 다음 걸음(그 수정 작업)을 본다. 사람의 결정이 아니다.
+                plan = step.remediation or {}
+                try:
+                    graph = self.repo.open_remediation_cycle(
+                        case_id, plan, (state.remediation or {}).get("graph_revision")
+                    )
+                except (ConflictError, NotFoundError) as exc:
+                    self._wait(
+                        case_id,
+                        request_id,
+                        workflow._wait(
+                            workflow.WaitReason.CRITERIA_UNRESOLVED,
+                            detail=f"수정 사이클을 열지 못했다: {exc}"[:200],
+                        ),
+                    )
+                    return outcome
+                if graph is not None:
+                    self.repo.record_progress_event(
+                        case_id, step.code, "remediation_opened", request_id=request_id,
+                        detail=(
+                            f"r{graph['revision']} · {plan.get('cycle')}차 · 작업 "
+                            + ", ".join([*plan.get("fix_tasks", []), plan.get("verify_task", "")])
+                            + f" · 기준 {', '.join(plan.get('criteria', []))}"
+                        )[:200],
+                        codes=list(plan.get("criteria", [])),
+                    )
                 continue
             if step.kind == "workspace":
                 request_id = self._ensure_request(case_id, request_id, origin, origin_ref)

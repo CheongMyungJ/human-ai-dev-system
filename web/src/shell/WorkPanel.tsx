@@ -33,6 +33,7 @@ import {
 } from '../api'
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
+import { formatTimeout, stopReasonText } from '../lib/timeout'
 
 const KINDS: TaskKind[] = ['implementation', 'verification', 'investigation', 'experiment', 'integration']
 
@@ -396,6 +397,7 @@ function TaskItem(props: {
               · {RUN_PURPOSE_LABEL[run.purpose ?? ''] ?? run.purpose ?? '목적 미기록'} ·{' '}
               {RUN_STATUS_LABEL[run.status] ?? run.status}
               {run.outcome ? ` · ${run.outcome}` : ''}
+              {run.stop_reason === 'timeout' ? ` · 시간 초과(제한 ${formatTimeout(run.timeout_seconds)})` : ''}
             </li>
           ))}
         </ul>
@@ -700,6 +702,11 @@ function RunList(props: { runs: Run[]; graph: WorkGraphState | null; onOpen: (ru
               · {RUN_PURPOSE_LABEL[run.purpose ?? ''] ?? run.purpose ?? '목적 미기록'}
               {key ? ` · ${key}` : ''} · {RUN_STATUS_LABEL[run.status] ?? run.status}
               {run.outcome ? ` · ${run.outcome}` : ''}
+              {run.stop_reason === 'timeout' && (
+                <span className="sh-warn" data-testid={`work-run-timeout-${run.run_id}`}>
+                  {' '}· 시간 초과(제한 {formatTimeout(run.timeout_seconds)})
+                </span>
+              )}
               {run.not_started_reason ? ' · 시작하지 않음' : ''} · {when(run.created_at)}
             </li>
           )
@@ -783,6 +790,11 @@ function RunDetail(props: {
               {run.not_started_reason && (
                 <li className="sh-plain-row sh-warn">CLI 를 부르기 전에 멈췄다 — {run.not_started_reason} · 소비 0 으로 정산</li>
               )}
+              <li className="sh-plain-row" data-testid="run-detail-timeout" data-stop-reason={run.stop_reason ?? ''}>
+                제한 시간 {formatTimeout(run.timeout_seconds)}
+                {run.stop_reason ? ` · ${stopReasonText(run.stop_reason, run.timeout_seconds)}` : ''}
+                {run.stop_reason === 'timeout' && ' · 끊기기 전의 부분 결과는 기준 판정에 쓰지 않았다(출력은 아래에서 연다)'}
+              </li>
               <li className="sh-plain-row">
                 사용량 {typeof run.usage === 'string' ? run.usage : JSON.stringify(run.usage)} · 잔류 활동 {run.residual_activity}
                 {(run.residual_observations ?? []).length > 0 &&

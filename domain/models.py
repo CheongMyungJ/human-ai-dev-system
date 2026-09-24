@@ -1021,6 +1021,9 @@ class ContextRefRole(str, Enum):
     KNOWLEDGE_REFERENCE = "knowledge_reference"
     #: P4-06. 후보 지식. 확정되지 않은 조사 단서이며 규칙이 아니다. 보조다.
     KNOWLEDGE_CANDIDATE = "knowledge_candidate"
+    #: P4-10(이슈 #9). **검증이 미충족을 보고한 실행의 출력**(PC 에 있는 원문). 그 기준을 고치는 구현 실행이 무엇이
+    #: 왜 실패했는지 읽는다 — 핵심이다(고칠 대상의 근거를 잃으면 추측으로 고친다).
+    VERIFICATION_REPORT = "verification_report"
 
 
 # --------------------------------------------------------------------- P4-04
@@ -1246,6 +1249,9 @@ class WorkGraphSource(str, Enum):
 
     PLAN_ARTIFACT = "plan_artifact"
     HUMAN_REPLANNING = "human_replanning"
+    #: P4-10(이슈 #9). 진행기가 **검증 미충족의 수정 사이클**(수정 구현 → 재검증 작업)을 더했다. 사람의 재계획과
+    #: 나눈다 — 사람이 정한 것이 아니라 검증 보고에서 나온 작업이다(사유에 기준·근거 실행·차수가 남는다).
+    PROGRESSOR_REMEDIATION = "progressor_remediation"
 
 
 class WorkGraphState(str, Enum):

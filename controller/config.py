@@ -13,8 +13,12 @@ from pathlib import Path
 from domain.context import DEFAULT_INLINE_LIMIT_BYTES
 from domain.run_control import DEFAULT_RUNNER_STALE_SECONDS
 from domain.work_flow import (
+    DEFAULT_REMEDIATION_LIMIT,
     DEFAULT_REPAIR_LIMIT,
+    DEFAULT_RUN_TIMEOUT_SECONDS,
     DEFAULT_TASK_RETRY_LIMIT,
+    RUN_TIMEOUT_MAX,
+    RUN_TIMEOUT_SYSTEM_MIN,
     ProgressLimits,
     check_limit,
 )
@@ -39,6 +43,10 @@ ENV_AUTO_PROGRESS_WORK = "HADS_AUTO_PROGRESS_WORK"
 #: P4-05b. 진행기의 재작성·재시도 상한의 **시스템 기본값**(0~10). Case 별 조정이 이 값보다 앞선다.
 ENV_REPAIR_LIMIT = "HADS_REPAIR_LIMIT"
 ENV_TASK_RETRY_LIMIT = "HADS_TASK_RETRY_LIMIT"
+#: P4-10(이슈 #9). 검증 미충족의 수정 사이클 한도의 시스템 기본값(0~10, 0 = 열지 않음).
+ENV_REMEDIATION_LIMIT = "HADS_REMEDIATION_LIMIT"
+#: P4-10(이슈 #8, D-95). CLI 호출 하나의 제한 시간(초)의 시스템 기본값(1~86400, 기본 3600).
+ENV_RUN_TIMEOUT_SECONDS = "HADS_RUN_TIMEOUT_SECONDS"
 
 DEFAULT_HOST = "127.0.0.1"  # 로컬 기본 접점은 루프백이다(implementation-baseline 2절)
 DEFAULT_PORT = 8765
@@ -110,6 +118,15 @@ def load_config() -> ControllerConfig:
         task_retry_limit=_limit_from_env(
             ENV_TASK_RETRY_LIMIT, "task_retry_limit", DEFAULT_TASK_RETRY_LIMIT
         ),
+        remediation_limit=_limit_from_env(
+            ENV_REMEDIATION_LIMIT, "remediation_limit", DEFAULT_REMEDIATION_LIMIT
+        ),
+        run_timeout_seconds=_limit_from_env(
+            ENV_RUN_TIMEOUT_SECONDS,
+            "run_timeout_seconds",
+            DEFAULT_RUN_TIMEOUT_SECONDS,
+            f"an integer number of seconds between {RUN_TIMEOUT_SYSTEM_MIN} and {RUN_TIMEOUT_MAX}",
+        ),
     )
     return ControllerConfig(
         data_root=data_root,
@@ -124,7 +141,9 @@ def load_config() -> ControllerConfig:
     )
 
 
-def _limit_from_env(env: str, key: str, default: int) -> int:
+def _limit_from_env(
+    env: str, key: str, default: int, expected: str = "an integer between 0 and 10"
+) -> int:
     """상한 환경 변수 하나. **이상한 값이면 기동을 멈춘다** — 진행기에서 처음 알게 되면 사람은
     왜 재작성이 한 번도 안 되는지(또는 끝없이 되는지) 찾아다녀야 한다."""
     raw = (os.environ.get(env) or "").strip()
@@ -133,8 +152,8 @@ def _limit_from_env(env: str, key: str, default: int) -> int:
     try:
         value = int(raw)
     except ValueError:
-        raise ValueError(f"{env} must be an integer between 0 and 10") from None
+        raise ValueError(f"{env} must be {expected}") from None
     try:
-        return check_limit(key, value)
+        return check_limit(key, value, system=True)
     except ValueError:
-        raise ValueError(f"{env} must be an integer between 0 and 10") from None
+        raise ValueError(f"{env} must be {expected}") from None

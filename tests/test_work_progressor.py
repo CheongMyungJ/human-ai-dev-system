@@ -384,14 +384,25 @@ def test_controlled_stops_at_the_start_and_at_the_result_candidate(processing_ha
 
 
 def test_unresolved_criteria_wait_for_a_person_and_an_exception_closes(processing_harness):
-    """AC-10 — 미충족 기준이 남으면 후보를 만들고 멈춘다. 자동 정책은 예외를 수용하지 않는다."""
+    """AC-10 — 미충족 기준이 남으면 후보를 만들고 멈춘다. 자동 정책은 예외를 수용하지 않는다.
+
+    P4-10(이슈 #9) 부터 근거 있는 미충족은 먼저 수정 사이클(수정 구현 → 재검증)을 연다. 이 시험은 **사이클을 끈**
+    업무(`remediation_limit = 0`)의 사람 대기를 본다 — 사이클 자체는 `tests/test_remediation_cycle.py`."""
     h = processing_harness
     h.agent.cli_executor.verification_response = VERIFICATION_ONE_FAILS
     _project, case_id, _request_id = _start(h)
+    response = h.client.put(
+        f"/api/cases/{case_id}/progress/limits",
+        json={"remediation_limit": 0, "reason_summary": "이 업무는 자동 수정을 하지 않는다"},
+    )
+    assert response.status_code == 200, response.text
     conv = _drive(h, case_id)
     _agree(h, case_id)
     conv = _drive(h, case_id)
     assert _wait_codes(conv) == ["criteria_unresolved"]
+    remediation = conv["progress"]["wait"][0]["remediation"]
+    assert (remediation["status"], remediation["used"], remediation["limit"]) == ("off", 0, 0)
+    assert remediation["candidates"] == ["C-02"]
     case = h.client.get(f"/api/cases/{case_id}").json()
     assert case["status"] == "waiting_final_acceptance"
     verdicts = {c["criterion_key"]: c["verdict"] for c in h.criteria(case_id)}

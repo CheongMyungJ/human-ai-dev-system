@@ -1219,6 +1219,9 @@ class Repository:
                 f"instruction artifact is {ref['availability']}, not available for execution"
             )
         now = utc_now()
+        # P4-10(이슈 #8, D-95). **이 실행에 적용할 CLI 제한 시간** — 만들 때의 유효값(Case → 프로젝트 → 시스템)을
+        # 적는다. 바꾼 설정은 다음 실행부터이고, 재배정된 같은 실행은 적힌 값 그대로다(배정이 이 값을 싣는다).
+        timeout_seconds = self.effective_progress_limits(case_id).run_timeout_seconds
         refs = list(context_refs or [])
         # **예약하는 문맥 크기는 실제로 전달하는 패키지다**(P4-04). 크기 한도로 생략한
         # 참조는 지시문에 들어가지 않으므로 세지 않는다.
@@ -1268,8 +1271,8 @@ class Repository:
                     "INSERT INTO run (run_id, case_id, task_id, role, tool_id, mode, permission,"
                     " instruction_artifact_id, instruction_artifact_rev, status,"
                     " assignment_generation, created_at, purpose, repository_id,"
-                    " is_experiment, request_id, context_inline_limit)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    " is_experiment, request_id, context_inline_limit, timeout_seconds)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         run_id,
                         case_id,
@@ -1298,6 +1301,7 @@ class Repository:
                         # P4-04. 이 실행의 패키지를 정할 때 적용한 한도. 나중에 설정이
                         # 바뀌어도 "그때 무엇이 왜 생략됐는가"를 답할 수 있어야 한다.
                         context_inline_limit,
+                        timeout_seconds,
                     ),
                 )
                 self._insert_context_refs(run_id, refs)
@@ -1748,6 +1752,8 @@ class Repository:
         interpretation: dict[str, Any] | None = None,
         criteria_report: list[dict[str, Any]] | None = None,
         knowledge_report: list[dict[str, Any]] | None = None,
+        stop_reason: str | None = None,
+        timeout_seconds: int | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
@@ -1766,7 +1772,24 @@ class Repository:
         **UI-02: 잔류 활동의 근거.** `residual_basis` 가 있으면 관측 한 건으로 남긴다.
         근거가 확인이 아닌데 `none` 을 주장하면 거부한다 — 확인하지 않은 것을 "남은 것
         없음"으로 적으면 잠금이 풀린다. 근거를 보내지 않는 보고는 기존 계약 그대로 받는다.
+
+        **P4-10(이슈 #8, D-95): 끊긴 이유.** `stop_reason` 은 Runner 가 CLI 를 끊은 이유다 — `timeout`(제한 시간)은
+        결과 `unknown` 과만 받고, `stop_requested`(사람의 중단)는 `completed` 가 아닐 때만 받는다. 시간 초과는 결과가 아니라
+        이유다(모르는 것을 실패로 바꾸지 않는다). `timeout_seconds` 는 Runner 가 실제로 적용한 제한이며 오면 실행의
+        값을 그것으로 적는다(보통 만들 때 적은 값과 같다).
         """
+        if stop_reason is not None:
+            if stop_reason not in ("timeout", "stop_requested"):
+                raise ConflictError(f"unknown stop reason {stop_reason!r}")
+            if stop_reason == "timeout" and outcome is not RunOutcome.UNKNOWN:
+                raise ConflictError(
+                    f"a run cut by its time limit must report outcome unknown, not {outcome.value}"
+                )
+            if stop_reason == "stop_requested" and outcome is RunOutcome.COMPLETED:
+                # 끊은 실행은 완료가 아니다. 목적별 산출물 검사가 `failed` 로 적는 경로(UI-02 그대로)는 받는다.
+                raise ConflictError("a run stopped on request cannot report outcome completed")
+        if timeout_seconds is not None and (isinstance(timeout_seconds, bool) or int(timeout_seconds) <= 0):
+            raise ConflictError("timeout_seconds must be a positive number of seconds")
         if not_started_reason is not None:
             not_started_reason = NotStartedReason(not_started_reason)
             if (
@@ -1843,7 +1866,8 @@ class Repository:
                 " output_artifact_rev = ?, session_ref = ?, usage_json = ?,"
                 " workspace_effect_json = ?, residual_activity = ?, observed_tool_version = ?,"
                 " finished_at = ?, not_started_reason = ?, context_freshness_json = ?,"
-                " criteria_report_json = ?, knowledge_report_json = ?"
+                " criteria_report_json = ?, knowledge_report_json = ?, stop_reason = ?,"
+                " timeout_seconds = COALESCE(?, timeout_seconds)"
                 " WHERE run_id = ?",
                 (
                     RunStatus.FINISHED.value,
@@ -1861,6 +1885,8 @@ class Repository:
                     json.dumps(freshness, ensure_ascii=False) if freshness else None,
                     criteria_json,
                     knowledge_json,
+                    stop_reason,
+                    int(timeout_seconds) if timeout_seconds is not None else None,
                     run_id,
                 ),
             )
@@ -5717,10 +5743,14 @@ class Repository:
 
         UI-02. **중단(`cancelled`)됐는데 실제로 끝났는지 확인하지 못한 실행**도 여기 든다 —
         트리가 남아 쓰고 있을 수 있다. 확인되면 빠진다.
+
+        P4-10(D-95). **제한 시간에 걸려 시스템이 끊은 실행**(`unknown`, `stop_reason = timeout`)도 사람의 중단과 같다 —
+        트리 종료가 확인되면 빠진다. 결과는 `unknown` 그대로이고 부분 결과는 판정에 쓰지 않는다(`apply_criteria_report`).
+        빼지 않으면 시간 초과 뒤 다시 시도해 통과해도 업무가 영원히 닫히지 않는다. 다른 `unknown`(결과 유실 등)은 그대로다.
         """
         rows = self.conn.execute(
             "SELECT run_id, status, outcome, purpose, tool_id, residual_activity,"
-            " not_started_reason FROM run"
+            " not_started_reason, stop_reason FROM run"
             " WHERE case_id = ? AND (status != ? OR outcome IN (?, ?) OR outcome IS NULL)"
             " ORDER BY created_at",
             (
@@ -5733,9 +5763,10 @@ class Repository:
         unsettled = []
         for row in rows:
             run = dict(row)
-            if run["outcome"] == RunOutcome.CANCELLED.value and run["status"] == (
-                RunStatus.FINISHED.value
-            ):
+            stopped = run["outcome"] == RunOutcome.CANCELLED.value or (
+                run["outcome"] == RunOutcome.UNKNOWN.value and run.get("stop_reason") == "timeout"
+            )
+            if stopped and run["status"] == RunStatus.FINISHED.value:
                 if not runctl.execution_unconfirmed(self._with_residual(dict(run))):
                     continue
             unsettled.append(
@@ -7629,6 +7660,11 @@ class Repository:
                     case_id, latest["id"], task_key
                 ):
                     add(ContextRefRole.QUESTION_ANSWER, question.get("answer_artifact_id"), 1)
+            if purpose is RunPurpose.FEATURE_IMPLEMENTATION:
+                # P4-10(이슈 #9). **이 작업이 구현하는 기준이 지금 미충족이면 그 검증 보고.** 수정 사이클의 수정
+                # 작업(또는 사람이 더한 수정 작업)이 무엇이 왜 실패했는지 읽고 고친다.
+                for report in self.verification_reports_for_task(case_id, task_key):
+                    add(ContextRefRole.VERIFICATION_REPORT, report["artifact_id"], report["revision"])
         elif purpose is RunPurpose.LIMITED_ANALYSIS and task_key and latest is not None:
             # P4-09(a). 계획의 조사 Task 도 자기를 막던 질문의 답을 받는다(이슈 #2 "구현·검증·실험·분석").
             # 분석 실행의 다른 입력(의도·계획)은 바꾸지 않는다 — 그 실행은 계획을 따르는 실행이 아니다.
@@ -8446,7 +8482,12 @@ class Repository:
     # ------------------------------------------------- P3-02 사람의 재계획
 
     def _replan(
-        self, case_id: str, mutate: Any, reason_summary: str, actor: str
+        self,
+        case_id: str,
+        mutate: Any,
+        reason_summary: str,
+        actor: str,
+        source: WorkGraphSource = WorkGraphSource.HUMAN_REPLANNING,
     ) -> dict[str, Any]:
         """현재 리비전을 바탕으로 **새 리비전**을 만든다.
 
@@ -8499,7 +8540,7 @@ class Repository:
             case_id=case_id,
             plan_preparation_id=graph["plan_preparation_id"],
             tasks=payload,
-            source=WorkGraphSource.HUMAN_REPLANNING,
+            source=source,
             reason_summary=reason_summary,
             actor=actor,
         )
@@ -8610,6 +8651,243 @@ class Repository:
             return None
 
         return self._replan(case_id, mutate, reason_summary, actor)
+
+    # ------------------------------------------------- P4-10 검증 미충족의 수정 사이클(이슈 #9)
+
+    def verification_remediation_state(self, case_id: str) -> dict[str, Any]:
+        """수정 사이클의 입력 — **근거 있는 미충족** 후보, 사이클을 열지 않는 기준과 이유, 사용 수·이력. 본문 없음.
+
+        근거 있는 미충족: 지금 `not_met` 인 기준의 근거 실행이 끝까지 돈(`completed`) 검증 실행이고, 그 실행의 보고
+        항목에 요약이 있고, 명령 기록이 하나 이상 있다(종료 코드 무관 — 실패한 시험이 근거다). 원인·조사 결론 의무
+        (`cause`·`answer`)의 미충족은 구현 수정으로 충족되지 않으므로 제외한다(`investigation_obligation`). `unverified`·근거
+        없음은 제외 이유와 함께 낸다(사람 카드가 보인다). 고칠 구현 작업은 그 기준을 구현하는(`implements`) 작업,
+        없으면 근거 검증 작업이 기다리던 구현 작업, 그것도 없으면 마지막 구현 작업이다(UI-05a QG-04 repair 와 같은
+        규칙). 사용 수·이력은 출처 `progressor_remediation` 리비전에서 도출한다(저장 값이 아니다 — 새 의도·계획
+        버전으로 초기화하지 않는다). 그래프가 없거나 오래됐으면 빈 값.
+        """
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return {}
+        latest = self.latest_intent_version(case_id)
+        if latest is None or graph["intent_version_id"] != latest["id"]:
+            return {}
+        tasks = self._graph_tasks(graph["id"])
+        live = [t for t in tasks if not t["cancelled"]]
+        by_key = {t["task_key"]: t for t in live}
+        criteria = self.current_criteria(case_id)
+        key_of = {c["id"]: c["criterion_key"] for c in criteria}
+
+        revisions = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT id, revision, reason_summary, created_at, source FROM work_graph_revision"
+                " WHERE case_id = ? ORDER BY revision",
+                (case_id,),
+            ).fetchall()
+        ]
+        keys_by_rev: dict[int, set[str]] = {}
+        for rev in revisions:
+            keys_by_rev[rev["revision"]] = {
+                r["task_key"]
+                for r in self.conn.execute(
+                    "SELECT task_key FROM task WHERE graph_revision_id = ?", (rev["id"],)
+                ).fetchall()
+            }
+        history = []
+        for rev in revisions:
+            if rev["source"] != WorkGraphSource.PROGRESSOR_REMEDIATION.value:
+                continue
+            added = sorted(keys_by_rev[rev["revision"]] - keys_by_rev.get(rev["revision"] - 1, set()))
+            history.append(
+                {
+                    "cycle": len(history) + 1,
+                    "revision": rev["revision"],
+                    "reason": rev["reason_summary"],
+                    "created_at": rev["created_at"],
+                    "tasks": added,
+                }
+            )
+
+        implementations = sorted(
+            (t for t in live if t["kind"] == TaskKind.IMPLEMENTATION.value), key=lambda t: t["order_index"]
+        )
+        candidates: list[dict[str, Any]] = []
+        excluded: list[dict[str, Any]] = []
+        for crit in criteria:
+            verdict = crit.get("verdict")
+            key = crit["criterion_key"]
+            if verdict == CriterionVerdict.UNVERIFIED.value:
+                excluded.append({"key": key, "verdict": verdict, "reason": "unverified"})
+                continue
+            if verdict != CriterionVerdict.NOT_MET.value:
+                continue
+            if crit.get("obligation") in (CriterionObligation.CAUSE.value, CriterionObligation.ANSWER.value):
+                # 원인·조사 결론의 미충족(판단 불가 포함)은 구현 수정으로 충족되지 않는다 — 더 조사할지는 사람이 정한다.
+                excluded.append({"key": key, "verdict": verdict, "reason": "investigation_obligation"})
+                continue
+            run_id = crit.get("evidence_run_id")
+            reason: str | None = None
+            run: dict[str, Any] | None = None
+            if not run_id:
+                reason = "no_evidence_run"
+            else:
+                try:
+                    run = self.get_run(run_id)
+                except NotFoundError:
+                    reason = "no_evidence_run"
+            if reason is None and run is not None:
+                if run.get("purpose") != RunPurpose.VERIFICATION_RUN.value:
+                    reason = "evidence_not_verification"
+                elif run.get("outcome") != RunOutcome.COMPLETED.value:
+                    reason = "run_not_completed"
+                else:
+                    raw = run.get("criteria_report_json")
+                    report = workflow.parse_criteria_report(json.loads(raw)) if raw else []
+                    item = next((r for r in report if r["key"] == key), None)
+                    if item is None or not item.get("summary"):
+                        reason = "no_summary"
+                    elif not self.list_run_commands(run_id):
+                        reason = "no_commands"
+            verify_task = by_key.get(run["task_id"]) if (reason is None and run is not None) else None
+            if reason is None and verify_task is None:
+                reason = "no_verification_task"
+            fix: list[dict[str, Any]] = []
+            if reason is None and verify_task is not None:
+                fix = [
+                    t
+                    for t in implementations
+                    if any(
+                        link["criterion_id"] == crit["id"] and link["relation"] == TaskRelation.IMPLEMENTS.value
+                        for link in t["criteria"]
+                    )
+                ]
+                if not fix:
+                    fix = [t for t in implementations if t["task_key"] in verify_task["depends_on"]]
+                if not fix and implementations:
+                    fix = [implementations[-1]]
+                if not fix:
+                    reason = "no_implementation_task"
+            if reason is not None:
+                excluded.append({"key": key, "verdict": verdict, "reason": reason})
+                continue
+            assert verify_task is not None and run is not None
+            reverify = sorted(
+                {
+                    key_of[link["criterion_id"]]
+                    for link in verify_task["criteria"]
+                    if link["relation"] == TaskRelation.VERIFIES.value and link["criterion_id"] in key_of
+                }
+                | {key}
+            )
+            candidates.append(
+                {
+                    "criterion_id": crit["id"],
+                    "key": key,
+                    "summary": crit.get("result_summary"),
+                    "evidence_run_id": run_id,
+                    "verify_task": verify_task["task_key"],
+                    "verify_kind": verify_task["kind"],
+                    "verify_repository_id": verify_task.get("repository_id"),
+                    "fix_tasks": [
+                        {"task_key": t["task_key"], "repository_id": t.get("repository_id")} for t in fix
+                    ],
+                    "reverify_criteria": reverify,
+                }
+            )
+        return {
+            "graph_revision": graph["revision"],
+            "used": len(history),
+            "history": history,
+            "candidates": candidates,
+            "excluded": excluded,
+            "task_keys": sorted(t["task_key"] for t in tasks),
+        }
+
+    def open_remediation_cycle(self, case_id: str, plan: dict[str, Any], base_revision: int | None) -> dict[str, Any] | None:
+        """진행기가 수정 사이클 하나를 작업 그래프 **새 리비전**으로 연다(출처 `progressor_remediation`, 사유 기록).
+
+        그래프가 그 사이 바뀌었으면(`base_revision` 이 현재가 아니다 — 다른 사건이 먼저 열었거나 사람이 고쳤다)
+        아무 것도 하지 않고 `None` — 진행기가 다시 본다. 이전 리비전·실행 이력은 그대로 남는다(FR-07).
+        종료된 업무·오래된 그래프는 기존 규칙대로 거부한다.
+        """
+        current = self.current_work_graph_row(case_id)
+        if current is None or (base_revision is not None and current["revision"] != base_revision):
+            return None
+
+        def mutate(payload: list[dict[str, Any]]) -> None:
+            existing = {t["key"] for t in payload}
+            for task in plan.get("tasks") or []:
+                if task["key"] in existing:
+                    raise ConflictError(f"task {task['key']!r} already exists in this work graph")
+                payload.append(
+                    {
+                        "key": task["key"],
+                        "kind": task["kind"],
+                        "relates_to": "",
+                        "summary": task.get("summary") or task["key"],
+                        "deliverable_summary": task.get("deliverable_summary") or "",
+                        "completion_summary": task.get("completion_summary") or "",
+                        "order_index": len(payload) + 1,
+                        "origin": task.get("origin") or ContentOrigin.OBSERVATION.value,
+                        "cancelled": False,
+                        "cancel_reason": "",
+                        "repository": task.get("repository") or "",
+                        "depends_on": list(task.get("depends_on") or []),
+                        "criteria": list(task.get("criteria") or []),
+                    }
+                )
+
+        return self._replan(
+            case_id,
+            mutate,
+            plan.get("reason") or "검증 미충족의 수정 사이클",
+            self.WORK_PROGRESSOR_ACTOR,
+            source=WorkGraphSource.PROGRESSOR_REMEDIATION,
+        )
+
+    def verification_reports_for_task(self, case_id: str, task_key: str | None) -> list[dict[str, Any]]:
+        """이 구현 작업이 구현하는 기준 중 **지금 미충족**인 것의 근거 검증 실행과 그 출력 참조(P4-10, 이슈 #9).
+
+        진행기가 연 수정 작업이든 사람이 작업 탭에서 더한 작업이든 같다 — 고칠 대상의 근거(무엇이 왜 실패했는가)를
+        잃으면 추측으로 고친다. 출력 원문은 PC 에 있고 여기에는 참조만 있다.
+        """
+        if not task_key:
+            return []
+        graph = self.current_work_graph_row(case_id)
+        if graph is None:
+            return []
+        linked = {
+            r["criterion_id"]
+            for r in self.conn.execute(
+                "SELECT criterion_id FROM task_criterion WHERE graph_revision_id = ? AND task_key = ?"
+                " AND relation = ?",
+                (graph["id"], task_key, TaskRelation.IMPLEMENTS.value),
+            ).fetchall()
+        }
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for crit in self.current_criteria(case_id):
+            if crit["id"] not in linked or crit.get("verdict") != CriterionVerdict.NOT_MET.value:
+                continue
+            run_id = crit.get("evidence_run_id")
+            if not run_id or run_id in seen:
+                continue
+            try:
+                run = self.get_run(run_id)
+            except NotFoundError:
+                continue
+            if run.get("purpose") != RunPurpose.VERIFICATION_RUN.value or not run.get("output_artifact_id"):
+                continue
+            seen.add(run_id)
+            out.append(
+                {
+                    "run_id": run_id,
+                    "task_id": run.get("task_id"),
+                    "artifact_id": run["output_artifact_id"],
+                    "revision": run.get("output_artifact_rev") or 1,
+                }
+            )
+        return out
 
     # =================================================================== P3-03
     #
@@ -14408,6 +14686,9 @@ class Repository:
             psettings.KEY_DEFAULT_AUTONOMY: Autonomy.ASK_ON_DECISION.value,
             "repair_limit": self.progress_limits.repair_limit,
             "task_retry_limit": self.progress_limits.task_retry_limit,
+            # P4-10. 수정 사이클 한도·실행 제한 시간(초).
+            "remediation_limit": self.progress_limits.remediation_limit,
+            "run_timeout_seconds": self.progress_limits.run_timeout_seconds,
             psettings.KEY_INLINE_LIMIT: self.context_inline_limit,
         }
         settings: dict[str, Any] = {}
@@ -14468,6 +14749,8 @@ class Repository:
             },
             "ranges": {
                 "progress_limit": {"min": workflow.LIMIT_MIN, "max": workflow.LIMIT_MAX},
+                # P4-10. 키별 범위(제한 시간은 초).
+                **{key: {"min": low, "max": high} for key, (low, high) in workflow.LIMIT_RANGES.items()},
             },
             "history": history,
             "applies_to": "이 뒤에 만드는 대화(Autonomy·예산 행)와 실행(인라인 한도). 기존 대화·실행은 바뀌지 않는다."
@@ -16538,6 +16821,10 @@ class Repository:
             key: self.project_setting_value(project_id, key) for key in workflow.LIMIT_KEYS
         }
         out["range"] = {"min": workflow.LIMIT_MIN, "max": workflow.LIMIT_MAX}
+        # P4-10. 키별 범위(제한 시간은 초 10~86400). `range` 는 옛 화면을 위해 둔다(재작성·재시도).
+        out["ranges"] = {
+            key: {"min": low, "max": high} for key, (low, high) in workflow.LIMIT_RANGES.items()
+        }
         out["history"] = history
         out["closed"] = self.case_is_closed(case_id)
         return out
@@ -16782,7 +17069,7 @@ class Repository:
         finished = [
             workflow.finished_summary(dict(r))
             for r in self.conn.execute(
-                "SELECT run_id, purpose, task_id, status, outcome FROM run"
+                "SELECT run_id, purpose, task_id, status, outcome, stop_reason, timeout_seconds FROM run"
                 " WHERE case_id = ? AND status = ? ORDER BY created_at",
                 (case_id, RunStatus.FINISHED.value),
             ).fetchall()
@@ -16850,6 +17137,7 @@ class Repository:
             attempts=dict(progress.get("attempts") or {}),
             finished_runs=finished,
             limits=self.effective_progress_limits(case_id),
+            remediation=self.verification_remediation_state(case_id) if stage is CaseStage.WORK else {},
         )
 
     def _instruction_of(self, run_id: str) -> tuple[str, int]:
@@ -16908,15 +17196,22 @@ class Repository:
             crit = by_id.get(link["criterion_id"])
             if crit is None:
                 continue
-            criteria.append(
-                {
-                    "key": crit["criterion_key"],
-                    "relation": link["relation"],
-                    "summary": crit.get("summary"),
-                    "method_summary": crit.get("method_summary"),
-                    "obligation": crit.get("obligation"),
-                }
-            )
+            item = {
+                "key": crit["criterion_key"],
+                "relation": link["relation"],
+                "summary": crit.get("summary"),
+                "method_summary": crit.get("method_summary"),
+                "obligation": crit.get("obligation"),
+            }
+            if (
+                link["relation"] == TaskRelation.IMPLEMENTS.value
+                and crit.get("verdict") == CriterionVerdict.NOT_MET.value
+            ):
+                # P4-10(이슈 #9). 이 작업이 고칠 **미충족** — 검증이 보고한 요약과 근거 실행(지시문 블록이 쓴다).
+                item["verdict"] = crit["verdict"]
+                item["result_summary"] = crit.get("result_summary")
+                item["evidence_run_id"] = crit.get("evidence_run_id")
+            criteria.append(item)
         return {
             "task_key": task["task_key"],
             "kind": task["kind"],
@@ -16979,6 +17274,9 @@ class Repository:
         case_id = run["case_id"]
         if self.case_is_closed(case_id):
             return [{"key": r["key"], "recorded": False, "reason": "case_closed"} for r in report]
+        if run.get("stop_reason") == "timeout":
+            # P4-10(D-95). 제한 시간에 끊긴 실행의 부분 결과는 기준 판정에 쓰지 않는다 — 출력은 남아 사람이 본다.
+            return [{"key": r["key"], "recorded": False, "reason": "run_timed_out"} for r in report]
         criteria = self.current_criteria(case_id)
         already = {
             c["id"]

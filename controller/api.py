@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -36,6 +36,7 @@ from domain import ids, intent_doc
 from domain import knowledge as knowmod
 from domain import profiles as case_profiles
 from domain import search as searchrules
+from domain import work_flow
 from domain.models import (
     Satisfaction,
     AcceptanceMode,
@@ -337,6 +338,10 @@ class ResultIn(BaseModel):
     #: UI-05a(D-94). 진행기의 품질 게이트 검토 실행이 낸 **발견**(`[{finding_key, criterion, severity,
     #: certainty, target, summary}]`). 본문이 아니다 — 제어부가 그 검증 1회를 닫으며 판정을 계산한다.
     quality_gate_findings: list[dict[str, Any]] | None = None
+    #: P4-10(이슈 #8, D-95). Runner 가 CLI 를 끊은 이유(`timeout`·`stop_requested`)와 실제로 적용한 제한 시간(초).
+    #: 시간 초과는 결과가 아니라 이유다 — 결과는 `unknown` 그대로다.
+    stop_reason: Literal["timeout", "stop_requested"] | None = None
+    timeout_seconds: int | None = Field(default=None, gt=0)
 
 
 class ExecutingIn(BaseModel):
@@ -940,6 +945,8 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             interpretation=payload.interpretation,
             criteria_report=payload.criteria_report,
             knowledge_report=payload.knowledge_report,
+            stop_reason=payload.stop_reason,
+            timeout_seconds=payload.timeout_seconds,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -4029,10 +4036,15 @@ def get_progress(request: Request, case_id: str) -> dict[str, Any]:
 
 
 class ProgressLimitsIn(BaseModel):
-    """P4-05b. 진행 상한 조정. **준 키만** 바꾼다. 무제한은 없다(0~10)."""
+    """P4-05b. 진행 상한 조정. **준 키만** 바꾼다. 무제한은 없다(0~10). P4-10 이 수정 사이클 한도(0~10)와 실행 제한
+    시간(초, 10~86400)을 더했다."""
 
     repair_limit: int | None = Field(default=None, ge=0, le=10)
     task_retry_limit: int | None = Field(default=None, ge=0, le=10)
+    remediation_limit: int | None = Field(default=None, ge=0, le=10)
+    run_timeout_seconds: int | None = Field(
+        default=None, ge=work_flow.RUN_TIMEOUT_MIN, le=work_flow.RUN_TIMEOUT_MAX
+    )
     set_by: str = Field(default="owner", min_length=1, max_length=120)
     reason_summary: str | None = Field(default=None, max_length=200)
 
@@ -4051,11 +4063,16 @@ def set_progress_limits(
         for key, value in (
             ("repair_limit", payload.repair_limit),
             ("task_retry_limit", payload.task_retry_limit),
+            ("remediation_limit", payload.remediation_limit),
+            ("run_timeout_seconds", payload.run_timeout_seconds),
         )
         if value is not None
     }
     if not values:
-        raise HTTPException(status_code=422, detail="give repair_limit or task_retry_limit")
+        raise HTTPException(
+            status_code=422,
+            detail="give repair_limit, task_retry_limit, remediation_limit or run_timeout_seconds",
+        )
     repo = _repo(request)
     try:
         repo.set_progress_limits(case_id, values, payload.set_by, payload.reason_summary)

@@ -65,38 +65,73 @@ DEFAULT_REPAIR_LIMIT = 2
 #: 첫 시도는 세지 않는다 — 기본값에서 두 번째 실패가 사람 대기다.
 DEFAULT_TASK_RETRY_LIMIT = 1
 
+#: P4-10(이슈 #9). 검증이 근거와 함께 기준 미충족을 보고했을 때 진행기가 여는 **수정 사이클**(수정 구현 →
+#: 재검증)의 횟수 기본값. D-29 "최초 품질 실패 뒤 repair 기본 2" 와 같은 수. 0 은 "열지 않고 바로 사람에게".
+DEFAULT_REMEDIATION_LIMIT = 2
+
+#: P4-10(이슈 #8, D-95). CLI 호출 하나의 **제한 시간**(초) 기본값 — 모든 실행 1시간.
+DEFAULT_RUN_TIMEOUT_SECONDS = 3600
+
 #: 상한 설정의 범위. **무제한은 없다** — "통과할 때까지 돌리지 않는다"가 이 파일의 약속이다.
 #: 0 은 "자동으로 다시 하지 않고 바로 사람에게"다.
 LIMIT_MIN = 0
 LIMIT_MAX = 10
 
-#: 상한 설정의 이름. 결함 수정과 환경·작업 재시도를 나눈다(D-29).
-LIMIT_KEYS: tuple[str, ...] = ("repair_limit", "task_retry_limit")
+#: P4-10. 제한 시간 설정의 범위(초) — 10초~24시간. 시스템 기본값(환경 변수)만 1초부터 받는다(시험용).
+RUN_TIMEOUT_MIN = 10
+RUN_TIMEOUT_SYSTEM_MIN = 1
+RUN_TIMEOUT_MAX = 86400
+
+#: 상한 설정의 이름. 결함 수정과 환경·작업 재시도를 나눈다(D-29). P4-10 이 수정 사이클·제한 시간을 더했다 —
+#: 같은 자리(Case 명시 → 프로젝트 기본값 → 시스템 기본값, 이력·출처·복귀)에 둔다.
+LIMIT_KEYS: tuple[str, ...] = (
+    "repair_limit",
+    "task_retry_limit",
+    "remediation_limit",
+    "run_timeout_seconds",
+)
+
+#: 키별 범위(최소, 최대). 설정(Case·프로젝트)이 받는 값이다.
+LIMIT_RANGES: dict[str, tuple[int, int]] = {
+    "repair_limit": (LIMIT_MIN, LIMIT_MAX),
+    "task_retry_limit": (LIMIT_MIN, LIMIT_MAX),
+    "remediation_limit": (LIMIT_MIN, LIMIT_MAX),
+    "run_timeout_seconds": (RUN_TIMEOUT_MIN, RUN_TIMEOUT_MAX),
+}
 
 
-def check_limit(key: str, value: Any) -> int:
-    """상한 값 하나를 검사한다. 모르는 이름·정수가 아닌 값·범위 밖은 `ValueError`."""
+def check_limit(key: str, value: Any, *, system: bool = False) -> int:
+    """상한 값 하나를 검사한다. 모르는 이름·정수가 아닌 값·범위 밖은 `ValueError`.
+
+    `system` 이면 시스템 기본값(환경 변수)의 검사다 — 제한 시간만 1초부터 받는다(시험이 짧은 제한을 쓴다).
+    """
     if key not in LIMIT_KEYS:
         raise ValueError(f"unknown progress limit {key!r}")
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{key} must be an integer")
-    if not LIMIT_MIN <= value <= LIMIT_MAX:
-        raise ValueError(f"{key} must be between {LIMIT_MIN} and {LIMIT_MAX}")
+    low, high = LIMIT_RANGES[key]
+    if system and key == "run_timeout_seconds":
+        low = RUN_TIMEOUT_SYSTEM_MIN
+    if not low <= value <= high:
+        raise ValueError(f"{key} must be between {low} and {high}")
     return value
 
 
 @dataclass(frozen=True)
 class ProgressLimits:
-    """진행기의 재작성·재시도 상한(P4-05b). 판정은 값만 본다 — 출처는 저장 계층이 안다."""
+    """진행기의 재작성·재시도 상한(P4-05b)과 수정 사이클 한도·실행 제한 시간(P4-10). 판정은 값만 본다 —
+    출처는 저장 계층이 안다."""
 
     repair_limit: int = DEFAULT_REPAIR_LIMIT
     task_retry_limit: int = DEFAULT_TASK_RETRY_LIMIT
+    remediation_limit: int = DEFAULT_REMEDIATION_LIMIT
+    run_timeout_seconds: int = DEFAULT_RUN_TIMEOUT_SECONDS
     #: 어디서 온 값인가(키 → `case_setting`·`project_setting`(UI-04b)·`system_default`). 대기 사유에 싣는다.
     sources: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
-        check_limit("repair_limit", self.repair_limit)
-        check_limit("task_retry_limit", self.task_retry_limit)
+        for key in LIMIT_KEYS:
+            check_limit(key, getattr(self, key), system=True)
 
     def source(self, key: str) -> str:
         return dict(self.sources).get(key, "system_default")
@@ -138,6 +173,9 @@ class WaitReason(str):
     #: P4-06. 이 작업에 적용되는 필수 지식이 서로 충돌한다.
     KNOWLEDGE_CONFLICT = "knowledge_conflict"
     ADMISSION_REFUSED = "admission_refused"
+    #: P4-10(이슈 #8, D-95). 실행이 제한 시간에 걸려 끊겼고 지금 제한이 그 실행의 제한보다 크지 않다 — 같은
+    #: 제한으로 다시 돌리지 않고 사람이 제한을 늘린다.
+    RUN_TIMED_OUT = "run_timed_out"
 
 
 #: **환경이 막은 것**의 코드. 사람의 결정이 아니라 조치·재시도가 필요하다(D-79 조치 카드).
@@ -175,6 +213,10 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.QUALITY_GATE: "명시로 켠 품질 게이트가 수정 한도 안에서 통과하지 못했다. 한도를 올리거나 끈다",
     WaitReason.KNOWLEDGE_CONFLICT: "이 작업에 적용되는 필수 지식이 서로 충돌한다. 해소하거나 한쪽을 무효로 한다(관리 화면)",
     WaitReason.ADMISSION_REFUSED: "진입 검사가 사람의 조치를 요구했다",
+    WaitReason.RUN_TIMED_OUT: (
+        "실행이 제한 시간에 걸려 끊겼다(실패가 아니라 시간 초과 — 결과는 모름). 같은 제한으로 다시 돌리지 않는다."
+        " 제한 시간을 늘려 다시 시도한다"
+    ),
 }
 
 BLOCK_DETAIL: dict[str, str] = {
@@ -319,6 +361,7 @@ class Step:
         workspace    작업공간을 요청한다
         light_check  가벼운 정합성 확인을 기록한다(실행 없음)
         candidate    종료 후보를 만든다(그 뒤 사람 대기)
+        remediation  검증 미충족의 수정 사이클(수정 구현 → 재검증 작업)을 작업 그래프에 더한다(P4-10)
         wait         사람이 해야 할 일이 있다
         blocked      환경이 막았다
         busy         끝나지 않은 실행·요청이 있다. 그 사건이 오면 다시 본다
@@ -342,6 +385,8 @@ class Step:
     #: UI-05a(D-94). 진행기가 돌리는 품질 게이트의 걸음이면 `{action: review|repair, gate, task_key,
     #: subject_key}` — 실행을 만든 뒤 검증 1회를 열거나 수정 차수를 예약한다.
     gate: dict[str, Any] | None = None
+    #: P4-10(이슈 #9). 수정 사이클 걸음이면 더할 작업 명세(`remediation_plan` 의 결과).
+    remediation: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -353,6 +398,7 @@ class Step:
             "repository_id": self.repository_id,
             "reasons": list(self.reasons),
             "gate": self.gate,
+            "remediation": self.remediation,
         }
 
 
@@ -415,6 +461,9 @@ class FlowState:
     finished_runs: list[dict[str, Any]] = field(default_factory=list)
     #: P4-05b. 이 판정 시점의 유효 상한. 걸음마다 다시 읽는다 — 시도 수는 초기화하지 않는다.
     limits: ProgressLimits = field(default_factory=ProgressLimits)
+    #: P4-10(이슈 #9). 수정 사이클의 입력(`Repository.verification_remediation_state`) — 근거 있는 미충족 후보·제외 이유·
+    #: 사용 수·이력. 없으면 사이클을 보지 않는다.
+    remediation: dict[str, Any] = field(default_factory=dict)
 
 
 def _limit_wait(
@@ -434,6 +483,21 @@ def _limit_wait(
 def _retries_used(state: FlowState, key: str) -> int:
     """모든 시도를 세는 키에서 **다시 한** 횟수. 첫 시도는 세지 않는다."""
     return max(state.attempts.get(key, 0) - 1, 0)
+
+
+def _timed_out_runs(state: FlowState, purpose: str, task_id: str) -> list[dict[str, Any]]:
+    """P4-10. 이 목적·작업의 실행 중 제한 시간에 걸려 끊긴 것."""
+    return [
+        r
+        for r in state.finished_runs
+        if r.get("purpose") == purpose and r.get("task_id") == task_id and r.get("stop_reason") == "timeout"
+    ]
+
+
+def _task_retries_used(state: FlowState, key: str, purpose: str, task_id: str) -> int:
+    """작업 재시도 상한이 세는 수. **시간 초과로 끊긴 실행은 세지 않는다**(P4-10, D-95) — 그 뒤의 다시 시도는
+    사람이 제한을 늘린 결정이지 실패 뒤의 자동 재시도가 아니다."""
+    return max(state.attempts.get(key, 0) - 1 - len(_timed_out_runs(state, purpose, task_id)), 0)
 
 
 def _latest(state: FlowState) -> dict[str, Any] | None:
@@ -485,6 +549,10 @@ def next_step(state: FlowState) -> Step:
     graph_step = _graph_phase(state)
     if graph_step is not None:
         return graph_step
+
+    remediation = _remediation_phase(state)
+    if remediation is not None:
+        return remediation
 
     return _completion_phase(state)
 
@@ -631,8 +699,9 @@ def _analysis_phase(state: FlowState) -> Step:
         and r.get("outcome") == RunOutcome.COMPLETED.value
         for r in state.finished_runs
     )
+    retries = _task_retries_used(state, "analysis", RunPurpose.LIMITED_ANALYSIS.value, "analysis")
     if not completed:
-        if _retries_used(state, "analysis") < state.limits.task_retry_limit:
+        if retries < state.limits.task_retry_limit:
             return Step(
                 "run",
                 "analysis_retry",
@@ -645,7 +714,7 @@ def _analysis_phase(state: FlowState) -> Step:
             state,
             WaitReason.TASK_FAILED,
             "task_retry_limit",
-            _retries_used(state, "analysis"),
+            retries,
             task_key="analysis",
             failures=[r["run_id"] for r in failed],
         )
@@ -774,14 +843,13 @@ def _graph_phase(state: FlowState) -> Step | None:
         for r in state.finished_runs
         if r.get("task_id") == key and r.get("outcome") != RunOutcome.COMPLETED.value
     ]
-    if state.attempts.get(attempt_key, 0) and (
-        _retries_used(state, attempt_key) >= state.limits.task_retry_limit
-    ):
+    retries = _task_retries_used(state, attempt_key, purpose.value, key)
+    if state.attempts.get(attempt_key, 0) and retries >= state.limits.task_retry_limit:
         return _limit_wait(
             state,
             WaitReason.TASK_FAILED,
             "task_retry_limit",
-            _retries_used(state, attempt_key),
+            retries,
             task_key=key,
             failures=[r["run_id"] for r in failures],
         )
@@ -876,10 +944,15 @@ def _completion_phase(state: FlowState) -> Step:
     if criteria:
         if state.candidate is None:
             return Step("candidate", "candidate", "종료 후보를 만든다")
+        extra: dict[str, Any] = {}
+        if state.remediation:
+            # P4-10(이슈 #9). 수정 사이클을 열지 않은(또는 한도가 다 된) 이유·사용/한도·이력.
+            extra["remediation"] = remediation_summary(state)
         return _wait(
             WaitReason.CRITERIA_UNRESOLVED,
             candidate_id=state.candidate.get("id"),
             criteria=[{"id": u["id"], "key": u.get("key"), "verdict": u.get("verdict")} for u in criteria],
+            **extra,
         )
     if state.completion_mode != CompletionMode.AUTO_ON_CONDITIONS.value or controlled:
         if state.candidate is None:
@@ -898,6 +971,186 @@ def _completion_phase(state: FlowState) -> Step:
         detail="자동 완료가 확정되지 않았다. 후보의 거부 사유를 본다",
         candidate_id=state.candidate.get("id"),
     )
+
+
+# ================================================================ 실행 제한 시간 (P4-10, 이슈 #8, D-95)
+
+
+def _last_run_for(state: FlowState, purpose: str, task_id: str) -> dict[str, Any] | None:
+    last = None
+    for run in state.finished_runs:  # 만든 순서
+        if run.get("purpose") == purpose and run.get("task_id") == task_id:
+            last = run
+    return last
+
+
+def run_timeout_step(step: Step, state: FlowState) -> Step | None:
+    """실행 걸음이 **같은 제한으로 시간 초과를 되풀이**하려 하면 그 대신 사람 대기. 아니면 `None`(원래 걸음).
+
+    같은 목적·같은 작업의 마지막 끝난 실행이 제한 시간에 걸려 끊겼고 지금 유효 제한이 그 실행의 제한보다 크지
+    않으면 멈춘다(D-95). 사람이 제한을 늘리면(설정 변경 → 진행기 호출) 그 자리에서 다시 돈다. 모든 진행기 실행
+    걸음(의도·준비·게이트 검토·작업·분석)에 같다. 끊긴 실행의 부분 결과는 판정에 쓰지 않는다(저장 계층).
+    """
+    if step.kind != "run" or step.purpose is None:
+        return None
+    last = _last_run_for(state, step.purpose.value, step.task_id)
+    if not last or last.get("stop_reason") != "timeout":
+        return None
+    applied = int(last.get("timeout_seconds") or 0)
+    limit = state.limits.run_timeout_seconds
+    if limit > applied:
+        return None
+    return _wait(
+        WaitReason.RUN_TIMED_OUT,
+        run_id=last.get("run_id"),
+        task_key=None if step.task_id == "conversation" else step.task_id,
+        purpose=step.purpose.value,
+        timeout_seconds=applied or None,
+        limit_key="run_timeout_seconds",
+        limit=limit,
+        limit_source=state.limits.source("run_timeout_seconds"),
+        timeouts=len(_timed_out_runs(state, step.purpose.value, step.task_id)),
+    )
+
+
+# ================================================================ 수정 사이클 (P4-10, 이슈 #9)
+
+#: 진행기가 연 수정 사이클의 작업 그래프 리비전 출처(`WorkGraphSource.PROGRESSOR_REMEDIATION`).
+REMEDIATION_SOURCE = "progressor_remediation"
+
+
+def _unique_key(wanted: str, taken: set[str]) -> str:
+    key = wanted
+    while key in taken:
+        key += "x"
+    taken.add(key)
+    return key
+
+
+def remediation_plan(state: FlowState) -> dict[str, Any]:
+    """수정 사이클 하나의 작업 명세 — 저장소마다 수정 구현 작업 하나(`FIX<n>`)와 그 뒤의 재검증 작업 하나(`REVERIFY<n>`).
+
+    후보(`state.remediation["candidates"]`)는 저장 계층이 계산한 **근거 있는 미충족** 기준이다. 수정 작업은 그
+    기준을 구현하고(`implements`), 재검증은 근거 검증 작업이 확인하던 기준 전부를 다시 확인한다(`verifies` —
+    고친 뒤 다른 기준의 회귀도 본다). 출처는 관측(`observation`)이다 — AI 제안도 사람의 요구도 아닌, 검증 보고에서
+    나온 작업이다.
+    """
+    rem = state.remediation or {}
+    candidates = list(rem.get("candidates") or [])
+    cycle = int(rem.get("used") or 0) + 1
+    taken = set(rem.get("task_keys") or [])
+    by_repo: dict[str, list[dict[str, Any]]] = {}
+    for cand in candidates:
+        for fix in cand.get("fix_tasks") or []:
+            by_repo.setdefault(fix.get("repository_id") or "", []).append(cand)
+    repos = list(by_repo)
+    keys = sorted({c["key"] for c in candidates})
+    runs = sorted({c["evidence_run_id"] for c in candidates if c.get("evidence_run_id")})
+    tasks: list[dict[str, Any]] = []
+    fix_keys: list[str] = []
+    for index, repo in enumerate(repos, start=1):
+        crit_keys = sorted({c["key"] for c in by_repo[repo]})
+        fix_key = _unique_key(f"FIX{cycle}" + (f"-{index}" if len(repos) > 1 else ""), taken)
+        fix_keys.append(fix_key)
+        tasks.append(
+            {
+                "key": fix_key,
+                "kind": TaskKind.IMPLEMENTATION.value,
+                "summary": f"검증 미충족 수정({cycle}차): {', '.join(crit_keys)}"[:200],
+                "deliverable_summary": "검증이 보고한 미충족 원인을 고친 코드",
+                "completion_summary": (
+                    f"미충족 기준 {', '.join(crit_keys)} 의 원인이 해소됨 — 기준·시험을 약하게 바꾸지 않는다"
+                )[:200],
+                "origin": "observation",
+                "repository": repo,
+                "depends_on": [],
+                "criteria": [{"key": k, "relation": "implements"} for k in crit_keys],
+            }
+        )
+    first = candidates[0] if candidates else {}
+    verifies = sorted({k for c in candidates for k in (c.get("reverify_criteria") or [c["key"]])})
+    verify_key = _unique_key(f"REVERIFY{cycle}", taken)
+    tasks.append(
+        {
+            "key": verify_key,
+            "kind": first.get("verify_kind") or TaskKind.VERIFICATION.value,
+            "summary": f"수정({cycle}차) 뒤 재검증: {', '.join(verifies)}"[:200],
+            "deliverable_summary": "기준별 판정과 실행한 명령",
+            "completion_summary": "고친 코드에서 기준을 다시 확인해 판정을 보고함",
+            "origin": "observation",
+            "repository": first.get("verify_repository_id") or "",
+            "depends_on": fix_keys,
+            "criteria": [{"key": k, "relation": "verifies"} for k in verifies],
+        }
+    )
+    return {
+        "cycle": cycle,
+        "criteria": keys,
+        "evidence_runs": runs,
+        "fix_tasks": fix_keys,
+        "verify_task": verify_key,
+        "tasks": tasks,
+        "reason": (
+            f"검증 미충족({', '.join(keys)}) → 수정·재검증 {cycle}/{state.limits.remediation_limit}"
+            f" — 근거 {', '.join(runs)}"
+        )[:200],
+    }
+
+
+def _remediation_phase(state: FlowState) -> Step | None:
+    """모든 작업이 끝났는데 근거 있는 미충족이 있으면 한도 안에서 수정 사이클을 연다. 아니면 `None`(완료 단계).
+
+    사람을 부르는 것은 한도가 다 됐거나(0 = 끔) 근거가 없거나(`unverified`·명령 없음) 고칠 구현 작업이 없을
+    때뿐이다 — 그때 완료 단계의 `criteria_unresolved` 대기에 이유가 실린다.
+    """
+    rem = state.remediation or {}
+    if not rem.get("candidates"):
+        return None
+    used = int(rem.get("used") or 0)
+    if used >= state.limits.remediation_limit:
+        return None
+    plan = remediation_plan(state)
+    return Step(
+        "remediation",
+        "remediation",
+        f"검증이 기준 {', '.join(plan['criteria'])} 미충족을 보고했다 — 수정 구현 → 재검증"
+        f" ({plan['cycle']}/{state.limits.remediation_limit})",
+        remediation=plan,
+    )
+
+
+def remediation_summary(state: FlowState) -> dict[str, Any]:
+    """`criteria_unresolved` 대기에 싣는 수정 사이클 정보(짧게 — 대기 기록은 4,000자 상한이다)."""
+    rem = state.remediation or {}
+    used = int(rem.get("used") or 0)
+    limit = state.limits.remediation_limit
+    candidates = [c["key"] for c in rem.get("candidates") or []]
+    if candidates and used >= limit:
+        status = "off" if limit == 0 else "exhausted"
+    elif candidates:
+        status = "available"
+    else:
+        status = "not_applicable"
+    return {
+        "status": status,
+        "used": used,
+        "limit": limit,
+        "limit_source": state.limits.source("remediation_limit"),
+        "candidates": candidates[:10],
+        "excluded": [
+            {"key": e.get("key"), "verdict": e.get("verdict"), "reason": e.get("reason")}
+            for e in (rem.get("excluded") or [])[:10]
+        ],
+        "history": [
+            {
+                "cycle": h.get("cycle"),
+                "revision": h.get("revision"),
+                "tasks": list(h.get("tasks") or [])[:4],
+                "created_at": h.get("created_at"),
+            }
+            for h in (rem.get("history") or [])[-5:]
+        ],
+    }
 
 
 # ================================================================ 품질 게이트 (UI-05a, D-94)
@@ -1171,6 +1424,9 @@ def finished_summary(run: dict[str, Any]) -> dict[str, Any]:
         "task_id": run.get("task_id"),
         "outcome": run.get("outcome"),
         "status": run.get("status"),
+        # P4-10. 끊긴 이유와 적용한 제한 시간(시간 초과를 실패와 나눈다).
+        "stop_reason": run.get("stop_reason"),
+        "timeout_seconds": run.get("timeout_seconds"),
     }
 
 

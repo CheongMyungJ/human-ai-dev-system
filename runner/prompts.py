@@ -492,6 +492,11 @@ CONTEXT_LABEL = {
     "knowledge_source": "필수 규칙의 **권위 원문** (사용자가 한 말. 적용 내용과 다르면 이것이 앞선다)",
     "knowledge_reference": "프로젝트 참고 지식 (판단에 쓰되 의무가 아니다)",
     "knowledge_candidate": "프로젝트 지식 **후보** (확정되지 않은 단서. 규칙으로 따르지 않는다)",
+    # P4-10(이슈 #9). 이 작업이 고칠 미충족을 보고한 검증 실행의 출력.
+    "verification_report": (
+        "검증 실행이 **기준 미충족을 보고한 출력** (무엇을 실행했고 무엇이 왜 실패했는지 읽고 그 원인을 고친다."
+        " 기준·시험을 약하게 바꿔 통과시키지 않는다)"
+    ),
 }
 
 #: P4-06. **프로젝트 지식이 들어간 실행**의 안내. 고정 컨텍스트 머리 바로 뒤에 온다.
@@ -884,6 +889,20 @@ def build_task_block(task: dict[str, Any] | None, criteria: list[dict[str, Any]]
                 lines.append(
                     f"  - {crit.get('key')} [{crit.get('relation')}] {crit.get('summary') or ''}"
                     + (f" — 확인 방법: {crit['method_summary']}" if crit.get("method_summary") else "")
+                )
+        not_met = [c for c in linked if c.get("verdict") == "not_met"]
+        if not_met:
+            # P4-10(이슈 #9). 검증이 이 기준들을 미충족으로 보고했다 — 이 작업은 그 원인을 고치는 수정이다.
+            lines.append("\n--- 검증이 보고한 미충족 ---")
+            lines.append(
+                "검증 실행이 아래 기준을 **미충족**으로 보고했다. 이 작업은 그 원인을 고치는 **수정**이다. 고정 컨텍스트의"
+                " 검증 보고(출력)에서 무엇을 실행했고 무엇이 왜 실패했는지 읽고 원인을 고쳐라. 기준·시험·기대값을 약하게"
+                " 바꾸거나 지워서 통과시키지 마라. 요청·계획의 범위를 넘지 마라. 다시 확인은 뒤의 재검증 작업이 한다."
+            )
+            for crit in not_met:
+                lines.append(
+                    f"  - {crit.get('key')}: {crit.get('result_summary') or '(요약 없음)'}"
+                    + (f" — 근거 실행 {crit['evidence_run_id']}" if crit.get("evidence_run_id") else "")
                 )
     if criteria:
         lines.append("\n--- 확인할 성공 기준 ---")

@@ -1850,15 +1850,20 @@ CREATE TABLE IF NOT EXISTS progress_limit_setting (
     id              TEXT PRIMARY KEY,
     case_id         TEXT NOT NULL REFERENCES "case"(id),
     revision        INTEGER NOT NULL,
-    limit_key       TEXT NOT NULL CHECK (limit_key IN ('repair_limit', 'task_retry_limit')),
-    limit_value     INTEGER NOT NULL CHECK (limit_value BETWEEN 0 AND 10),
+    -- v29(P4-10): 수정 사이클 한도(`remediation_limit`, 0~10)·실행 제한 시간(`run_timeout_seconds`, 초 10~86400).
+    -- 키별 범위는 코드(`domain.work_flow.LIMIT_RANGES`)가 검사하고 아래 CHECK 둘이 마지막 방어선이다.
+    limit_key       TEXT NOT NULL CHECK (limit_key IN ('repair_limit', 'task_retry_limit',
+                                                        'remediation_limit', 'run_timeout_seconds')),
+    limit_value     INTEGER NOT NULL CHECK (limit_value BETWEEN 0 AND 86400),
     set_by          TEXT NOT NULL,
     reason_summary  TEXT,
     state           TEXT NOT NULL CHECK (state IN ('current', 'superseded')),
     created_at      TEXT NOT NULL,
     superseded_at   TEXT,
     UNIQUE (case_id, revision),
-    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200),
+    CHECK (limit_key = 'run_timeout_seconds' OR limit_value <= 10),
+    CHECK (limit_key <> 'run_timeout_seconds' OR limit_value >= 10)
 );
 
 CREATE INDEX IF NOT EXISTS idx_progress_limit_setting_case

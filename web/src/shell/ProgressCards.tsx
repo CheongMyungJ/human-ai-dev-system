@@ -38,6 +38,7 @@ import {
   type UncommittedList,
 } from '../api'
 import { rulesLink } from '../lib/address'
+import { formatTimeout, minutesToSeconds, suggestedMinutes } from '../lib/timeout'
 import { putRegisterPrefill, refusalText } from '../lib/knowledgeText'
 import { autoReferenceText } from './ProjectRules'
 import { peekBody } from './bodies'
@@ -229,6 +230,8 @@ function WaitCard(props: {
       return <StartBasisCard {...props} />
     case 'quality_gate':
       return <QualityGateCard {...props} />
+    case 'run_timed_out':
+      return <RunTimeoutCard {...props} />
     default:
       // P4-05b. 상한에 걸린 대기는 한도·사용 수를 싣는다 — "한도를 올리고 계속" 카드.
       if (wait.limit_key === 'repair_limit' || wait.limit_key === 'task_retry_limit') {
@@ -490,6 +493,7 @@ function ExceptionCard(props: { wait: ProgressWait; caseId: string; detail: Shel
     await resultApi.accept(props.caseId, candidateId, ACCEPTANCE_STATEMENT)
   }
   const summaries = new Map((props.detail?.result?.criteria ?? []).map((c) => [c.id, c]))
+  const remediation = (props.wait.remediation as RemediationInfo | undefined) ?? null
   return (
     <div className="sh-card sh-card-wait" data-testid="exception-card">
       <div className="sh-card-head">
@@ -509,6 +513,7 @@ function ExceptionCard(props: { wait: ProgressWait; caseId: string; detail: Shel
           </li>
         ))}
       </ul>
+      {remediation && <RemediationSection remediation={remediation} caseId={props.caseId} onChanged={props.onChanged} />}
       <textarea className="sh-input" rows={2} value={scope} placeholder="수용하는 범위와 알려진 영향(필수)" onChange={(e) => setScope(e.target.value)} data-testid="exception-scope" />
       <div className="sh-composer-bar">
         {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
@@ -521,6 +526,180 @@ function ExceptionCard(props: { wait: ProgressWait; caseId: string; detail: Shel
           data-testid="exception-accept"
         >
           선택한 예외를 수용하고 종료
+        </button>
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 검증 미충족의 수정 사이클 (P4-10, 이슈 #9)
+
+type RemediationInfo = {
+  status: 'available' | 'exhausted' | 'off' | 'not_applicable'
+  used: number
+  limit: number
+  limit_source: string
+  candidates: string[]
+  excluded: { key: string; verdict: string; reason: string }[]
+  history: { cycle: number; revision: number; tasks: string[]; created_at: string }[]
+}
+
+//: 사이클을 열지 않은 이유의 사람 말.
+const REMEDIATION_REASON: Record<string, string> = {
+  unverified: '확인하지 못함 — 구현 결함이 아니라 자동 수정하지 않는다',
+  investigation_obligation: '원인·조사 결론의 미충족 — 구현 수정으로 충족되지 않는다',
+  no_summary: '검증이 미충족의 이유를 적지 않았다(근거 없음)',
+  no_commands: '검증이 실행한 명령이 없다(근거 없음)',
+  run_not_completed: '근거 검증 실행이 끝까지 돌지 않았다',
+  evidence_not_verification: '근거가 검증 실행이 아니다',
+  no_evidence_run: '근거 실행이 없다',
+  no_verification_task: '근거 검증 작업이 지금 계획에 없다',
+  no_implementation_task: '고칠 구현 작업이 계획에 없다',
+}
+
+/**
+ * 진행기가 검증 미충족을 스스로 고치는 **수정 사이클**(수정 구현 → 재검증)의 사용/한도·이력과, 열지 않은 이유. 한도가
+ * 이유면 "수정 한도를 올리고 계속"(설정 변경 — 서버가 기록 뒤 진행을 잇는다). 올리는 것은 결과의 인수·예외가 아니다.
+ */
+function RemediationSection(props: { remediation: RemediationInfo; caseId: string; onChanged: () => void }) {
+  const action = useAction(props.onChanged)
+  const r = props.remediation
+  const source = PROGRESS_LIMIT_SOURCE_LABEL[r.limit_source as keyof typeof PROGRESS_LIMIT_SOURCE_LABEL] ?? r.limit_source
+  const next = Math.max(r.limit, r.used) + 1
+  return (
+    <div className="sh-rule-line" data-testid="remediation-info" data-status={r.status}>
+      <div>
+        <strong>자동 수정 사이클</strong>{' '}
+        <span data-testid="remediation-usage">
+          {r.used}/{r.limit} ({source})
+        </span>
+        {r.status === 'off' && ' · 이 업무는 자동 수정을 하지 않는다(한도 0)'}
+        {r.status === 'exhausted' && ' · 한도까지 고쳤지만 재검증이 여전히 미충족을 보고했다'}
+      </div>
+      {r.history.length > 0 && (
+        <ul className="sh-result-list" data-testid="remediation-history">
+          {r.history.map((h) => (
+            <li key={h.cycle} className="sh-plain-row">
+              {h.cycle}차 · 작업 그래프 r{h.revision} · {h.tasks.join(', ')}
+            </li>
+          ))}
+        </ul>
+      )}
+      {r.excluded.length > 0 && (
+        <ul className="sh-result-list" data-testid="remediation-excluded">
+          {r.excluded.map((e) => (
+            <li key={e.key} className="sh-plain-row">
+              {e.key} · {REMEDIATION_REASON[e.reason] ?? e.reason}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="sh-composer-bar">
+        <button
+          type="button"
+          className="sh-link"
+          onClick={() => emit('hads:open-panel', { caseId: props.caseId, tab: 'work' })}
+          data-testid="remediation-open-work"
+        >
+          작업·실행 보기
+        </button>
+        {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+        <span className="sh-spacer" />
+        {(r.status === 'exhausted' || r.status === 'off') && next <= 10 && (
+          <button
+            type="button"
+            disabled={action.busy}
+            onClick={() =>
+              void action.run(() =>
+                progressApi.setLimits(props.caseId, { remediation_limit: next }, '미충족 카드에서 수정 한도를 올림'),
+              )
+            }
+            data-testid="remediation-raise"
+          >
+            수정 한도를 올리고 계속 ({r.limit} → {next})
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 시간 초과 (P4-10, 이슈 #8, D-95)
+
+/**
+ * 실행이 제한 시간에 걸려 끊겼고 진행기가 **같은 제한으로 되풀이하지 않고** 멈췄다. 결과는 `unknown`(실패가 아니다),
+ * 끊기기 전 부분 결과는 판정에 쓰지 않았고 실행 상세에서 볼 수 있다. 제한을 늘리면(이 업무의 설정 — 이력이 남는다)
+ * 서버가 기록 뒤 진행을 잇고 그 작업이 새 제한으로 다시 돈다.
+ */
+function RunTimeoutCard(props: { wait: ProgressWait; progress: ProgressView; caseId: string; onChanged: () => void }) {
+  const action = useAction(props.onChanged)
+  const w = props.wait
+  const applied = (w.timeout_seconds as number | null | undefined) ?? null
+  const current = Number(w.limit ?? 0)
+  const runId = String(w.run_id ?? '')
+  const taskKey = (w.task_key as string | null | undefined) ?? null
+  const source =
+    w.limit_source === 'case_setting' || w.limit_source === 'project_setting' ? w.limit_source : 'system_default'
+  const [minutes, setMinutes] = useState(String(suggestedMinutes(applied, current)))
+  const [reason, setReason] = useState('')
+  const seconds = minutesToSeconds(minutes)
+  const tooSmall = seconds !== null && seconds <= current
+  return (
+    <div className="sh-card sh-card-wait" data-testid="wait-card-run_timed_out" data-run-id={runId}>
+      <div className="sh-card-head">
+        <strong>시간 초과</strong>
+        <span className="sh-muted" data-testid="timeout-usage">
+          {' '}· {taskKey ? `작업 ${taskKey} · ` : ''}제한 {formatTimeout(applied)}에 걸려 끊김 · 지금 제한 {formatTimeout(current)} (
+          {PROGRESS_LIMIT_SOURCE_LABEL[source]})
+          {Number(w.timeouts ?? 1) > 1 ? ` · ${Number(w.timeouts)}번째` : ''}
+        </span>
+      </div>
+      <div className="sh-muted">
+        실패가 아니라 제한 시간에 걸려 끊겼다 — 결과는 모른다. 같은 제한으로는 다시 돌리지 않는다. 끊기기 전의 부분 결과는
+        기준 판정에 쓰지 않았고 실행 상세에서 볼 수 있다. 제한을 늘리면 그 작업을 새 제한으로 다시 시도한다(이 업무의 설정,
+        다음 실행부터).
+      </div>
+      <div className="sh-composer-bar">
+        <button
+          type="button"
+          className="sh-link"
+          disabled={!runId}
+          onClick={() => emit('hads:open-run', { caseId: props.caseId, runId })}
+          data-testid="timeout-open-run"
+        >
+          끊긴 실행 보기
+        </button>
+        <label className="sh-muted">
+          새 제한(분){' '}
+          <input size={5} value={minutes} onChange={(e) => setMinutes(e.target.value)} data-testid="timeout-minutes" />
+        </label>
+        <input
+          className="sh-rule-input"
+          placeholder="사유(선택)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          data-testid="timeout-reason"
+        />
+        {seconds === null && <span className="sh-notice sh-notice-warn">10초~24시간(1440분) 사이로 적는다</span>}
+        {tooSmall && <span className="sh-notice sh-notice-warn">지금 제한보다 커야 다시 돈다</span>}
+        {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+        <span className="sh-spacer" />
+        <button
+          type="button"
+          className="sh-primary"
+          disabled={action.busy || seconds === null || tooSmall}
+          onClick={() =>
+            void action.run(() =>
+              progressApi.setLimits(
+                props.caseId,
+                { run_timeout_seconds: seconds as number },
+                reason.trim() || '시간 초과 카드에서 제한 시간을 늘림',
+              ),
+            )
+          }
+          data-testid="timeout-raise"
+        >
+          제한 시간 늘려 다시 시도
         </button>
       </div>
     </div>

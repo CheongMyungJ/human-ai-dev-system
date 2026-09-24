@@ -176,8 +176,12 @@ def test_project_defaults_apply_to_new_conversations_and_runs_but_not_to_existin
         limits = _limits(h, case_id)
         assert (limits["repair_limit"]["value"], limits["repair_limit"]["source"], limits["repair_limit"]["setting"]) == (1, "project_setting", None)
         assert (limits["task_retry_limit"]["value"], limits["task_retry_limit"]["source"]) == (1, "system_default")
-        assert limits["project_default"] == {"repair_limit": 1, "task_retry_limit": None}
-        assert limits["system_default"] == {"repair_limit": 2, "task_retry_limit": 1}
+        assert limits["project_default"] == {
+            "repair_limit": 1, "task_retry_limit": None, "remediation_limit": None, "run_timeout_seconds": None,
+        }
+        assert limits["system_default"] == {
+            "repair_limit": 2, "task_retry_limit": 1, "remediation_limit": 2, "run_timeout_seconds": 3600,
+        }
 
     # 인라인 한도 — 설정 전의 실행 기록은 그대로, 설정 뒤의 새 실행(설정 전 대화의 것이라도)은 프로젝트 값.
     assert _run_view(h, "run-b0")["context_inline_limit"] == ctxmod.DEFAULT_INLINE_LIMIT_BYTES
@@ -382,6 +386,6 @@ def test_a_v24_database_gets_no_project_setting_it_never_had(tmp_path):
     view = repo.project_settings_view("prj-1")
     assert view["settings"]["default_autonomy"]["source"] == "system_default" and view["history"] == []
     limits = repo.progress_limits_view("case-1")
-    assert (limits["repair_limit"]["source"], limits["project_default"]) == ("system_default", {"repair_limit": None, "task_retry_limit": None})
+    assert (limits["repair_limit"]["source"], limits["project_default"]) == ("system_default", {"repair_limit": None, "task_retry_limit": None, "remediation_limit": None, "run_timeout_seconds": None})
     assert repo.effective_policy("case-1")["default_autonomy_source"] == "system_default"
     conn.close()
