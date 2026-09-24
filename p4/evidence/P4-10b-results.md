@@ -30,14 +30,16 @@
 | AC-4 알림 경로 | 충족 | 같은 첫째(대화 조회·목록 수·진행 이력, 파일 이름이 이력에 없음) + 웹 단위 `notify.test.ts`(수가 늘 때 한 건, 그대로면 없음) |
 | AC-5 쓰기 실행 보고 거부·모양 | 충족 | 같은 셋째 |
 | AC-6 배너 | 충족 | `tests/test_web_shell.py::test_a_read_only_run_that_changes_the_folder_shows_a_banner_not_a_failure`(실제 Edge·실제 Runner·가짜 codex `HADS_FAKE_RO_WRITE`) |
-| AC-7 전체 시험 | (아래) | |
+| AC-7 전체 시험 | 충족 | 아래(종료 코드 0) |
 
 ### 전체 실행
 
 | 실행 | 웹 빌드 | 웹 단위 | pytest | P1 계약 | 종료 코드 |
 |---|---|---|---|---|---|
 | P4-10 최종(`44e4f04`) | 성공 | 41 | 807 통과·0 실패·2 건너뜀 | 18 | 0 |
-| P4-10b 최종 | | | | | |
+| P4-10b 최종 | 성공 | **42** | **811 통과·0 실패·2 건너뜀(20분 23초)** | 18 | 0 "전체 시험 통과" |
+
+늘어난 4건 = `tests/test_read_only_change.py` 3 · `tests/test_web_shell.py` +1. 웹 단위 +1(`notify.test.ts`). 권한 매핑 시험은 뜻을 D-96 으로 바꿨다(건수 그대로).
 
 ## 3. 경계와 한계
 
