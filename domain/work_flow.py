@@ -172,7 +172,7 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.CONTROLLED_RESULT: "controlled 업무다. 결과 후보를 확인하면 시스템이 종료를 확정한다",
     WaitReason.CRITERIA_UNRESOLVED: "미충족·미검증 기준이 남았다. 예외를 수용해 종료하거나 수정을 요청한다",
     WaitReason.OBJECTIVE_WITHOUT_CRITERIA: "요구된 목적 의무에 기준이 없다. 의도·기준을 바꿔야 한다",
-    WaitReason.QUALITY_GATE: "명시한 품질 게이트가 통과하지 않았다(관리 화면에서 진행)",
+    WaitReason.QUALITY_GATE: "명시로 켠 품질 게이트가 수정 한도 안에서 통과하지 못했다. 한도를 올리거나 끈다",
     WaitReason.KNOWLEDGE_CONFLICT: "이 작업에 적용되는 필수 지식이 서로 충돌한다. 해소하거나 한쪽을 무효로 한다(관리 화면)",
     WaitReason.ADMISSION_REFUSED: "진입 검사가 사람의 조치를 요구했다",
 }
@@ -339,6 +339,9 @@ class Step:
     #: 재작성·재시도 상한을 세는 키. 없으면 세지 않는다.
     attempt_key: str | None = None
     reasons: tuple[dict[str, Any], ...] = ()
+    #: UI-05a(D-94). 진행기가 돌리는 품질 게이트의 걸음이면 `{action: review|repair, gate, task_key,
+    #: subject_key}` — 실행을 만든 뒤 검증 1회를 열거나 수정 차수를 예약한다.
+    gate: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -349,6 +352,7 @@ class Step:
             "task_id": self.task_id,
             "repository_id": self.repository_id,
             "reasons": list(self.reasons),
+            "gate": self.gate,
         }
 
 
@@ -894,6 +898,116 @@ def _completion_phase(state: FlowState) -> Step:
         detail="자동 완료가 확정되지 않았다. 후보의 거부 사유를 본다",
         candidate_id=state.candidate.get("id"),
     )
+
+
+# ================================================================ 품질 게이트 (UI-05a, D-94)
+
+#: 명시로 켠 게이트가 실행 조건인 목적(`Repository.quality_gate_blockers_for_run` 과 같은 셋).
+GATED_PURPOSES: frozenset[RunPurpose] = frozenset(
+    {RunPurpose.PLAN_AUTHORING, RunPurpose.FEATURE_IMPLEMENTATION, RunPurpose.VERIFICATION_RUN}
+)
+
+#: 실행 id 가 짧아야 한다(`progress_run_id` 가 코드를 24자에서 자른다). 게이트마다 다른 짧은 이름.
+_GATE_SHORT = {"QG-02": "qg2", "QG-03": "qg3", "QG-04": "qg4"}
+
+
+def quality_gate_step(step: Step, gates: list[dict[str, Any]], state: FlowState) -> Step | None:
+    """명시로 켠 게이트가 `step` 을 막고 있으면 **그 대신 할 걸음**. 막지 않으면 `None`(원래 걸음).
+
+    QG-01 의 진행기 경로와 같은 모양이다(D-94): 대상의 이 버전에 판정이 없으면 독립 검토 실행, 실패·보류면
+    게이트의 수정 한도 안에서 대상을 고치는 실행(지적을 싣는다), 한도가 다 되면 사람 대기. 검토 자체가
+    실패(`blocked`)하면 재시도 한도 안에서 다시 검토한다. 사람을 부르는 것은 한도 뒤뿐이다.
+    """
+    for g in gates:
+        gate = g["gate"]
+        scope = g.get("task_key") or ""
+        short = _GATE_SHORT.get(gate, "qg")
+        subject = g.get("subject")
+        latest = g.get("latest") or None
+        base = {"gate": gate, "label": g.get("label"), "task_key": scope or None}
+        if g.get("running"):
+            return Step("busy", "quality_gate_review_pending", f"{gate} 검토의 결과를 기다린다")
+        if subject is None:
+            return _wait(
+                WaitReason.QUALITY_GATE,
+                f"{gate} 가 검토할 대상이 아직 없다 — 게이트를 끄거나 대상을 만든 뒤 계속 진행한다",
+                **base,
+            )
+        same = bool(
+            latest
+            and latest.get("subject_key") == subject["subject_key"]
+            and latest.get("input_hash") == subject["input_hash"]
+        )
+        verdict = latest.get("verdict") if (latest and same) else None
+        review = Step(
+            "run",
+            f"{short}-review-{scope}".rstrip("-"),
+            f"{gate} {g.get('label') or ''} — {subject.get('label')} 을(를) 별도 세션이 검토한다",
+            purpose=RunPurpose.QUALITY_GATE_REVIEW,
+            role=RunRole.REVIEWER,
+            permission=Permission.READ_ONLY,
+            task_id=f"qg:{gate}:{scope}",
+            repository_id=subject.get("repository_id"),
+            instruction="latest_intent",
+            attempt_key=f"qg-review:{gate}:{scope}",
+            gate={"action": "review", **base, "subject_key": subject["subject_key"]},
+        )
+        if verdict in (None, GateVerdict.NOT_RUN.value):
+            return review
+        if verdict == GateVerdict.BLOCKED.value:
+            retries = int(g.get("blocked_same_input") or 0)
+            if retries <= state.limits.task_retry_limit:
+                return review
+            return _wait(
+                WaitReason.QUALITY_GATE,
+                f"{gate} 검토를 수행하지 못했다({retries}회) — 재시도 한도를 올리거나 게이트를 끈다",
+                verdict=verdict,
+                review_failures=retries,
+                retry_limit=state.limits.task_retry_limit,
+                **base,
+            )
+        if verdict in (GateVerdict.FAIL.value, GateVerdict.HOLD.value):
+            used = int(g.get("repairs_used") or 0)
+            limit = int(g.get("repair_limit") or 0)
+            findings = (latest or {}).get("findings") or []
+            if used >= limit:
+                return _wait(
+                    WaitReason.QUALITY_GATE,
+                    f"{gate} {g.get('label') or ''} 가 수정 {used}/{limit} 뒤에도 통과하지 못했다",
+                    verdict=verdict,
+                    repairs_used=used,
+                    repair_limit=limit,
+                    subject=subject.get("label"),
+                    findings=findings[:10],
+                    **base,
+                )
+            repair = {"action": "repair", **base, "subject_key": subject["subject_key"]}
+            code = f"{short}-repair-{scope}".rstrip("-")
+            if gate == "QG-04":
+                task = subject.get("repair_task")
+                return Step(
+                    "run",
+                    code,
+                    f"{gate} 지적을 고쳐 {task} 를 다시 구현한다(수정 {used + 1}/{limit})",
+                    purpose=RunPurpose.FEATURE_IMPLEMENTATION,
+                    permission=Permission.WORKSPACE_WRITE,
+                    task_id=task or "conversation",
+                    repository_id=subject.get("repository_id"),
+                    attempt_key=f"qg-repair:{gate}:{scope}",
+                    gate=repair,
+                )
+            design = gate == "QG-02" and subject.get("stage") == "design"
+            return Step(
+                "run",
+                code,
+                f"{gate} 지적을 고쳐 {'설계' if design else '계획'}을(를) 다시 쓴다(수정 {used + 1}/{limit})",
+                purpose=RunPurpose.DESIGN_AUTHORING if design else RunPurpose.PLAN_AUTHORING,
+                attempt_key=f"qg-repair:{gate}:{scope}",
+                gate=repair,
+            )
+        # 통과인데 진입 검사가 막았다면(늦은 결과·정책 변경) 모르는 상태다 — 멈추고 보인다.
+        return _wait(WaitReason.QUALITY_GATE, verdict=verdict, **base)
+    return None
 
 
 # ================================================================ 기준 보고

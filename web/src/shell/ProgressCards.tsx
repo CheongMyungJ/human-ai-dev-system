@@ -10,6 +10,7 @@
 import { useEffect, useState } from 'react'
 
 import {
+  GATE_VERDICT_LABEL,
   intentApi,
   knowledgeApi,
   KNOWLEDGE_KIND_LABEL,
@@ -21,6 +22,7 @@ import {
   PROGRESS_LIMIT_SOURCE_LABEL,
   PROGRESS_STATE_LABEL,
   PROGRESS_STEP_LABEL,
+  qualityGateApi,
   START_BASIS_LABEL,
   WAIT_LABEL,
   workspaceApi,
@@ -225,6 +227,8 @@ function WaitCard(props: {
       return <ExceptionCard {...props} />
     case 'workspace_start_basis':
       return <StartBasisCard {...props} />
+    case 'quality_gate':
+      return <QualityGateCard {...props} />
     default:
       // P4-05b. 상한에 걸린 대기는 한도·사용 수를 싣는다 — "한도를 올리고 계속" 카드.
       if (wait.limit_key === 'repair_limit' || wait.limit_key === 'task_retry_limit') {
@@ -677,6 +681,14 @@ function GenericWaitCard(props: { wait: ProgressWait; progress: ProgressView; ca
       <div className="sh-muted">{props.wait.detail}</div>
       {extra && <div className="sh-mono sh-muted">{extra}</div>}
       <div className="sh-composer-bar">
+        <button
+          type="button"
+          className="sh-link"
+          onClick={() => emit('hads:open-panel', { caseId: props.caseId, tab: 'work' })}
+          data-testid="wait-open-work"
+        >
+          작업·실행 보기
+        </button>
         <a className="sh-link" href={admin}>
           관리 화면에서 보기
         </a>
@@ -685,6 +697,117 @@ function GenericWaitCard(props: { wait: ProgressWait; progress: ProgressView; ca
         <button type="button" disabled={action.busy} onClick={() => void action.run(() => progressApi.resume(props.caseId))} data-testid="wait-retry">
           다시 시도
         </button>
+      </div>
+    </div>
+  )
+}
+
+// ------------------------------------------------------------------ 품질 게이트 (UI-05a, D-94)
+
+/**
+ * 명시로 켠 품질 게이트(QG-02~04)가 진행기의 검토·수정 한도 뒤에도 통과하지 못했다. 사람이 할 수 있는 것은 셋 —
+ * 수정 한도를 올려 한 번 더 고치게 하기, (검토 자체가 실패했으면) 재시도 한도를 올려 다시 검토하기, 게이트 끄기.
+ * 모두 사유가 남는 설정 변경이며 서버가 기록 뒤 진행을 잇는다. 끄는 것은 통과가 아니다 — 성공 기준과 그 검증은 그대로다.
+ */
+function QualityGateCard(props: { wait: ProgressWait; caseId: string; onChanged: () => void }) {
+  const action = useAction(props.onChanged)
+  const [reason, setReason] = useState('')
+  const w = props.wait
+  const gate = String(w.gate ?? '')
+  const taskKey = (w.task_key as string | null | undefined) ?? ''
+  const verdict = String(w.verdict ?? '')
+  const used = Number(w.repairs_used ?? 0)
+  const limit = Number(w.repair_limit ?? 0)
+  const blocked = verdict === 'blocked'
+  const retryLimit = Number(w.retry_limit ?? 0)
+  const findings =
+    (w.findings as { criterion?: string; severity?: string; certainty?: string; target?: string; summary?: string }[] | undefined) ??
+    []
+  const set = (setting: 'on' | 'off', repairLimit: number | null) =>
+    qualityGateApi.setPolicy(props.caseId, gate, {
+      setting,
+      inspection: null,
+      repair_limit: repairLimit,
+      reason: reason.trim(),
+      task_key: taskKey,
+    })
+  return (
+    <div className="sh-card sh-card-wait" data-testid="wait-card-quality_gate" data-gate={gate} data-verdict={verdict}>
+      <div className="sh-card-head">
+        <strong>
+          품질 게이트 {gate} {String(w.label ?? '')}
+        </strong>
+        <span className="sh-muted" data-testid="quality-gate-usage">
+          {' '}· 판정 {GATE_VERDICT_LABEL[verdict as keyof typeof GATE_VERDICT_LABEL] ?? verdict}
+          {blocked ? ` · 검토 실패 ${Number(w.review_failures ?? 0)}회` : ` · 수정 ${used}/${limit}`}
+          {taskKey ? ` · 작업 ${taskKey}` : ''}
+        </span>
+      </div>
+      <div className="sh-muted">{w.detail}</div>
+      {w.subject ? <div className="sh-muted">대상 {String(w.subject)}</div> : null}
+      {findings.length > 0 && (
+        <ul className="sh-result-list" data-testid="quality-gate-findings">
+          {findings.map((f, i) => (
+            <li key={i} className="sh-plain-row">
+              [{f.criterion}/{f.severity}/{f.certainty}] {f.target ? `${f.target}: ` : ''}
+              {f.summary}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="sh-muted">
+        진행기가 검토와 수정을 한도까지 스스로 했다. 한도를 올리면 한 번 더 고친(또는 검토한) 뒤 다시 보고, 끄면 이 게이트 없이
+        이어 간다. 끄는 것은 통과가 아니다 — 성공 기준과 그 검증은 그대로다.
+      </div>
+      <div className="sh-composer-bar">
+        <input
+          className="sh-rule-input"
+          placeholder="사유 (필수)"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          data-testid="quality-gate-reason"
+        />
+        <button
+          type="button"
+          className="sh-link"
+          onClick={() => emit('hads:open-panel', { caseId: props.caseId, tab: 'work' })}
+          data-testid="wait-open-work"
+        >
+          작업·실행 보기
+        </button>
+        {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+        <span className="sh-spacer" />
+        <button
+          type="button"
+          disabled={action.busy || !reason.trim()}
+          onClick={() => void action.run(() => set('off', null))}
+          data-testid="quality-gate-off"
+        >
+          이 게이트 끄기
+        </button>
+        {blocked ? (
+          <button
+            type="button"
+            className="sh-primary"
+            disabled={action.busy || !reason.trim()}
+            onClick={() =>
+              void action.run(() => progressApi.setLimits(props.caseId, { task_retry_limit: retryLimit + 1 }, reason.trim()))
+            }
+            data-testid="quality-gate-retry"
+          >
+            재시도 한도를 올리고 다시 검토 ({retryLimit} → {retryLimit + 1})
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="sh-primary"
+            disabled={action.busy || !reason.trim()}
+            onClick={() => void action.run(() => set('on', Math.max(limit, used) + 1))}
+            data-testid="quality-gate-raise"
+          >
+            수정 한도를 올리고 계속 ({limit} → {Math.max(limit, used) + 1})
+          </button>
+        )}
       </div>
     </div>
   )
@@ -729,6 +852,14 @@ function LimitWaitCard(props: {
         한도를 올리는 것은 결과의 인수·예외 수용이 아니다.
       </div>
       <div className="sh-composer-bar">
+        <button
+          type="button"
+          className="sh-link"
+          onClick={() => emit('hads:open-panel', { caseId: props.caseId, tab: 'work' })}
+          data-testid="wait-open-work"
+        >
+          작업·실행 보기
+        </button>
         <a className="sh-link" href={admin}>
           관리 화면에서 보기
         </a>

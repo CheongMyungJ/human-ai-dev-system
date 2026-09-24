@@ -41,7 +41,8 @@ from driver import PYTHON, LiveError, Log, stamp, wait_until  # noqa: E402
 from ui03_shell import make_repo, os_processes  # noqa: E402
 
 RUNNER_ID = "runner-p4-05-live"
-OUT = REPO_ROOT / "p4" / "evidence"
+#: UI-05a. 증거 폴더(환경 변수 `HADS_LIVE_OUT`, 저장소 기준 상대 경로) — 기본은 P4-05 의 자리.
+OUT = REPO_ROOT / os.environ.get("HADS_LIVE_OUT", "p4/evidence")
 LIVE_ROOT = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "Temp" / "hads-p4-05-live"
 DIST = REPO_ROOT / "web" / "dist"
 PORT = 8798
@@ -50,6 +51,9 @@ STALE_SECONDS = 5
 STEP_TIMEOUT = 900
 #: P4-09(d). 출력 파일 접두사(환경 변수 `HADS_LIVE_PREFIX`) — 다시 돌릴 때 P4-05 의 증거를 덮지 않는다.
 PREFIX = os.environ.get("HADS_LIVE_PREFIX", "P4-05-live")
+#: UI-05a(D-94). 켤 품질 게이트(예: `QG-04`). 업무화 직후 사람이 설정 탭에서 켠 것처럼 켜고, 진행기가 스스로 검토·수정하는지
+#: 본다. 이 모드는 C(자동 진행)까지만 돈다 — 종료 뒤 설명·후속은 P4-05 라이브가 이미 본다.
+LIVE_GATE = os.environ.get("HADS_LIVE_GATE", "").strip()
 
 WORK_REQUEST = (
     "app.py 의 log() 가 남기는 한 줄에 수준을 더해 주세요. 형식은 `시각 [수준] 메시지` 이고 수준은"
@@ -223,6 +227,13 @@ def run(page: Page, system: System, probe: Probe) -> None:
     probe.rule("의도 초안이 도는 동안 전송 잠금(요청 유지)",
                view["current_request"] is None or view["send"]["general"]["allowed"] is False)
     probe.shot(page, "A-work")
+    if LIVE_GATE:
+        response = http.put(
+            f"/api/cases/{case_id}/quality-gates/{LIVE_GATE}/policy",
+            json={"task_key": "", "setting": "on", "inspection": None, "repair_limit": None, "actor": "owner",
+                  "reason_summary": "라이브 — 이 업무는 이 게이트를 따로 검토한다"},
+        )
+        probe.rule(f"{LIVE_GATE} 명시 ON 설정 기록", response.status_code == 200, response.status_code)
 
     # ------------------------------------------------------------------ B 카드
     answered = 0
@@ -316,6 +327,35 @@ def run(page: Page, system: System, probe: Probe) -> None:
     for run in verification:
         probe.observe("C 검증 명령", [(c["command_summary"], c["exit_code"]) for c in run["commands"]])
     codes = [w["code"] for w in view["progress"]["wait"]]
+    if LIVE_GATE:
+        reviews = [r for r in reversed(case["runs"]) if r["purpose"] == "quality_gate_review"]
+        probe.observe("G 게이트 검토 실행", [(r["run_id"], r["task_id"], r["outcome"]) for r in reviews])
+        probe.rule(f"{LIVE_GATE} 검토 실행을 진행기가 스스로 만듦(사람 없이)", bool(reviews))
+        for task in tasks or [{"task_key": ""}]:
+            state = http.get(f"/api/cases/{case_id}/quality-gates", params={"task_key": task["task_key"]}).json()
+            gate = next(g for g in state["gates"] if g["gate"] == LIVE_GATE)
+            latest = gate["latest_run"]
+            if latest:
+                probe.observe(
+                    f"G {LIVE_GATE} 판정 · {task['task_key']}",
+                    {
+                        "verdict": latest["verdict"],
+                        "inspection_used": latest["inspection_used"],
+                        "subject": latest["subject_key"],
+                        "findings": [(f["criterion"], f["severity"], f["certainty"], f["summary"]) for f in latest["findings"]],
+                        "remediation": gate["remediation"] and {k: gate["remediation"][k] for k in ("used_attempts", "repair_limit", "state")},
+                    },
+                )
+                probe.rule(f"{LIVE_GATE} 판정이 발견에서 계산돼 기록됨(검토자 실행·근거 연결)",
+                           latest["verdict"] in ("pass", "fail", "hold", "blocked") and bool(latest["evidence_refs"]))
+        repairs = [r for r in reversed(case["runs"]) if "-repair-" in r["run_id"]]
+        probe.observe("G 수정(repair) 실행", [(r["run_id"], r["purpose"], r["task_id"], r["outcome"]) for r in repairs])
+        if "quality_gate" in codes:
+            probe.observe("G 한도 뒤 사람 대기", view["progress"]["wait"][0])
+            probe.rule("게이트 한도 뒤에만 사람 대기(스스로 통과시키지 않음)", case["result"]["closure"] is None)
+            probe.shot(page, "G-quality-gate-card")
+            expect(page.locator('[data-testid="wait-card-quality_gate"]')).to_be_visible(timeout=30_000)
+            return
     human = [d for d in case["decisions"] if not d["actor"].startswith("policy:")]
     probe.observe("C 사람의 결정", [(d["kind"], d["actor"]) for d in human])
     if view["progress"]["state"] == "done":
@@ -347,6 +387,9 @@ def run(page: Page, system: System, probe: Probe) -> None:
     else:
         probe.observe("C 다른 대기", codes)
         probe.rule("알 수 없는 대기는 없어야 한다", False, codes)
+
+    if LIVE_GATE:
+        return  # 게이트 모드는 C 까지(모듈 머리 참고)
 
     # ------------------------------------------------------------------ D 종료 뒤 설명
     closure_before = probe.case(case_id)["result"]["closure"]

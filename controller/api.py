@@ -334,6 +334,9 @@ class ResultIn(BaseModel):
     #: P4-06. 논의 응답이 옮긴 **프로젝트 지식 등록 항목**(종류·효력·요약·범위·원문 참조). 본문이
     #: 아니다 — 원문은 Runner 가 먼저 저장·등록했다. 등록은 처리기가 응답 완료 뒤에 한다.
     knowledge_report: list[dict[str, Any]] | None = None
+    #: UI-05a(D-94). 진행기의 품질 게이트 검토 실행이 낸 **발견**(`[{finding_key, criterion, severity,
+    #: certainty, target, summary}]`). 본문이 아니다 — 제어부가 그 검증 1회를 닫으며 판정을 계산한다.
+    quality_gate_findings: list[dict[str, Any]] | None = None
 
 
 class ExecutingIn(BaseModel):
@@ -944,6 +947,11 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
     # 진행·완료 판정과 무관하다 — 후보가 있든 없든 다음 걸음은 같다.
     if run.get("purpose") in knowmod.EXTRACTION_PURPOSES:
         _after_report(request, "run_finished_knowledge", repo.apply_extraction_report, run_id)
+    # UI-05a(D-94). 진행기의 게이트 검토면 그 검증 1회를 닫고, repair 실행이면 수정 차수를 확정한다 — 다음
+    # 걸음이 그 판정·사용 수를 봐야 하므로 진행기 **앞**이다.
+    _after_report(
+        request, "run_finished_gate", repo.apply_gate_run_effects, run_id, payload.quality_gate_findings
+    )
     # P4-05. 검증·분석 실행의 기준 보고를 먼저 적용한다 — 그 다음 걸음이 그 판정을 봐야 한다.
     _after_report(request, "run_finished_progress", _progressor(request, repo).on_run_finished, run)
     # UI-03. 요청의 마지막 실행이 끝났으면 처리기가 (해석을 적용하고) 요청을 끝낸다. 업무 단계면
@@ -1808,8 +1816,9 @@ def get_quality_gates(
 def put_quality_gate_policy(
     request: Request, case_id: str, gate: GateId, payload: QualityGatePolicyIn
 ) -> dict[str, Any]:
+    repo = _repo(request)
     try:
-        return _repo(request).set_quality_gate_policy(
+        state = repo.set_quality_gate_policy(
             case_id,
             gate,
             task_key=payload.task_key,
@@ -1821,6 +1830,9 @@ def put_quality_gate_policy(
         )
     except (NotFoundError, ConflictError, ValueError) as exc:
         raise _handle(ConflictError(str(exc)) if isinstance(exc, ValueError) else exc)
+    # UI-05a(D-94). 게이트 설정은 사람의 결정이다 — 한도를 올렸거나 껐으면 진행기가 그 자리에서 이어 간다.
+    _after_human_input(request, repo, case_id, f"quality_gate:{gate.value}")
+    return state
 
 
 @router.post("/api/cases/{case_id}/quality-gate-runs", status_code=201)
@@ -2665,7 +2677,7 @@ def add_task(request: Request, case_id: str, payload: AddTaskIn) -> dict[str, An
     """사람이 Task 를 더한다. **새 리비전이 만들어진다.**"""
     repo = _repo(request)
     try:
-        return repo.add_task(
+        revision = repo.add_task(
             case_id,
             payload.task.model_dump(mode="json"),
             payload.reason,
@@ -2673,6 +2685,9 @@ def add_task(request: Request, case_id: str, payload: AddTaskIn) -> dict[str, An
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # UI-05a. 재계획은 사람의 결정이다 — 다른 결정처럼 기록 뒤 진행기가 다음 걸음을 본다.
+    _after_human_input(request, repo, case_id, f"replan:{revision['revision']}")
+    return revision
 
 
 @router.post("/api/cases/{case_id}/work-graph/tasks/{task_key}/cancel", status_code=201)
@@ -2682,9 +2697,11 @@ def cancel_task(
     """사람이 Task 를 취소한다. **행을 지우지 않고** 새 리비전에 취소로 남긴다."""
     repo = _repo(request)
     try:
-        return repo.cancel_task(case_id, task_key, payload.reason, payload.actor)
+        revision = repo.cancel_task(case_id, task_key, payload.reason, payload.actor)
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"replan:{revision['revision']}")
+    return revision
 
 
 @router.put("/api/cases/{case_id}/questions/{question_id}/blocks", status_code=201)
@@ -2698,11 +2715,14 @@ def set_question_blocks(
     """
     repo = _repo(request)
     try:
-        return repo.set_question_blocks(
+        revision = repo.set_question_blocks(
             case_id, question_id, payload.task_keys, payload.reason, payload.actor
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # 연결을 고치면 막히지 않게 된 작업이 생길 수 있다 — 진행기가 그 자리에서 본다(답은 아니다).
+    _after_human_input(request, repo, case_id, f"replan:{revision['revision']}")
+    return revision
 
 
 # ===================================================================== P3-03

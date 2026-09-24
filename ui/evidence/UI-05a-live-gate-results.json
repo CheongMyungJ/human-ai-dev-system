@@ -1,0 +1,340 @@
+{
+  "tag": "220616395",
+  "status": "passed",
+  "error": null,
+  "codex_version": "codex-cli 0.156.1",
+  "product_rules": [
+    {
+      "rule": "업무화 뒤 진행 행이 생기고 첫 걸음이 같은 요청에 붙음",
+      "ok": true,
+      "detail": "intent_authoring"
+    },
+    {
+      "rule": "의도 초안이 도는 동안 전송 잠금(요청 유지)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "QG-04 명시 ON 설정 기록",
+      "ok": true,
+      "detail": 200
+    },
+    {
+      "rule": "동의 대기에서 전송 열림·요청 종료",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "요청 종료 사유에 대기 코드",
+      "ok": true,
+      "detail": "waiting: intent_agreement"
+    },
+    {
+      "rule": "동의 뒤 시스템이 진행 요청을 열어 이어 감(여는 메시지 없음)",
+      "ok": true,
+      "detail": [
+        "human_decision",
+        "agreement:dec-291f98566b0f3468"
+      ]
+    },
+    {
+      "rule": "이월 질문 대기에서 전송 열림·요청 종료",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "이월 질문 답 뒤 시스템이 진행 요청을 열어 이어 감",
+      "ok": true,
+      "detail": [
+        "human_decision",
+        "intake:intake-b6f765e4db7fd9cc"
+      ]
+    },
+    {
+      "rule": "실행은 전부 요청에 붙음(실행 사이 잠금)",
+      "ok": true,
+      "detail": []
+    },
+    {
+      "rule": "제품이 적은 기준 판정은 검증 실행을 근거로 함",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "QG-04 검토 실행을 진행기가 스스로 만듦(사람 없이)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "QG-04 판정이 발견에서 계산돼 기록됨(검토자 실행·근거 연결)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "QG-04 판정이 발견에서 계산돼 기록됨(검토자 실행·근거 연결)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "QG-04 판정이 발견에서 계산돼 기록됨(검토자 실행·근거 연결)",
+      "ok": true,
+      "detail": null
+    },
+    {
+      "rule": "자동 완료 — 사람 인수 없음",
+      "ok": true,
+      "detail": {
+        "id": "closure-0f485ce8ffb7e853",
+        "case_id": "case-d0649cc15a40ae56",
+        "candidate_id": "cand-319fd3549bf0f4d1",
+        "final_acceptance_id": "accept-03fb8b2624207d2a",
+        "closure_kind": "completed",
+        "exception_count": 0,
+        "confirmed_at": "2026-09-24T13:14:45.488623+00:00",
+        "snapshot_json": "{\"at\": \"2026-09-24T13:14:45.488623+00:00\", \"usage\": {\"run_count\": {\"exposure\": 13.0, \"complete\": true}, \"review_run_count\": {\"exposure\": 4.0, \"complete\": true}, \"input_tokens\": {\"exposure\": 824593.0, \"complete\": true}, \"output_tokens\": {\"exposure\": 15760.0, \"complete\": true}, \"context_bytes\": {\"exposure\": 191029.0, \"complete\": true}, \"execution_seconds\": {\"exposure\": 483.269906, \"complete\": true}, \"elapsed_seconds\": {\"exposure\": 504.922124, \"complete\": true}, \"estimated_cost\": {\"exposure\": 0.0, \"complete\": false}}, \"limits\": []}",
+        "cancelled_by": null,
+        "cancel_reason": null,
+        "decision_id": null
+      }
+    }
+  ],
+  "observations": [
+    {
+      "observation": "A 해석",
+      "detail": {
+        "report_status": "reported",
+        "kind": "work_request",
+        "profile": "feature",
+        "applied": true,
+        "refusal": null
+      }
+    },
+    {
+      "observation": "B QG-01",
+      "detail": {
+        "verdict": "pass",
+        "method": "independent",
+        "level": "standard"
+      }
+    },
+    {
+      "observation": "C 이월 질문",
+      "detail": "실행 출력 검증 방식"
+    },
+    {
+      "observation": "C 이월 질문",
+      "detail": "허용 외 수준 처리"
+    },
+    {
+      "observation": "C 이월 질문",
+      "detail": "실행 출력 검증 방식"
+    },
+    {
+      "observation": "C 이월 질문",
+      "detail": "허용 외 수준 처리"
+    },
+    {
+      "observation": "C 실행 순서",
+      "detail": [
+        "discussion_reply",
+        "intent_authoring",
+        "intent_gate_review",
+        "design_authoring",
+        "plan_authoring",
+        "feature_implementation",
+        "feature_implementation",
+        "quality_gate_review",
+        "verification_run",
+        "quality_gate_review",
+        "verification_run",
+        "quality_gate_review",
+        "verification_run"
+      ]
+    },
+    {
+      "observation": "C 준비",
+      "detail": {
+        "design": [
+          "auto_conditions_met",
+          true
+        ],
+        "plan": [
+          "auto_conditions_met",
+          true
+        ],
+        "combined": [
+          "not_ready",
+          false
+        ]
+      }
+    },
+    {
+      "observation": "C 작업 그래프",
+      "detail": [
+        [
+          "T1",
+          "implementation",
+          "done"
+        ],
+        [
+          "T2",
+          "implementation",
+          "done"
+        ],
+        [
+          "T3",
+          "integration",
+          "done"
+        ],
+        [
+          "T4",
+          "verification",
+          "done"
+        ],
+        [
+          "T5",
+          "verification",
+          "done"
+        ],
+        [
+          "T6",
+          "verification",
+          "planned"
+        ]
+      ]
+    },
+    {
+      "observation": "C 기준 판정",
+      "detail": [
+        [
+          "C-01",
+          "met",
+          "changed_and_verified",
+          "policy:work_progressor"
+        ],
+        [
+          "C-02",
+          "met",
+          "preserved",
+          "policy:work_progressor"
+        ],
+        [
+          "C-03",
+          "met",
+          "changed_and_verified",
+          "policy:work_progressor"
+        ]
+      ]
+    },
+    {
+      "observation": "C 검증 명령",
+      "detail": [
+        [
+          "README에 `시각 [수준] 메시지` 형식과 INFO·ERROR 수준 설명이 있는 것을 확인했다.",
+          0
+        ]
+      ]
+    },
+    {
+      "observation": "C 검증 명령",
+      "detail": [
+        [
+          "기본 인자 INFO, 허용 수준 INFO·ERROR, 출력 형식을 확인했다.",
+          0
+        ],
+        [
+          "기본 호출과 ERROR 지정 호출이 각각 한 줄씩 출력됐다.",
+          0
+        ]
+      ]
+    },
+    {
+      "observation": "C 검증 명령",
+      "detail": [
+        [
+          "log()의 출력 형식은 확인했지만 실행 시 호출하는 코드가 없었다.",
+          0
+        ],
+        [
+          "정상 종료했으나 출력이 없어 첫 줄을 확인할 수 없었다.",
+          0
+        ]
+      ]
+    },
+    {
+      "observation": "G 게이트 검토 실행",
+      "detail": [
+        [
+          "wp-9cc15a40ae56-qg4-review-T3-1",
+          "qg:QG-04:T3",
+          "completed"
+        ],
+        [
+          "wp-9cc15a40ae56-qg4-review-T4-1",
+          "qg:QG-04:T4",
+          "completed"
+        ],
+        [
+          "wp-9cc15a40ae56-qg4-review-T5-1",
+          "qg:QG-04:T5",
+          "completed"
+        ]
+      ]
+    },
+    {
+      "observation": "G QG-04 판정 · T3",
+      "detail": {
+        "verdict": "pass",
+        "inspection_used": "independent",
+        "subject": "impl:T3",
+        "findings": [],
+        "remediation": null
+      }
+    },
+    {
+      "observation": "G QG-04 판정 · T4",
+      "detail": {
+        "verdict": "pass",
+        "inspection_used": "independent",
+        "subject": "impl:T4",
+        "findings": [],
+        "remediation": null
+      }
+    },
+    {
+      "observation": "G QG-04 판정 · T5",
+      "detail": {
+        "verdict": "pass",
+        "inspection_used": "independent",
+        "subject": "impl:T5",
+        "findings": [],
+        "remediation": null
+      }
+    },
+    {
+      "observation": "G 수정(repair) 실행",
+      "detail": []
+    },
+    {
+      "observation": "C 사람의 결정",
+      "detail": [
+        [
+          "intent_agreement",
+          "owner"
+        ]
+      ]
+    }
+  ],
+  "facts": {
+    "case_id": "case-d0649cc15a40ae56",
+    "A_reply_seconds": 12.0,
+    "B_questions_answered": 4
+  },
+  "screenshots": [
+    "UI-05a-live-gate-A-work.png",
+    "UI-05a-live-gate-B-agreement.png",
+    "UI-05a-live-gate-C-running.png",
+    "UI-05a-live-gate-C-done.png"
+  ],
+  "data_root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p4-05-live\\220616395"
+}

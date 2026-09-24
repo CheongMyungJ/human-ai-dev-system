@@ -129,6 +129,7 @@ export function Shell() {
   const [rulesItem, setRulesItem] = useState<string | null>(initial.current.item)
   const [focusSeq, setFocusSeq] = useState<number | null>(initial.current.seq)
   const [openRequest, setOpenRequest] = useState<{ ref: VersionRef; nonce: number } | null>(null)
+  const [openRun, setOpenRun] = useState<{ runId: string; nonce: number } | null>(null)
   const [listNonce, setListNonce] = useState(0)
   // UI-04d(D-84). 대화 검색 — 서버 일치는 바로, 본문 일치는 PC 가 올릴 때까지 조회를 반복한다(최대 30초).
   const [search, setSearch] = useState<SearchState>(EMPTY_SEARCH)
@@ -375,6 +376,17 @@ export function Shell() {
     [caseId],
   )
 
+  // UI-05a. 실행 id·대기 카드가 `작업` 탭에서 **그 실행**의 상세를 연다.
+  useEffect(
+    () =>
+      listen('hads:open-run', (detail) => {
+        if (detail.caseId !== caseId) return
+        setPanel('work')
+        setOpenRun({ runId: detail.runId, nonce: Date.now() })
+      }),
+    [caseId],
+  )
+
   const data = useCaseData(caseId)
   const project = useMemo(() => projects.find((p) => p.id === projectId) ?? null, [projects, projectId])
 
@@ -552,7 +564,11 @@ export function Shell() {
             onScroll={(top) =>
               updatePrefs((prev) => ({ ...prev, scrollByCase: { ...prev.scrollByCase, [caseId]: top } }))
             }
-            onPanel={(tab) => setPanel((current) => (current === tab ? null : tab))}
+            onPanel={(tab) => {
+              // UI-05a. 사람이 탭을 고르면 `작업` 탭은 목록부터 — 지난번에 연 실행을 다시 열지 않는다.
+              setOpenRun(null)
+              setPanel((current) => (current === tab ? null : tab))
+            }}
             onChanged={onChanged}
           />
         ) : (
@@ -578,8 +594,12 @@ export function Shell() {
             runners={runners}
             repositories={repositories}
             openRequest={openRequest}
+            openRun={openRun}
             onChanged={onChanged}
-            onTab={setPanel}
+            onTab={(tab) => {
+              setOpenRun(null)
+              setPanel(tab)
+            }}
             onClose={() => setPanel(null)}
           />
         </>

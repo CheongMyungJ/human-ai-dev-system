@@ -1545,6 +1545,21 @@ class Repository:
         run["closed_case"] = (
             purpose == RunPurpose.DISCUSSION_REPLY.value and self.case_is_closed(run["case_id"])
         )
+        # UI-05a(D-94). 진행기의 품질 게이트 검토 실행이면 어느 게이트·어느 대상을 보는지, repair 실행이면
+        # 그 게이트의 지적. 요약뿐이다. 검토 실행이 작업을 볼 수 있게 Task 요약도 싣는다.
+        run["quality_gate"] = self.quality_gate_for_assignment(run)
+        if run["quality_gate"] and run["quality_gate"].get("task_key") and run["task"] is None:
+            run["task"] = self.task_for_assignment(run["case_id"], run["quality_gate"]["task_key"])
+        run["quality_gate_findings"] = (
+            self.quality_gate_findings_for_assignment(run_id)
+            if purpose
+            in (
+                RunPurpose.DESIGN_AUTHORING.value,
+                RunPurpose.PLAN_AUTHORING.value,
+                RunPurpose.FEATURE_IMPLEMENTATION.value,
+            )
+            else None
+        )
         # P4-06. 논의 응답이 대화의 프로젝트 규칙을 등록 블록으로 옮길 때 쓰는 **현재 지식 목록과
         # 등록 저장소 이름**. 대체할 키·저장소 이름을 지어내지 않게 한다. 요약·메타데이터뿐이다.
         # P4-07. 작업 실행(검증·분석·실험·구현)에도 싣는다 — 후보 규칙이 관계 키와 이 실행의 저장소
@@ -3318,7 +3333,11 @@ class Repository:
         """
         requirements: list[tuple[GateId, str]] = []
         if purpose is RunPurpose.PLAN_AUTHORING:
-            requirements = [(GateId.QG_02, "")]
+            # UI-05a(D-94). **검토할 설계가 있을 때만** 계획 작성이 QG-02 를 기다린다. Fast Lane 의 결합
+            # 기록은 설계를 따로 두지 않으므로 그 작성 전에는 대상이 없다 — 요구하면 영원히 막힌다. 그 경로의
+            # QG-02 는 구현 전에 결합 기록을 대상으로 본다(`gate_subject`).
+            if self.current_preparation(case_id, PreparationStage.DESIGN) is not None:
+                requirements = [(GateId.QG_02, "")]
         elif purpose is RunPurpose.FEATURE_IMPLEMENTATION:
             requirements = [(GateId.QG_02, ""), (GateId.QG_03, task_key)]
         elif purpose is RunPurpose.VERIFICATION_RUN:
@@ -4052,7 +4071,9 @@ class Repository:
         criteria_refs = json.loads(run["criteria_refs_json"])
         used = quality.InspectionMethod(inspection_used)
         required = quality.InspectionMethod(run["inspection_required"])
-        if not quality.inspection_satisfies(required, used):
+        # UI-05a. **수행할 수 없었던 검사(`blocked`)는 검사 강도를 주장하지 않는다** — 아무 것도 검사하지
+        # 않았으므로 강도·세션 분리를 따질 대상이 없다. 판정은 통과가 아니며(`blocked`) 그대로 막는다.
+        if not blocked and not quality.inspection_satisfies(required, used):
             raise ConflictError("the recorded inspection does not satisfy the gate policy")
         self._validate_quality_run_inputs(
             subject_key=run["subject_key"],
@@ -4061,13 +4082,16 @@ class Repository:
             criteria_refs=criteria_refs,
             evidence_refs=evidence_refs,
         )
-        author_session, reviewer_session = self._resolve_quality_sessions(
-            case_id,
-            used=used,
-            author_run_id=author_run_id or run["author_run_id"],
-            reviewer_run_id=reviewer_run_id,
-            evidence_refs=evidence_refs,
-        )
+        if blocked:
+            author_session, reviewer_session = None, None
+        else:
+            author_session, reviewer_session = self._resolve_quality_sessions(
+                case_id,
+                used=used,
+                author_run_id=author_run_id or run["author_run_id"],
+                reviewer_run_id=reviewer_run_id,
+                evidence_refs=evidence_refs,
+            )
         normalized, blocking, hold = self._normalize_quality_findings(findings, criteria_refs)
         verdict = (
             GateVerdict.BLOCKED.value if blocked else
@@ -4121,6 +4145,309 @@ class Repository:
         result = self.get_quality_gate_run(gate_run_id)
         result["late_reason"] = late_reason
         return result
+
+    # ------------------------------------------------ UI-05a(D-94) 진행기가 돌리는 QG-02~04
+
+    def gate_subject(self, case_id: str, gate: GateId, task_key: str = "") -> dict[str, Any] | None:
+        """그 게이트가 **지금 검토할 대상**. 대상이 아직 없으면 `None`.
+
+        `subject_key` 는 고치는 동안 바뀌지 않는 이름이다 — repair 한도가 새 버전마다 초기화되지 않는다
+        (P4-01 모델, gate-operations). `input_hash` 가 그 버전이다. 참조는 짧은 식별자뿐이다(본문 없음).
+        """
+        latest = self.latest_intent_version(case_id)
+        context: list[str] = [f"intent:{latest['id']}"] if latest is not None else []
+        all_keys = [c["criterion_key"] for c in self.current_criteria(case_id)]
+
+        def task_keys_for(key: str) -> list[str]:
+            task = self.task_for_assignment(case_id, key) if key else None
+            linked = [c["key"] for c in (task or {}).get("criteria") or [] if c.get("key")]
+            return linked or all_keys
+
+        def done(out: dict[str, Any], criteria: list[str]) -> dict[str, Any]:
+            out["context_refs"] = context + out.pop("refs")
+            out["criteria_refs"] = criteria or ["no-criteria"]
+            return out
+
+        if gate is GateId.QG_02:
+            prep = self.current_preparation(case_id, PreparationStage.DESIGN) or self.current_preparation(
+                case_id, PreparationStage.COMBINED
+            )
+            if prep is None:
+                return None
+            label = "설계" if prep["stage"] == PreparationStage.DESIGN.value else "결합 기록"
+            return done(
+                {
+                    "subject_key": "design",
+                    "input_hash": prep["content_hash"],
+                    "label": f"{label} r{prep['revision']}",
+                    "stage": prep["stage"],
+                    "author_run_id": prep.get("author_run_id"),
+                    "repair_task": None,
+                    "repository_id": None,
+                    "refs": [f"artifact:{prep['artifact_id']}:{prep['artifact_rev']}"],
+                },
+                all_keys,
+            )
+        if gate is GateId.QG_03:
+            prep = self.current_preparation(case_id, PreparationStage.PLAN) or self.current_preparation(
+                case_id, PreparationStage.COMBINED
+            )
+            if prep is None or not task_key:
+                return None
+            label = "개발계획" if prep["stage"] == PreparationStage.PLAN.value else "결합 기록"
+            return done(
+                {
+                    "subject_key": f"plan:{task_key}",
+                    "input_hash": hashlib.sha256(
+                        f"{prep['content_hash']}|{task_key}".encode("utf-8")
+                    ).hexdigest(),
+                    "label": f"{label} r{prep['revision']} · 작업 {task_key}",
+                    "stage": prep["stage"],
+                    "author_run_id": prep.get("author_run_id"),
+                    "repair_task": None,
+                    "repository_id": None,
+                    "refs": [f"artifact:{prep['artifact_id']}:{prep['artifact_rev']}", f"task:{task_key}"],
+                },
+                task_keys_for(task_key),
+            )
+        if gate is GateId.QG_04:
+            graph = self.current_work_graph_row(case_id)
+            if graph is None or not task_key:
+                return None
+            tasks = {t["task_key"]: t for t in self._graph_tasks(graph["id"])}
+            task = tasks.get(task_key)
+            if task is None:
+                return None
+            implementers = [
+                k for k in task.get("depends_on") or []
+                if (tasks.get(k) or {}).get("kind") in (TaskKind.IMPLEMENTATION.value, TaskKind.INTEGRATION.value)
+            ]
+            sql = (
+                "SELECT run_id, task_id, repository_id, workspace_effect_json FROM run"
+                " WHERE case_id = ? AND purpose = ? AND status = ? AND outcome = ?"
+            )
+            args: tuple[Any, ...] = (
+                case_id, RunPurpose.FEATURE_IMPLEMENTATION.value, RunStatus.FINISHED.value,
+                RunOutcome.COMPLETED.value,
+            )
+            if implementers:
+                sql += " AND task_id IN (" + ",".join("?" * len(implementers)) + ")"
+                args += tuple(implementers)
+            row = self.conn.execute(sql + " ORDER BY finished_at DESC, created_at DESC LIMIT 1", args).fetchone()
+            if row is None:
+                return None
+            effect = json.loads(row["workspace_effect_json"]) if row["workspace_effect_json"] else {}
+            digest = (effect or {}).get("tree_digest_after") or ""
+            return done(
+                {
+                    "subject_key": f"impl:{task_key}",
+                    "input_hash": hashlib.sha256(f"{row['run_id']}|{digest}".encode("utf-8")).hexdigest(),
+                    "label": f"작업 {row['task_id']} 의 구현(실행 {row['run_id']}) · 검증 {task_key} 전",
+                    "stage": None,
+                    "author_run_id": row["run_id"],
+                    "repair_task": row["task_id"],
+                    "repository_id": row["repository_id"],
+                    "refs": [f"run:{row['run_id']}", f"task:{task_key}"],
+                },
+                task_keys_for(task_key),
+            )
+        return None
+
+    def quality_gate_progress(
+        self, case_id: str, purpose: RunPurpose, task_key: str = ""
+    ) -> list[dict[str, Any]]:
+        """이 실행을 **지금 막는** 명시 게이트마다 진행기가 볼 사실(D-94). 막지 않으면 빈 목록.
+
+        진입 검사(`quality_gate_blockers_for_run`)와 **같은 판단**에서 시작한다 — 진행기가 따로 판정해
+        진입 검사가 통과시킬 실행을 붙잡거나 그 반대가 되지 않게.
+        """
+        out: list[dict[str, Any]] = []
+        for blocker in self.quality_gate_blockers_for_run(case_id, purpose, task_key):
+            gate = GateId(blocker["gate"])
+            scope = task_key if gate in (GateId.QG_03, GateId.QG_04) else ""
+            policy = self.effective_quality_gate_policy(case_id, gate, scope)
+            subject = self.gate_subject(case_id, gate, scope)
+            latest = policy["latest_run"]
+            cycle = None
+            blocked_same_input = 0
+            if subject is not None:
+                cycle = self.conn.execute(
+                    "SELECT used_attempts, reserved_attempts, repair_limit, state FROM remediation_cycle"
+                    " WHERE case_id = ? AND gate = ? AND subject_key = ?",
+                    (case_id, gate.value, subject["subject_key"]),
+                ).fetchone()
+                blocked_same_input = int(
+                    self.conn.execute(
+                        "SELECT COUNT(*) AS n FROM quality_gate_run WHERE case_id = ? AND gate = ?"
+                        " AND subject_key = ? AND input_hash = ? AND verdict = ?",
+                        (case_id, gate.value, subject["subject_key"], subject["input_hash"],
+                         GateVerdict.BLOCKED.value),
+                    ).fetchone()["n"]
+                )
+            out.append(
+                {
+                    "gate": gate.value,
+                    "label": policy["label"],
+                    "task_key": scope,
+                    "subject": subject,
+                    "latest": (
+                        {
+                            "gate_run_id": latest["id"],
+                            "verdict": latest["verdict"],
+                            "status": latest["status"],
+                            "subject_key": latest["subject_key"],
+                            "input_hash": latest["input_hash"],
+                            "findings": [
+                                {
+                                    "criterion": f["criterion"],
+                                    "severity": f["severity"],
+                                    "certainty": f["certainty"],
+                                    "target": f["target"],
+                                    "summary": f["summary"],
+                                }
+                                for f in latest.get("findings") or []
+                            ],
+                        }
+                        if latest
+                        else None
+                    ),
+                    "running": policy["running_gate_run_id"] is not None,
+                    "repair_limit": int(policy["repair_limit"]),
+                    "repairs_used": int(cycle["used_attempts"] + cycle["reserved_attempts"]) if cycle else 0,
+                    "blocked_same_input": blocked_same_input,
+                }
+            )
+        return out
+
+    def open_gate_review(
+        self, case_id: str, gate: GateId, task_key: str, reviewer_run_id: str
+    ) -> dict[str, Any] | None:
+        """진행기가 만든 검토 실행에 **검증 1회를 연다**(시작 당시 정책 고정 — P4-02 예약 규칙 그대로).
+
+        이미 열린 검증이 있거나 대상이 없으면 열지 않는다(`None`). 검토 실행 자체는 그대로 돈다 — 결과가
+        오면 닫을 검증이 없어 기록되지 않고, 진행기가 다시 본다.
+        """
+        subject = self.gate_subject(case_id, gate, task_key)
+        if subject is None:
+            return None
+        try:
+            return self.start_quality_gate_run(
+                case_id,
+                gate,
+                subject_key=subject["subject_key"],
+                input_hash=subject["input_hash"],
+                context_refs=subject["context_refs"] + [f"review:{reviewer_run_id}"],
+                criteria_refs=subject["criteria_refs"],
+                task_key=task_key,
+                author_run_id=subject["author_run_id"],
+            )
+        except ConflictError:
+            return None
+
+    @staticmethod
+    def gate_review_scope(task_id: str | None) -> tuple[GateId, str] | None:
+        """진행기가 만든 검토 실행의 작업 id(`qg:<게이트>:<Task>`)에서 게이트·범위를 읽는다."""
+        parts = (task_id or "").split(":")
+        if len(parts) < 2 or parts[0] != "qg":
+            return None
+        try:
+            return GateId(parts[1]), (parts[2] if len(parts) > 2 else "")
+        except ValueError:
+            return None
+
+    def apply_gate_run_effects(
+        self, run_id: str, findings: list[dict[str, Any]] | None
+    ) -> dict[str, Any] | None:
+        """UI-05a(D-94). 끝난 실행이 게이트 기록에 주는 효과 — 결과 기록 **뒤**·진행기 **앞**에 부른다.
+
+        (1) 진행기의 검토 실행이면 그 검증 1회를 닫는다 — 완료이고 발견을 보고했으면 독립 검사로(근거
+        `run:<id>`), 실행이 실패했거나 발견을 읽지 못했으면 `blocked`(검사하지 못함 — 통과가 아니다).
+        (2) repair 로 예약된 수정 차수가 이 실행이면 그 차수를 **사용**으로 확정한다(결과와 무관 — 고치려고 한
+        번 돌았다).
+        """
+        run = self.get_run(run_id)
+        closed: dict[str, Any] | None = None
+        scope = self.gate_review_scope(run.get("task_id"))
+        if run.get("purpose") == RunPurpose.QUALITY_GATE_REVIEW.value and scope is not None:
+            gate, task_key = scope
+            open_run = self.conn.execute(
+                "SELECT * FROM quality_gate_run WHERE case_id = ? AND gate = ? AND task_key = ?"
+                " AND status = 'running' AND context_refs_json LIKE ? ORDER BY created_at DESC LIMIT 1",
+                (run["case_id"], gate.value, task_key, f'%"review:{run_id}"%'),
+            ).fetchone()
+            if open_run is not None:
+                completed = run.get("outcome") == RunOutcome.COMPLETED.value and findings is not None
+                if completed:
+                    try:
+                        closed = self.complete_quality_gate_run(
+                            open_run["id"],
+                            inspection_used=quality.InspectionMethod.INDEPENDENT.value,
+                            evidence_refs=[f"run:{run_id}"],
+                            findings=list(findings or []),
+                            reviewer_run_id=run_id,
+                        )
+                    except ConflictError:
+                        completed = False  # 세션 분리 등을 증명하지 못했다 — 검사하지 못한 것으로 닫는다
+                if not completed:
+                    closed = self.complete_quality_gate_run(
+                        open_run["id"],
+                        inspection_used=open_run["inspection_required"],
+                        evidence_refs=[f"run:{run_id}"],
+                        findings=[],
+                        blocked=True,
+                    )
+        attempt = self.conn.execute(
+            "SELECT id FROM remediation_attempt WHERE author_run_id = ? AND state = 'reserved'",
+            (run_id,),
+        ).fetchone()
+        if attempt is not None:
+            self.complete_remediation_attempt(attempt["id"], outcome=str(run.get("outcome") or "unknown"))
+        return closed
+
+    def quality_gate_for_assignment(self, run: dict[str, Any]) -> dict[str, Any] | None:
+        """진행기 검토 실행의 배정에 싣는 게이트 정보(이름·대상·기준 키). 요약뿐이다."""
+        scope = self.gate_review_scope(run.get("task_id"))
+        if run.get("purpose") != RunPurpose.QUALITY_GATE_REVIEW.value or scope is None:
+            return None
+        gate, task_key = scope
+        subject = self.gate_subject(run["case_id"], gate, task_key) or {}
+        return {
+            "gate": gate.value,
+            "label": quality.GATE_LABELS[gate],
+            "task_key": task_key or None,
+            "subject": subject.get("label"),
+            "criteria": [c for c in subject.get("criteria_refs") or [] if c != "no-criteria"],
+        }
+
+    def quality_gate_findings_for_assignment(self, run_id: str) -> dict[str, Any] | None:
+        """repair 로 만든 실행의 배정에 싣는 **그 게이트의 지적**(구조 목록, 본문 없음). 아니면 `None`."""
+        row = self.conn.execute(
+            "SELECT c.case_id, c.gate, c.subject_key FROM remediation_attempt a"
+            " JOIN remediation_cycle c ON c.id = a.cycle_id WHERE a.author_run_id = ?"
+            " ORDER BY a.started_at DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        latest = self.conn.execute(
+            "SELECT id, verdict FROM quality_gate_run WHERE case_id = ? AND gate = ? AND subject_key = ?"
+            " AND status <> 'running' AND verdict IN (?, ?) ORDER BY created_at DESC LIMIT 1",
+            (row["case_id"], row["gate"], row["subject_key"], GateVerdict.FAIL.value, GateVerdict.HOLD.value),
+        ).fetchone()
+        if latest is None:
+            return None
+        findings = self.conn.execute(
+            "SELECT criterion, severity, certainty, target, summary FROM quality_gate_finding"
+            " WHERE gate_run_id = ? ORDER BY created_at",
+            (latest["id"],),
+        ).fetchall()
+        gate = GateId(row["gate"])
+        return {
+            "gate": gate.value,
+            "label": quality.GATE_LABELS[gate],
+            "verdict": latest["verdict"],
+            "findings": [dict(f) for f in findings],
+        }
 
     # ------------------------------------------------ P4-02 변경 영향과 부분 재검증
 
@@ -8263,6 +8590,9 @@ class Repository:
         question = self.get_question(question_id)
         if question["case_id"] != case_id:
             raise ConflictError("that question belongs to another case")
+        # UI-05a. 종료된 업무의 연결을 고치지 않는다(D-33). 새 리비전 쪽(`create_work_graph_revision`)도 거부하지만
+        # 그때는 아래 연결 표를 이미 지우고 다시 쓴 뒤다 — 409 를 돌려주면서 기록이 바뀌지 않게 여기서 먼저 막는다.
+        self.guard_open_case(case_id)
         graph = self.current_work_graph_row(case_id)
         if graph is None:
             raise ConflictError("this case has no work graph to link questions to")

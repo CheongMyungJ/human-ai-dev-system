@@ -126,7 +126,7 @@ export function CaseSettings(props: {
       <section data-testid="case-setting-inline-limit">
         <h3 className="sh-section-title">실행당 인라인 한도</h3>
         <p className="sh-muted sh-rule-line">
-          이 프로젝트의 값이 새 실행마다 기록된다(실행별 값은 관리 화면의 실행 문맥). 조정은 프로젝트 설정에서 한다 —
+          이 프로젝트의 값이 새 실행마다 기록된다(실행별 값은 `작업` 탭의 실행 상세 — 고정 입력). 조정은 프로젝트 설정에서 한다 —
           대화별 조정은 없다.
         </p>
       </section>
@@ -529,6 +529,9 @@ function GatesSection(props: { detail: ShellCaseDetail; caseId: string; guard: G
               <span className="sh-muted">{gate.source}</span>
               {gate.applied_at ? ` · 적용 ${when(gate.applied_at)}` : ''}
               {gate.latest_run ? ` · 판정 ${GATE_VERDICT_LABEL[gate.latest_run.verdict]}` : ''}
+              {gate.remediation
+                ? ` · 수정 ${gate.remediation.used_attempts + gate.remediation.reserved_attempts}/${gate.remediation.repair_limit}`
+                : ''}
               {gate.reserved.length > 0 && (
                 <span className="sh-warn" data-testid={`case-gate-reserved-${gate.gate}`}>
                   {' '}· 예약 {gate.reserved.length}건(검증 1회 종료 뒤 반영)
@@ -544,8 +547,10 @@ function GatesSection(props: { detail: ShellCaseDetail; caseId: string; guard: G
           ))}
       </ul>
       <p className="sh-muted sh-rule-line">
-        QG-01 은 필수라 끌 수 없다. 켠 게이트가 막으면 사람 대기로 보이고 관리 화면에서 진행한다(진행기는 QG-02~07 을 돌리지
-        않는다). 검사 강도는 낮출 수 없고 진행 중 검증이 있으면 변경은 예약된다.
+        QG-01 은 필수라 끌 수 없다. 여기서 <strong>켬</strong>으로 고른 게이트는 진행기가 스스로 검토하고(별도 세션), 실패면 수정
+        한도 안에서 고친 뒤 다시 검토한다 — 지금 실행 조건인 것은 QG-02(계획·구현 전)·QG-03(구현 전)·QG-04(검증 전)다. 한도 뒤에만
+        사람 카드가 뜬다. 기본값 따름은 기존 구조 검사가 목적을 대신한다. 검사 강도는 낮출 수 없고 진행 중 검증이 있으면 변경은
+        예약된다.
       </p>
     </section>
   )

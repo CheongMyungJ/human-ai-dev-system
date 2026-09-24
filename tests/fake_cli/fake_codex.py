@@ -20,6 +20,9 @@
     HADS_FAKE_CANDIDATE      (P4-07) 검증 실행이 후보 블록(운영 사실·참고, 근거 한 줄)을 답 뒤에 붙인다.
                              `HADS_FAKE_CANDIDATE_SUPPORTS=K-001` 이면 그 키를 뒷받침하는 관측으로 붙인다
     HADS_FAKE_TITLE=<제목>   (P4-09) 해석 블록을 붙이는 논의 응답이 그 제목을 자동 제목으로 함께 낸다(D-93)
+    HADS_FAKE_PLAN_QUESTION  (UI-05a) 결합 기록이 **연결 없는** 계획 질문(`d1`, 사람이 정할 출력 형식) 하나를 낸다 —
+                             모든 작업이 그 결정을 기다린다
+    HADS_FAKE_GATE_FAIL      (UI-05a) 품질 게이트(QG-02~07) 검토가 기준 C-01 의 필수·확정 지적 하나를 낸다(실패)
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -79,9 +82,26 @@ def work_stage_reply(prompt: str) -> str | None:
             '"questions": [{"key": "q1", "text": "대소문자를 구분합니까?", "summary": "대소문자 구분",'
             ' "decide_at": "intent"}]',
         )
+    if starts(templates.QUALITY_GATE_REVIEW_PROMPT) and "HADS_FAKE_GATE_FAIL" in prompt:
+        return json.dumps(
+            {"findings": [{"finding_key": "c01-empty", "criterion": "C-01", "severity": "required",
+                           "certainty": "confirmed", "target": "reader.py",
+                           "summary": "GATE-FAIL-MARK 빈 파일을 다루지 않는다"}]},
+            ensure_ascii=False,
+        )
     if starts(templates.GATE_REVIEW_PROMPT) or starts(templates.QUALITY_GATE_REVIEW_PROMPT):
         return canned.FAKE_REVIEW_CLEAN
     if starts(templates.COMBINED_AUTHORING_PROMPT):
+        if "HADS_FAKE_PLAN_QUESTION" in prompt:
+            return canned.fake_preparation_response(
+                "결합",
+                canned.FAKE_COMBINED_SECTIONS,
+                questions=[
+                    {"key": "d1", "text": "출력 형식은 사람이 정한다", "summary": "출력 형식",
+                     "decide_at": "plan", "blocks": []}
+                ],
+                tasks=canned.FAKE_TASKS_VERIFIED,
+            )
         return canned.FAKE_COMBINED_VERIFIED
     if starts(templates.DESIGN_AUTHORING_PROMPT):
         return canned.FAKE_DESIGN_FULL

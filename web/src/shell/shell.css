@@ -1017,3 +1017,14 @@ mark.sh-hit {
   gap: 4px;
   margin-right: 8px;
 }
+
+/* UI-05a. `작업` 탭 — 작업 그래프·실행 상세. */
+.sh-work section {
+  padding-bottom: 6px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--sh-line);
+}
+
+.sh-task {
+  padding: 6px 0;
+}

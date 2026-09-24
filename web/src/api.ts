@@ -2876,12 +2876,19 @@ export const qualityGateApi = {
   setPolicy: (
     caseId: string,
     gate: string,
-    body: { setting: 'on' | 'off' | 'inherit'; inspection: string | null; repair_limit: number | null; reason: string },
+    body: {
+      setting: 'on' | 'off' | 'inherit'
+      inspection: string | null
+      repair_limit: number | null
+      reason: string
+      // UI-05a. 작업 범위 설정(QG-03·04 의 대기 카드는 그 작업에서만 끄거나 한도를 올린다). 비우면 업무 전체.
+      task_key?: string
+    },
   ) =>
     request<QualityGateState>(`/api/cases/${caseId}/quality-gates/${gate}/policy`, {
       method: 'PUT',
       body: JSON.stringify({
-        task_key: '',
+        task_key: body.task_key ?? '',
         setting: body.setting,
         inspection: body.inspection,
         repair_limit: body.repair_limit,

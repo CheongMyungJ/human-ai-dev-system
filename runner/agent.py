@@ -630,6 +630,9 @@ class RunnerAgent:
         # P4-05. 검증·분석 실행의 기준 보고. 원장에도 남아 재전송이 같은 보고를 보낸다.
         if produced.get("criteria_report"):
             result_payload["criteria_report"] = produced["criteria_report"]
+        # UI-05a(D-94). 품질 게이트 검토의 발견. 제어부가 그 검증 1회를 닫는다(빈 목록 = 문제 없음 — 보낸다).
+        if produced.get("quality_gate_findings") is not None:
+            result_payload["quality_gate_findings"] = produced["quality_gate_findings"]
         # P4-06. 등록 보고. 원장에도 남아 재전송이 같은 보고(같은 원문 참조)를 보낸다.
         if knowledge_report:
             result_payload["knowledge_report"] = knowledge_report
@@ -703,6 +706,9 @@ class RunnerAgent:
             task=assignment.get("task"),
             criteria=assignment.get("criteria"),
             gate_findings=assignment.get("gate_findings"),
+            # UI-05a(D-94). 품질 게이트 검토의 게이트·대상, repair 실행의 그 게이트 지적. 요약뿐.
+            quality_gate=assignment.get("quality_gate"),
+            quality_gate_findings=assignment.get("quality_gate_findings"),
             closed_case=bool(assignment.get("closed_case")),
             # P4-06. 논의 응답의 등록 규칙에 채우는 현재 지식 목록·저장소 이름(요약뿐).
             knowledge_index=assignment.get("knowledge_index"),

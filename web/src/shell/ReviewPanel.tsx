@@ -1,4 +1,5 @@
-// 오른쪽 검토 패널(D-71·D-72·D-80·D-85·D-89). `결과물`·`결정 사항`·`설정`(UI-04b 상세 설정)을 누를 때만 열린다.
+// 오른쪽 검토 패널(D-71·D-72·D-80·D-85·D-89). `결과물`·`결정 사항`·`작업`(UI-05a 작업 그래프·실행 상세)·`설정`(UI-04b
+// 상세 설정)을 누를 때만 열린다.
 //
 //   **실제로 있는 것만 보인다.** 산출물이 없으면 빈 탭을 만들지 않는다.
 //   **열람 버전을 고정한다.** 새 버전이 생기면 안내하고, 비교·전환은 사람이 고른다. 이미 쓴 참조는
@@ -64,8 +65,9 @@ import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodie
 import { CaseSettings } from './CaseSettings'
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
+import { WorkPanel } from './WorkPanel'
 
-export type PanelTab = 'results' | 'decisions' | 'settings'
+export type PanelTab = 'results' | 'decisions' | 'work' | 'settings'
 
 function pretty(kind: ResultDoc['kind'], text: string): string {
   if (kind === 'run_output') return splitRunOutput(text).message
@@ -89,6 +91,8 @@ export function ReviewPanel(props: {
   preparations: PreparationArtifact[]
   runners: RunnerWithConnection[]
   openRequest: { ref: VersionRef; nonce: number } | null
+  // UI-05a. `작업` 탭에서 열 실행(대화의 실행 id·대기 카드에서 온다).
+  openRun: { runId: string; nonce: number } | null
   // UI-04b. 상세 설정 탭이 쓴다 — 등록 저장소 목록과 변경 뒤 다시 읽기.
   repositories: ProjectRepository[]
   onChanged: () => void
@@ -141,6 +145,14 @@ export function ReviewPanel(props: {
         </button>
         <button
           type="button"
+          className={props.tab === 'work' ? 'sh-tab sh-tab-on' : 'sh-tab'}
+          onClick={() => props.onTab('work')}
+          data-testid="panel-tab-work"
+        >
+          작업
+        </button>
+        <button
+          type="button"
           className={props.tab === 'settings' ? 'sh-tab sh-tab-on' : 'sh-tab'}
           onClick={() => props.onTab('settings')}
           data-testid="panel-tab-settings"
@@ -173,6 +185,15 @@ export function ReviewPanel(props: {
         )}
         {detail && props.tab === 'decisions' && (
           <Decisions conv={props.conv} detail={detail} caseId={props.caseId} projectId={props.projectId} />
+        )}
+        {detail && props.tab === 'work' && (
+          <WorkPanel
+            caseId={props.caseId}
+            detail={detail}
+            repositories={props.repositories}
+            openRun={props.openRun}
+            onChanged={props.onChanged}
+          />
         )}
         {detail && props.tab === 'settings' && (
           <CaseSettings
@@ -1054,7 +1075,18 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
               <li key={e.id} className="sh-plain-row">
                 {e.at.slice(11, 19)} · {PROGRESS_STEP_LABEL[e.step] ?? e.step} · {PROGRESS_ACTION_LABEL[e.action] ?? e.action}
                 {e.detail ? ` · ${e.detail}` : ''}
-                {e.run_id ? ` · ${e.run_id}` : ''}
+                {e.run_id && (
+                  <>
+                    {' · '}
+                    <button
+                      type="button"
+                      className="sh-link sh-mono"
+                      onClick={() => emit('hads:open-run', { caseId, runId: e.run_id as string })}
+                    >
+                      {e.run_id}
+                    </button>
+                  </>
+                )}
               </li>
             ))}
           </ul>

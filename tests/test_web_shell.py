@@ -1738,3 +1738,159 @@ def test_a_refused_candidate_shows_its_content_and_fills_the_manual_registration
     current = view["items"][0]["current"]
     assert (current["authority_kind"], current["state"], current["activities"]) == ("user_registration", "active", ["investigation"])
     page.context.close()
+
+
+# ================================================== UI-05a 작업 탭 (이슈 #7)
+
+
+def test_the_work_tab_links_a_blocking_question_edits_the_graph_and_shows_a_run(stack):
+    """UI-PLAN-05a AC-2·3·4·6·7·8 — 관리 화면에만 있던 작업 그래프·실행 상세를 새 화면 `작업` 탭에서 쓴다.
+
+    연결 없는 계획 질문이 모든 작업을 막은 업무에서, 질문 카드의 `기다리는 작업 고치기` → 작업 탭에서 질문을 T2 에만
+    연결하면(이유 필수, 답이 아니다) `다시 시도` 없이 T1 구현이 돈다. 그 구현 실행의 상세(고정 입력·이벤트·작업공간 효과·
+    출력 열기)를 진행 이력의 실행 id 로 연다. 작업을 더하고 취소하면(이유 필수) 새 리비전으로 남는다. 종료된 업무는 보기만 한다.
+    """
+    project = stack.project("작업 탭")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_PLAN_QUESTION 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    # 결합 기록의 연결 없는 질문이 전부 막는다 — 질문 카드가 그 사실과 고치는 길을 보인다.
+    blocks = page.locator('[data-testid="question-blocks-combined:d1"]')
+    expect(blocks).to_contain_text("모든 작업을 막는다", timeout=120_000)
+    [question] = stack.http.get(f"/api/cases/{case_id}/work-graph").json()["deferred_open_questions"]
+    page.click('[data-testid="question-blocks-edit-combined:d1"]')
+    panel = page.locator('[data-testid="work-panel"]')
+    expect(panel.locator('[data-testid="work-graph"]')).to_have_attribute("data-revision", "1")
+    expect(panel.locator('[data-testid="work-graph-unlinked"]')).to_contain_text("combined:d1")
+    expect(panel.locator('[data-testid="work-task-T1"]')).to_have_attribute("data-runnable", "false")
+    expect(panel.locator('[data-testid="work-task-blocked-T1"]')).to_contain_text("사람 결정 대기")
+
+    # 이유 없이 저장할 수 없다(버튼) — 적으면 저장된다.
+    page.click('[data-testid="work-question-edit-combined:d1"]')
+    page.check('[data-testid="work-question-task-combined:d1-T2"]')
+    expect(page.locator('[data-testid="work-question-submit-combined:d1"]')).to_be_disabled()
+    page.fill('[data-testid="work-question-reason-combined:d1"]', "출력 형식은 검증 작업만 기다린다")
+    page.click('[data-testid="work-question-submit-combined:d1"]')
+    expect(panel.locator('[data-testid="work-question-combined:d1"]')).to_have_attribute("data-blocks", "T2")
+    graph = stack.http.get(f"/api/cases/{case_id}/work-graph").json()
+    assert graph["question_blocks"] == {question["id"]: ["T2"]}
+    assert graph["deferred_open_questions"][0]["state"] == "open"  # 연결은 답이 아니다
+
+    # 사람이 `다시 시도` 를 누르지 않았는데 T1 이 돈다(진행기가 연결 저장 때 봤다). T2 는 계속 그 결정을 기다린다.
+    expect(panel.locator('[data-testid="work-task-T1"]')).to_have_attribute("data-state", "done", timeout=120_000)
+    expect(panel.locator('[data-testid="work-task-blocked-T2"]')).to_contain_text("사람 결정 대기")
+    runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+    [impl] = [r for r in runs if r["purpose"] == "feature_implementation"]
+    assert impl["outcome"] == "completed"
+
+    # 진행 이력의 실행 id → 작업 탭의 그 실행 상세.
+    page.click('[data-testid="open-decisions"]')
+    page.locator('[data-testid="progress-events"]').get_by_role("button", name=impl["run_id"]).first.click()
+    detail = page.locator('[data-testid="run-detail"]')
+    expect(detail).to_have_attribute("data-run-id", impl["run_id"])
+    expect(detail.locator('[data-testid="run-detail-basics"]')).to_contain_text("구현")
+    expect(detail.locator('[data-testid="run-detail-refs"]')).to_contain_text("동의된 의도 원문")
+    expect(detail.locator('[data-testid="run-detail-ref-agreed_intent"]')).to_contain_text("읽음")
+    assert int(detail.locator('[data-testid="run-detail-events"]').get_attribute("data-count")) > 0
+    expect(detail.locator('[data-testid="run-detail-workspace"]')).to_contain_text("이 실행이 바꿨다")
+    refs = stack.http.get(f"/api/runs/{impl['run_id']}/context-refs").json()
+    assert len(detail.locator('[data-testid="run-detail-refs"] li').all()) == len(refs)
+    # 출력 원문은 결과물 뷰어가 PC 에서 불러온다.
+    page.click('[data-testid="run-detail-open-output"]')
+    expect(page.locator('[data-testid="viewer-body"]')).to_contain_text("구현했습니다", timeout=30_000)
+
+    # 작업 탭으로 돌아오면 목록부터(지난 실행을 다시 열지 않는다). 작업 추가 → 취소, 둘 다 이유가 남는다.
+    page.click('[data-testid="panel-tab-work"]')
+    expect(panel.locator('[data-testid="work-runs"]')).to_be_visible()
+    page.click('[data-testid="work-add-open"]')
+    page.fill('[data-testid="work-add-key"]', "T3")
+    page.select_option('[data-testid="work-add-kind"]', "verification")
+    page.fill('[data-testid="work-add-summary"]', "빈 파일 경계 시험")
+    # T2(결정 대기) 뒤에 둔다 — 막히지 않은 작업을 더하면 진행기가 그 자리에서 실행을 연다(연결 저장 때와 같다).
+    page.check('[data-testid="work-add-dep-T2"]')
+    expect(page.locator('[data-testid="work-add-submit"]')).to_be_disabled()
+    page.fill('[data-testid="work-add-reason"]', "빈 파일 경계를 따로 확인한다")
+    page.click('[data-testid="work-add-submit"]')
+    expect(panel.locator('[data-testid="work-task-T3"]')).to_have_attribute("data-cancelled", "false")
+    expect(panel.locator('[data-testid="work-task-blocked-T3"]')).to_contain_text("선행 작업 미완료")
+    page.click('[data-testid="work-task-cancel-T3"]')
+    page.fill('[data-testid="work-task-cancel-reason-T3"]', "T2 가 이미 덮는다")
+    page.click('[data-testid="work-task-cancel-submit-T3"]')
+    expect(panel.locator('[data-testid="work-task-cancelled-T3"]')).to_contain_text("T2 가 이미 덮는다")
+    revisions = stack.http.get(f"/api/cases/{case_id}/work-graph-revisions").json()
+    reasons = {r["revision"]: r["reason_summary"] for r in revisions}
+    top = max(reasons)
+    assert [reasons[top - 1], reasons[top]] == ["빈 파일 경계를 따로 확인한다", "T2 가 이미 덮는다"]
+    assert reasons[2] == "출력 형식은 검증 작업만 기다린다"
+
+    # 업무를 취소하면(종료) 작업 탭은 보기만 한다 — 폼이 없다(서버도 거부한다, tests/test_work_graph_edit.py).
+    response = stack.http.post(f"/api/cases/{case_id}/cancel", json={"actor": "owner", "reason": "시험을 끝낸다"})
+    assert response.status_code == 200, response.text
+    page.reload()
+    page.wait_for_selector('[data-testid="sidebar"]')
+    page.click('[data-testid="open-work"]')
+    expect(page.locator('[data-testid="work-closed"]')).to_be_visible(timeout=15_000)
+    expect(page.locator('[data-testid="work-add-open"]')).to_have_count(0)
+    expect(page.locator('[data-testid="work-task-cancel-T1"]')).to_have_count(0)
+    page.context.close()
+
+
+def test_an_explicit_quality_gate_is_reviewed_by_itself_and_the_card_raises_the_limit_or_turns_it_off(stack):
+    """UI-PLAN-05a AC-9·11 (D-94) — 사람이 QG-04 를 켜면(수정 한도 0) 진행기가 검증 전에 별도 세션 검토를 스스로 만든다.
+    검토가 실패하면 `quality_gate` 카드가 판정·지적·수정 0/0 을 보인다. 카드에서 한도를 올리면(사유) 한 번 더 고치고
+    다시 멈추며(1/1), 게이트를 끄면(사유) 검증이 이어져 끝난다. 관리 화면을 거치지 않는다.
+    """
+    project = stack.project("게이트 카드")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_GATE_FAIL 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    response = stack.http.put(
+        f"/api/cases/{case_id}/quality-gates/QG-04/policy",
+        json={"task_key": "", "setting": "on", "inspection": None, "repair_limit": 0, "actor": "owner",
+              "reason_summary": "구현 묶음을 따로 검토한다"},
+    )
+    assert response.status_code == 200, response.text
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    card = page.locator('[data-testid="wait-card-quality_gate"]')
+    expect(card).to_be_visible(timeout=120_000)
+    expect(card).to_have_attribute("data-verdict", "fail")
+    expect(card.locator('[data-testid="quality-gate-usage"]')).to_contain_text("수정 0/0")
+    expect(card.locator('[data-testid="quality-gate-findings"]')).to_contain_text("GATE-FAIL-MARK")
+    runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+    [review] = [r for r in runs if r["purpose"] == "quality_gate_review"]
+    assert review["task_id"] == "qg:QG-04:T2" and review["outcome"] == "completed"
+    assert not [r for r in runs if r["purpose"] == "verification_run"]
+
+    # 사유 없이는 누를 수 없다. 한도를 올리면 한 번 더 고친다(가짜 구현은 같은 내용이라 바뀐 것이 없다 — 대상이 그대로이므로
+    # 다시 검토하지 않고 1/1 에서 멈춘다).
+    expect(card.locator('[data-testid="quality-gate-raise"]')).to_be_disabled()
+    card.locator('[data-testid="quality-gate-reason"]').fill("한 번 더 고쳐 본다")
+    card.locator('[data-testid="quality-gate-raise"]').click()
+    expect(page.locator('[data-testid="wait-card-quality_gate"] [data-testid="quality-gate-usage"]')).to_contain_text(
+        "수정 1/1", timeout=120_000
+    )
+    impl = [r for r in stack.http.get(f"/api/cases/{case_id}").json()["runs"] if r["purpose"] == "feature_implementation"]
+    assert len(impl) == 2
+
+    # 끄면(사유) 검증이 이어져 끝난다. 끄는 것은 통과가 아니다 — 게이트의 실패 판정은 기록에 남는다.
+    card = page.locator('[data-testid="wait-card-quality_gate"]')
+    card.locator('[data-testid="quality-gate-reason"]').fill("검증 실행으로 확인한다")
+    card.locator('[data-testid="quality-gate-off"]').click()
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+    gates = stack.http.get(f"/api/cases/{case_id}/quality-gates", params={"task_key": "T2"}).json()["gates"]
+    qg04 = next(g for g in gates if g["gate"] == "QG-04")
+    assert qg04["setting"] == "off" and qg04["latest_run"]["verdict"] == "fail"
+    page.context.close()

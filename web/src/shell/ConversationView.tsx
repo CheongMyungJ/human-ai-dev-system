@@ -219,6 +219,7 @@ export function ConversationView(props: {
   // P4-05. 이월 질문(설계·계획 단계에서 정한다)도 카드다. 답은 그 질문에만 적용된다.
   // 서버가 **최신 의도 버전의** 이월 질문만 준다(`deferred_open_questions`).
   const deferred: IntentQuestion[] = (detail?.preparation?.deferred_open_questions ?? []) as IntentQuestion[]
+  const deferredIds = new Set(deferred.map((q) => q.id))
   const openQuestions: IntentQuestion[] = [
     ...(detail?.intent_state?.open_intent_questions ?? []),
     ...deferred,
@@ -274,6 +275,15 @@ export function ConversationView(props: {
             data-testid="open-decisions"
           >
             결정 사항
+          </button>
+          <button
+            type="button"
+            className={props.panel === 'work' ? 'sh-tab sh-tab-on' : 'sh-tab'}
+            onClick={() => props.onPanel('work')}
+            data-testid="open-work"
+            title="작업 그래프(무엇이 왜 멈췄나)와 실행 상세"
+          >
+            작업
           </button>
           <button type="button" className="sh-link" onClick={() => void archiveToggle()} data-testid="archive-toggle">
             {conv.visibility.archived ? '보관 해제' : '보관'}
@@ -396,6 +406,11 @@ export function ConversationView(props: {
                 question={question}
                 intentVersionId={latestIntent.id}
                 intentRevision={latestIntent.revision}
+                blocks={
+                  deferredIds.has(question.id)
+                    ? detail?.preparation?.work_graph?.question_blocks?.[question.id] ?? []
+                    : null
+                }
                 allowed={conv.send.card_answer.allowed}
                 refusal={conv.send.card_answer.refusal}
                 runnerId={conv.send.runner_connection.runner_id}
@@ -833,7 +848,15 @@ function RequestProgress(props: {
         <ul>
           {request.runs.map((run) => (
             <li key={run.run_id} className="sh-mono">
-              {run.run_id} · {PURPOSE_LABEL[run.purpose ?? ''] ?? run.purpose} · {RUN_EXECUTION_LABEL[run.execution_state]}
+              <button
+                type="button"
+                className="sh-link sh-mono"
+                onClick={() => emit('hads:open-run', { caseId: props.caseId, runId: run.run_id })}
+                data-testid={`request-run-${run.run_id}`}
+              >
+                {run.run_id}
+              </button>{' '}
+              · {PURPOSE_LABEL[run.purpose ?? ''] ?? run.purpose} · {RUN_EXECUTION_LABEL[run.execution_state]}
               {run.outcome ? ` · 결과 ${run.outcome}` : ''}
               {run.not_started_reason ? ` · 시작하지 않음(${run.not_started_reason})` : ''}
               {` · 잔류 ${run.residual_observed ?? run.residual_activity}`}
@@ -878,6 +901,8 @@ function QuestionCard(props: {
   question: IntentQuestion
   intentVersionId: string
   intentRevision: number
+  // UI-05a. 이월 질문이면 이 결정을 기다리는 작업(빈 목록 = 모든 작업을 막는다). 의도 질문이면 null.
+  blocks?: string[] | null
   allowed: boolean
   refusal: string | null
   runnerId: string | null
@@ -944,6 +969,19 @@ function QuestionCard(props: {
         {DECIDE_AT_LABEL[props.question.decide_at] ?? props.question.decide_at} · 의도 v{props.intentRevision}의 질문
         · 답은 이 질문에만 적용된다(동의·권한이 아니다)
       </div>
+      {props.blocks != null && (
+        <div className="sh-muted" data-testid={`question-blocks-${props.question.question_key}`}>
+          {props.blocks.length ? `기다리는 작업: ${props.blocks.join(', ')}` : '기다리는 작업이 지정되지 않아 모든 작업을 막는다'}{' '}
+          <button
+            type="button"
+            className="sh-link"
+            onClick={() => emit('hads:open-panel', { caseId: props.caseId, tab: 'work' })}
+            data-testid={`question-blocks-edit-${props.question.question_key}`}
+          >
+            기다리는 작업 고치기
+          </button>
+        </div>
+      )}
       <textarea
         className="sh-input"
         rows={2}

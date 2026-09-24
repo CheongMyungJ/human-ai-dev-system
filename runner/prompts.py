@@ -901,6 +901,54 @@ def build_task_block(task: dict[str, Any] | None, criteria: list[dict[str, Any]]
     return ("\n".join(lines) + "\n") if lines else ""
 
 
+QUALITY_GATE_TARGET_LINE = "--- 검토할 게이트 대상 ---\n"
+
+#: UI-05a(D-94). 게이트마다 무엇을 보는가(quality-gates.md 1절의 요지). 검토자에게 **목적**을 준다.
+QUALITY_GATE_PURPOSE = {
+    "QG-02": "설계가 요청·기준을 실현할 경로를 갖는가 — 범위 충족, 경계·실패 흐름, 데이터·권한·호환성, 검증 가능성."
+    " 대상은 고정 컨텍스트의 현재 설계안(또는 결합 기록)이다.",
+    "QG-03": "개발계획이 이 작업을 실행 가능하게 정의하는가 — 의존·선행 조건·누락, 필수 기준과 검증 방법의 연결,"
+    " 이월 질문의 시점. 대상은 고정 컨텍스트의 현재 개발계획(또는 결합 기록)의 이 작업이다.",
+    "QG-04": "구현 묶음이 요구대로 동작하는가 — 요구 대비 동작, 누락 경계·오류 처리, 의도 밖 변경·테스트 약화."
+    " 대상은 **작업 디렉터리의 현재 코드**다(읽기만 한다 — 고치지 마라). 필요하면 읽기 전용 명령으로 확인한다.",
+}
+
+
+def build_quality_gate_block(gate: dict[str, Any]) -> str:
+    """UI-05a(D-94). 진행기가 만든 품질 게이트 검토의 **게이트·대상·기준 식별자**. 본문 없음."""
+    lines = [
+        "--- 이 검토의 게이트 ---",
+        f"게이트: {gate.get('gate')} {gate.get('label') or ''}",
+        f"목적: {QUALITY_GATE_PURPOSE.get(str(gate.get('gate')), '')}",
+        f"대상: {gate.get('subject') or '(이름 없음)'}",
+    ]
+    if gate.get("task_key"):
+        lines.append(f"작업: {gate['task_key']} (아래 '이 실행의 작업' 참고)")
+    criteria = gate.get("criteria") or []
+    lines.append(
+        "criterion 에 쓸 기준 식별자: " + (", ".join(criteria) if criteria else "(없음 — 모든 발견은 advisory)")
+    )
+    lines.append("아래 고정 컨텍스트와 지시 원문(동의된 의도)은 대조할 자료다.")
+    return "\n".join(lines) + "\n\n" + QUALITY_GATE_TARGET_LINE
+
+
+def build_quality_findings_block(repair: dict[str, Any] | None) -> str:
+    """UI-05a(D-94). repair 실행에 주는 **품질 게이트의 지적**(구조 목록, 본문 없음)."""
+    if not repair or not repair.get("findings"):
+        return ""
+    lines = [
+        f"\n--- 품질 게이트({repair.get('gate')} {repair.get('label') or ''})의 지적 ---",
+        "이 실행은 아래 지적을 고치는 **수정**이다. 기존 결과를 유지하고 지적된 곳만 고친다. 요청·기준의 범위를"
+        " 넘지 말고, 기준이나 시험을 약하게 바꿔서 지적을 없애지 마라.",
+    ]
+    for f in repair["findings"]:
+        lines.append(
+            f"  - [{f.get('criterion')}/{f.get('severity')}/{f.get('certainty')}]"
+            f" {f.get('target') or ''}: {f.get('summary') or ''}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def build_findings_block(findings: list[dict[str, Any]] | None) -> str:
     """P4-05. 의도 재작성 실행에 주는 **QG-01 의 지적**(구조 목록, 본문 없음)."""
     if not findings:
@@ -1172,6 +1220,8 @@ def build(
     closed_case: bool = False,
     knowledge_index: dict[str, Any] | None = None,
     intent_revision: dict[str, Any] | None = None,
+    quality_gate: dict[str, Any] | None = None,
+    quality_gate_findings: dict[str, Any] | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문 (+ 이 실행의 작업·지적, P4-05).
 
@@ -1258,11 +1308,17 @@ def build(
         head = head.replace(
             "--- 요청 원문 ---\n", build_findings_block(gate_findings) + "\n--- 요청 원문 ---\n"
         )
+    if purpose == "quality_gate_review" and quality_gate:
+        # UI-05a(D-94). 어느 게이트·어느 대상을 보는지. 대상 원문은 고정 컨텍스트(설계·계획)나 작업 디렉터리(구현)에 있다.
+        if QUALITY_GATE_TARGET_LINE not in head:
+            raise ValueError("품질 게이트 지시문의 대상 줄을 찾지 못했다")
+        head = head.replace(QUALITY_GATE_TARGET_LINE, build_quality_gate_block(quality_gate))
     return (
         head
         + build_context_block(context or [])
         + instruction.decode("utf-8", errors="replace")
         + build_task_block(task, criteria)
+        + build_quality_findings_block(quality_gate_findings)
     )
 
 

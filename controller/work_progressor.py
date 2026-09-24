@@ -31,6 +31,7 @@ from controller.repository import ConflictError, ConversationRefused, NotFoundEr
 from domain import work_flow as workflow
 from domain.models import (
     CaseStatus,
+    GateId,
     RequestSettleOutcome,
     RequestState,
     RunPurpose,
@@ -221,11 +222,17 @@ class WorkProgressor:
         for _ in range(MAX_STEPS_PER_ADVANCE):
             state = self.repo.flow_state(case_id)
             step = workflow.next_step(state)
+            # UI-05a(D-94). 명시로 켠 품질 게이트가 이 걸음을 막으면 진행기가 검토·수정을 먼저 돌린다.
+            if step.kind == "run" and step.purpose in workflow.GATED_PURPOSES:
+                gates = self.repo.quality_gate_progress(
+                    case_id, step.purpose, step.task_id if step.task_id != "conversation" else ""
+                )
+                step = workflow.quality_gate_step(step, gates, state) or step
             outcome["steps"].append(step.to_dict())
             if step.kind == "busy":
                 # 결과 보고 **뒤에** 오는 보고(독립 검토)를 기다리는 자리다. 요청을 끝내지 않는다 — 그
                 # 보고가 오면 이어 가거나 사람 대기로 끝낸다.
-                outcome["keep_request"] = step.code == "gate_review_pending"
+                outcome["keep_request"] = step.code in ("gate_review_pending", "quality_gate_review_pending")
                 return outcome
             if step.kind == "idle":
                 return outcome
@@ -440,6 +447,8 @@ class WorkProgressor:
             case_id, step.code, "run_created" if created else "run_exists",
             run_id=run["run_id"], request_id=request_id, detail=step.detail,
         )
+        if created and step.gate:
+            self._link_gate(case_id, run["run_id"], step)
         self.repo.update_progress(
             case_id,
             state=workflow.ProgressState.RUNNING,
@@ -450,6 +459,28 @@ class WorkProgressor:
         )
         self.repo.set_progress_case_status(case_id, CaseStatus.IN_PROGRESS)
         return True
+
+    def _link_gate(self, case_id: str, run_id: str, step: workflow.Step) -> None:
+        """UI-05a(D-94). 검토 실행이면 검증 1회를 열고, repair 실행이면 수정 차수를 예약한다.
+
+        실패해도 실행은 그대로 돈다 — 열지 못한 검증은 기록되지 않고 다음 걸음이 다시 보며, 예약하지 못한
+        차수는 한도 계산에서 빠질 뿐이다(사유는 진행 이력에 남긴다).
+        """
+        gate = step.gate or {}
+        try:
+            gate_id = GateId(gate["gate"])
+            if gate.get("action") == "review":
+                opened = self.repo.open_gate_review(case_id, gate_id, gate.get("task_key") or "", run_id)
+                detail = f"{gate_id.value} 검증 1회를 열었다" if opened else f"{gate_id.value} 검증을 열지 못했다"
+            else:
+                self.repo.start_remediation_attempt(
+                    case_id, gate_id, gate["subject_key"], kind="product_repair",
+                    task_key=gate.get("task_key") or "", author_run_id=run_id,
+                )
+                detail = f"{gate_id.value} 수정 차수를 예약했다"
+        except (ConflictError, NotFoundError, KeyError, ValueError) as exc:
+            detail = f"게이트 기록 연결 실패: {exc}"[:200]
+        self.repo.record_progress_event(case_id, step.code, "recorded", run_id=run_id, detail=detail)
 
     # ------------------------------------------------------------- 멈춤
 
