@@ -108,6 +108,8 @@ export interface Run {
   // P4-10(D-95): 이 실행에 적용한 CLI 제한 시간(초)과 끊긴 이유. `null` 은 기록 없음(옛 실행).
   timeout_seconds?: number | null
   stop_reason?: 'timeout' | 'stop_requested' | null
+  // D-96(P4-10b): 읽기 전용 실행 전후의 작업 트리 대조(자리 이름뿐). `null` 은 관측 기록 없음.
+  read_only_change?: ReadOnlyChange | null
   // P4-04: 무엇을 주려 했고(계획) 무엇을 실제로 읽었는가(영수증). 서버가 도출한 값이다.
   context?: RunContext
 }
@@ -3035,6 +3037,8 @@ export interface ConversationView {
   visibility: { archived: boolean; archived_at: string | null; history: unknown[] }
   // P4-09(e). 취소 기록(행위자·사유·시각). 취소가 아니면 null.
   cancellation?: { by: string | null; reason: string | null; at: string | null; note?: string } | null
+  // D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 — 알림(실패 아님).
+  read_only_changes?: ReadOnlyChangeRow[]
   // P4-09(g). 제목의 출처(default|ai|user, 옛 행은 null)와 가벼운 이력.
   title_source?: 'default' | 'ai' | 'user' | null
   title_set_by?: string | null
@@ -3373,7 +3377,29 @@ export interface ConversationRow extends Case {
   needs_response: boolean
   // UI-04b 보충. 예산 hard 도달로 새 실행이 중지됐는가(서버 도출, R3 판정 그대로).
   budget_stopped?: boolean
+  // D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 수.
+  read_only_changes?: number
   last_activity_at: string | null
+}
+
+// D-96(P4-10b). 읽기 전용 실행의 전후 대조 — 자리 이름뿐이다(경로·본문 없음).
+export type ReadOnlyPlace = 'workspace' | 'original_repo'
+export interface ReadOnlyChange {
+  observed: boolean
+  changed: boolean
+  where: ReadOnlyPlace[]
+  unobserved: ReadOnlyPlace[]
+}
+export interface ReadOnlyChangeRow {
+  run_id: string
+  purpose: string | null
+  task_id: string
+  finished_at: string | null
+  where: ReadOnlyPlace[]
+}
+export const READ_ONLY_PLACE_LABEL: Record<ReadOnlyPlace, string> = {
+  workspace: '작업공간(worktree)',
+  original_repo: '원래 저장소 폴더',
 }
 
 export interface ProjectRepository {

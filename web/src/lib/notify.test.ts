@@ -98,3 +98,14 @@ test('the in-page log keeps only the most recent entries', () => {
   assert.equal(log[0], 5)
   assert.equal(appendLog(log, []), log)
 })
+
+test('a new read-only change is announced once and a steady count is not (D-96)', () => {
+  const away = { caseId: null, visible: false }
+  const before = [row({ id: 'c1', read_only_changes: 0 })]
+  const changed = [row({ id: 'c1', read_only_changes: 1 })]
+  assert.deepEqual(
+    diffConversations(before, changed, 'p1', away).map((n) => [n.kind, n.body.includes('실패로 표시하지 않았다')]),
+    [['read_only_change', true]],
+  )
+  assert.deepEqual(diffConversations(changed, changed, 'p1', away), [])
+})

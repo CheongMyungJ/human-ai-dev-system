@@ -1320,11 +1320,29 @@ class Repository:
             return dict(row), False
         return self.get_run(run_id), True
 
+    @staticmethod
+    def _read_only_change_json(value: dict[str, Any] | None) -> str | None:
+        """D-96. 읽기 전용 변경 보고를 **정해진 모양으로만** 받는다 — 자리 이름뿐이고 경로·본문이 들어올 자리가 없다."""
+        if value is None:
+            return None
+        places = {"workspace", "original_repo"}
+        where = [w for w in value.get("where") or [] if w in places]
+        unobserved = [w for w in value.get("unobserved") or [] if w in places]
+        clean = {
+            "observed": bool(value.get("observed")),
+            "changed": bool(value.get("changed")) and bool(where),
+            "where": where,
+            "unobserved": unobserved,
+        }
+        return json.dumps(clean, ensure_ascii=False)
+
     def get_run(self, run_id: str) -> dict[str, Any]:
         row = self.conn.execute("SELECT * FROM run WHERE run_id = ?", (run_id,)).fetchone()
         if row is None:
             raise NotFoundError(f"run not found: {run_id}")
         run = dict(row)
+        ro = run.pop("read_only_change_json", None)
+        run["read_only_change"] = json.loads(ro) if ro else None
         run["usage"] = json.loads(run.pop("usage_json"))
         effect = run.pop("workspace_effect_json")
         run["workspace_effect"] = json.loads(effect) if effect else None
@@ -1754,6 +1772,7 @@ class Repository:
         knowledge_report: list[dict[str, Any]] | None = None,
         stop_reason: str | None = None,
         timeout_seconds: int | None = None,
+        read_only_change: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """실행 결과를 기록한다.
 
@@ -1790,6 +1809,7 @@ class Repository:
                 raise ConflictError("a run stopped on request cannot report outcome completed")
         if timeout_seconds is not None and (isinstance(timeout_seconds, bool) or int(timeout_seconds) <= 0):
             raise ConflictError("timeout_seconds must be a positive number of seconds")
+        read_only_json = self._read_only_change_json(read_only_change)
         if not_started_reason is not None:
             not_started_reason = NotStartedReason(not_started_reason)
             if (
@@ -1808,6 +1828,9 @@ class Repository:
                 f" {residual_basis!r}; report 'unknown' when it was not confirmed"
             )
         run = self._check_generation(run_id, generation)
+        if read_only_json is not None and run.get("permission") != Permission.READ_ONLY.value:
+            # D-96. 읽기 전용 실행만의 보고다. 쓰기 실행의 변경은 작업공간 효과(P3-03)가 적는다.
+            raise ConflictError("a read-only change report belongs only to a read-only run")
         if interpretation is not None and (
             run.get("purpose") != RunPurpose.DISCUSSION_REPLY.value or not run.get("request_id")
         ):
@@ -1867,7 +1890,7 @@ class Repository:
                 " workspace_effect_json = ?, residual_activity = ?, observed_tool_version = ?,"
                 " finished_at = ?, not_started_reason = ?, context_freshness_json = ?,"
                 " criteria_report_json = ?, knowledge_report_json = ?, stop_reason = ?,"
-                " timeout_seconds = COALESCE(?, timeout_seconds)"
+                " timeout_seconds = COALESCE(?, timeout_seconds), read_only_change_json = ?"
                 " WHERE run_id = ?",
                 (
                     RunStatus.FINISHED.value,
@@ -1887,6 +1910,7 @@ class Repository:
                     knowledge_json,
                     stop_reason,
                     int(timeout_seconds) if timeout_seconds is not None else None,
+                    read_only_json,
                     run_id,
                 ),
             )
@@ -1922,6 +1946,16 @@ class Repository:
                     reporter,
                     finished_at,
                 )
+        if read_only_change and read_only_change.get("changed"):
+            # D-96. **알리기만 한다** — 결과·판정은 그대로다. 진행 이력 한 줄(대화 조회·목록 수·알림이 같은 값을 본다).
+            self.record_progress_event(
+                run["case_id"], "read_only_changed", "noticed", run_id=run_id,
+                detail=(
+                    f"읽기 전용 실행({run.get('purpose')}) 동안 작업 폴더가 바뀌었다: "
+                    + ", ".join(read_only_change.get("where") or [])
+                    + " — 실패로 표시하지 않았다"
+                )[:200],
+            )
         # UI-01. 끝난 논의 응답은 **AI 메시지로 대화에 붙는다.** 결과 기록과 다른
         # 트랜잭션인 이유는 결과가 먼저 확정돼야 하기 때문이다 — 메시지를 붙이다 실패해도
         # 실행 결과·정산은 남는다. 재전송은 실행당 하나 규칙이 막는다.
@@ -13906,6 +13940,8 @@ class Repository:
             "closure": self.get_closure(case_id),
             # P4-09(e). 취소 기록(행위자·사유·시각). 취소가 아니면 None.
             "cancellation": self.cancellation_view(case_id),
+            # D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 — 알림(실패 아님).
+            "read_only_changes": self.read_only_changes(case_id),
             # P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식. 요약·키·상태뿐이다.
             "knowledge_registrations": self.knowledge_registrations_view(case_id),
             # UI-04c(D-86). 업무 단계의 목적·유형 개정 이력(요약 — 대응 목록은 개정 조회에).
@@ -13938,6 +13974,8 @@ class Repository:
         # 배지가 쓴다. `budget_stop` 은 hard 한도가 없으면 소비를 계산하지 않는다(기본 무제한이라 대부분 0 비용).
         # 판정은 R3 그대로이며 여기서는 값을 실을 뿐이다.
         case["budget_stopped"] = bool(self.budget_stop(case["id"])["stopped"])
+        # D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 수 — 늘면 알린다(실패 아님).
+        case["read_only_changes"] = len(self.read_only_changes(case["id"]))
         # UI-03. 목록을 **마지막 활동** 순으로 보이려고 싣는다. 메시지가 없으면 Case 의 갱신 시각.
         last = self.conn.execute(
             "SELECT MAX(created_at) AS t FROM conversation_message WHERE case_id = ?",
@@ -14605,6 +14643,28 @@ class Repository:
                 (1 if applied else 0, refusal, utc_now(), run_id),
             )
         return self.get_interpretation(run_id)
+
+    def read_only_changes(self, case_id: str) -> list[dict[str, Any]]:
+        """D-96(P4-10b). 이 대화의 읽기 전용 실행 중 **도는 동안 작업 폴더가 바뀐** 것(오래된 순). 누가 바꿨는지는 모른다."""
+        rows = self.conn.execute(
+            "SELECT run_id, purpose, task_id, finished_at, read_only_change_json FROM run"
+            " WHERE case_id = ? AND read_only_change_json IS NOT NULL ORDER BY created_at",
+            (case_id,),
+        ).fetchall()
+        out = []
+        for row in rows:
+            change = json.loads(row["read_only_change_json"])
+            if change.get("changed"):
+                out.append(
+                    {
+                        "run_id": row["run_id"],
+                        "purpose": row["purpose"],
+                        "task_id": row["task_id"],
+                        "finished_at": row["finished_at"],
+                        "where": change.get("where") or [],
+                    }
+                )
+        return out
 
     def project_attention(self, project_id: str) -> dict[str, int]:
         """다른 프로젝트의 **주의 상태**(D-68·D-82). 선택기에 표시하며 자동으로 옮기지 않는다.

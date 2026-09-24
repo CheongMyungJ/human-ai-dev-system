@@ -43,30 +43,47 @@ from runner import cli_events, process_tree
 #: (p4/evidence/P4-ENV-results.md), 폴더별 ACL 우회는 도구가 늘 때마다 같은 실패를 겪게 한다. 기능이 동작하는
 #: 것이 우선이며 읽기 전용 실행만 샌드박스를 유지한다. 받아들인 손실(사용자 수용): 쓰기 실행은 사용자 계정
 #: 권한으로 돌아 worktree 밖·자격증명에 닿고 AI 의 직접 push 를 막지 못한다 — 제품의 게시 규칙(P5)은 그대로다.
+#:
+#: **D-96(사용자 결정 2026-09-25): 권한 확인은 전부 건너뛴다 — 읽기 전용은 허용 도구로 제한한다.** Codex 는 읽기·쓰기 모두
+#: `--dangerously-bypass-approvals-and-sandbox`(샌드박스·승인 없음 — `danger-full-access` 만으로는 파괴적 명령의 승인 검사가 남아
+#: `blocked by policy` 로 거부됐다, 이슈 #8 참고). Codex 에는 허용 도구 목록이 없어(셸이 기본 도구) 읽기 전용을 막지 못한다 — Runner 가
+#: 실행 전후 작업 트리를 대조해 바뀌었으면 알린다(실패로 표시하지 않는다, `agent._execute_with_cli`). Claude 는 둘 다
+#: `--dangerously-skip-permissions` 이고 읽기 전용은 `--tools Read,Grep,Glob` 로 쓰기·실행 도구가 없다.
 PERMISSION_MAP: dict[str, dict[str, list[str]]] = {
     "codex": {
-        Permission.READ_ONLY.value: ["--sandbox", "read-only"],
-        Permission.WORKSPACE_WRITE.value: ["--sandbox", "danger-full-access"],
+        Permission.READ_ONLY.value: ["--dangerously-bypass-approvals-and-sandbox"],
+        Permission.WORKSPACE_WRITE.value: ["--dangerously-bypass-approvals-and-sandbox"],
     },
     "claude": {
         # `--tools` 제한은 내장 도구만 줄이고 MCP 서버 도구는 그대로 남는다(P1-02 #9·#10).
         # 사용자 설정의 MCP 서버가 허용하지 않은 외부 쓰기를 하지 못하도록
-        # `--strict-mcp-config` 를 함께 준다.
+        # `--strict-mcp-config` 를 함께 준다(D-91 의 상세 설계 선택 그대로 — 풀면 외부 게시 경로가 하나 더 열린다).
         Permission.READ_ONLY.value: [
-            "--permission-mode", "manual",
+            "--dangerously-skip-permissions",
             "--permission-prompts", "none",
             "--strict-mcp-config",
             "--tools", "Read,Grep,Glob",
         ],
-        # D-91. 권한 확인을 건너뛴다(OS 샌드박스는 Windows 에 없다). `--strict-mcp-config` 는 남긴다 — 로컬
-        # 환경이 아니라 사용자 설정의 외부 서비스 MCP 도구를 막는 것이라 이번 문제와 무관하고, 풀면 외부
-        # 게시 경로가 하나 더 열린다(이슈 #3 "남는 제약", plan 의 상세 설계 선택).
         Permission.WORKSPACE_WRITE.value: [
-            "--permission-mode", "bypassPermissions",
+            "--dangerously-skip-permissions",
             "--permission-prompts", "none",
             "--strict-mcp-config",
         ],
     },
+}
+
+#: D-96. 읽기 전용 실행의 강제 방식(능력 보고의 근거 문구).
+READ_ONLY_ENFORCEMENT: dict[str, tuple[CapabilityState, str]] = {
+    "codex": (
+        CapabilityState.UNSUPPORTED,
+        "D-96(2026-09-25): 읽기 전용도 샌드박스·승인 없이 돈다 — 허용 도구 목록이 없어 막지 못하고, 실행 전후 작업 트리"
+        " 대조로 바뀌었으면 알린다(실패로 표시하지 않음)",
+    ),
+    "claude": (
+        CapabilityState.DOC_ONLY,
+        "D-96(2026-09-25): --tools Read,Grep,Glob 로 쓰기·실행 도구가 없다(권한 확인은 건너뜀) — 실제 CLI 로 실증하지 않았다."
+        " 실행 전후 작업 트리 대조로 바뀌었으면 알린다",
+    ),
 }
 
 #: D-91. 쓰기 실행에 CLI 샌드박스가 없다는 사실의 근거 문구(능력 보고·화면이 그대로 보인다).
@@ -195,7 +212,7 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
         return rows
 
     for permission, state, source in (
-        (Permission.READ_ONLY, CapabilityState.VERIFIED, source_p102),
+        (Permission.READ_ONLY, CapabilityState.VERIFIED, READ_ONLY_ENFORCEMENT[tool_id][1]),
         # D-91. 쓰기 권한은 매핑돼 있지만 그 매핑은 **샌드박스가 아니다** — 근거가 그 사실을 말한다.
         (Permission.WORKSPACE_WRITE, CapabilityState.VERIFIED, WRITE_SANDBOX_NOTE),
         (Permission.EXPLICIT_ESCALATED, CapabilityState.UNKNOWN, "확인하지 않음"),
@@ -212,6 +229,8 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
     rows += [
         # D-91. **막지 못하는 것을 막는다고 적지 않는다.** 쓰기 실행의 CLI 샌드박스는 없다.
         cap("write_sandbox", CapabilityState.UNSUPPORTED, WRITE_SANDBOX_NOTE),
+        # D-96. 읽기 전용이 무엇으로 지켜지는가 — Codex 는 막지 못하고 감지·알림만 한다.
+        cap("read_only_enforcement", *READ_ONLY_ENFORCEMENT[tool_id]),
         cap("structured_events", CapabilityState.VERIFIED, source_p102),
         cap("session_identity", CapabilityState.VERIFIED, source_p102),
         cap("tool_boundary_observed", CapabilityState.VERIFIED, source_p102),
@@ -291,6 +310,8 @@ class ExecutionOutput:
     stop_reason: str | None = None
     #: P4-10(D-95). 이 호출에 실제로 적용한 제한 시간(초). 결과 보고에 실린다.
     timeout_seconds: float | None = None
+    #: D-96. 읽기 전용 실행 전후의 작업 트리 대조(`{observed, changed, where, unobserved}`). **Runner 가 채운다.** 경로·본문 없음.
+    read_only_change: dict[str, Any] | None = None
 
 
 #: P4-10(D-95, 사용자 결정 2026-09-24). 배정이 제한 시간을 싣지 않을 때(옛 제어부)의 기본값 — 모든 실행 1시간.

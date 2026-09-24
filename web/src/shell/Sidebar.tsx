@@ -41,6 +41,8 @@ function rowBadges(row: ConversationRow): { text: string; tone: string }[] {
   if (row.needs_response) badges.push({ text: '답변 필요', tone: 'attention' })
   // UI-04b 보충. 예산 hard 도달로 새 실행이 중지됨(서버 도출).
   if (row.budget_stopped) badges.push({ text: '예산 도달', tone: 'warn' })
+  // D-96(P4-10b). 읽기 전용 실행이 폴더를 바꿨다(알림 — 실패 아님).
+  if (row.read_only_changes) badges.push({ text: `읽기 전용 변경 ${row.read_only_changes}`, tone: 'warn' })
   // P4-05. 진행 상태(서버 도출). 확인 필요·막힘·멈춤만 보인다 — 진행 중은 "처리 중"이 이미 말한다.
   if (row.progress_state === 'waiting_human' && !row.needs_response) {
     badges.push({ text: '확인 필요', tone: 'attention' })

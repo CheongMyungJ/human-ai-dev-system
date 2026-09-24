@@ -342,6 +342,8 @@ class ResultIn(BaseModel):
     #: 시간 초과는 결과가 아니라 이유다 — 결과는 `unknown` 그대로다.
     stop_reason: Literal["timeout", "stop_requested"] | None = None
     timeout_seconds: int | None = Field(default=None, gt=0)
+    #: D-96(P4-10b). 읽기 전용 실행 전후의 작업 트리 대조(`{observed, changed, where, unobserved}`). 사실만 — 결과를 바꾸지 않는다.
+    read_only_change: dict[str, Any] | None = None
 
 
 class ExecutingIn(BaseModel):
@@ -947,6 +949,7 @@ def runner_result(request: Request, run_id: str, payload: ResultIn) -> dict[str,
             knowledge_report=payload.knowledge_report,
             stop_reason=payload.stop_reason,
             timeout_seconds=payload.timeout_seconds,
+            read_only_change=payload.read_only_change,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)

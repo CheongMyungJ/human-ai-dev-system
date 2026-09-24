@@ -25,6 +25,8 @@
     HADS_FAKE_GATE_FAIL      (UI-05a) 품질 게이트(QG-02~07) 검토가 기준 C-01 의 필수·확정 지적 하나를 낸다(실패)
     HADS_FAKE_SLOW_VERIFY=<초> (P4-10) 그 작업 디렉터리의 **첫** 검증 실행만 그만큼 잔다(손자 프로세스와 함께) — 짧은 제한
                              시간에 걸리게 한다. 다시 시도한 검증은 자지 않는다(표지 파일은 임시 폴더에 둔다)
+    HADS_FAKE_RO_WRITE       (P4-10b, D-96) 논의 응답(읽기 전용 실행)이 작업 디렉터리에 `RO-STRAY.txt` 를 쓴다 — 권한 확인을
+                             건너뛰는 CLI 가 읽기 전용을 어기는 경우. Runner 의 전후 대조가 알린다
     HADS_FAKE_VERIFY_NOT_MET (P4-10) 검증이 C-02 를 명령·요약과 함께 `not_met` 으로 보고한다 — 작업 디렉터리에
                              `REMEDIATED.txt` 가 생기기 전까지. 미충족 블록을 받은 구현(수정 사이클)이 그 파일을 쓴다
 
@@ -159,6 +161,14 @@ def work_stage_reply(prompt: str) -> str | None:
     return None
 
 
+def is_discussion(prompt: str) -> bool:
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+    from runner import prompts as templates
+
+    return prompt[:60].startswith(templates.DISCUSSION_REPLY_PROMPT[:40])
+
+
 def is_verification(prompt: str) -> bool:
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
@@ -232,6 +242,9 @@ def main() -> int:
             emit({"type": "item.started", "item": {"id": "item_3", "type": "command_execution", "command": "sleep"}})
             time.sleep(seconds)
             child.wait()
+
+    if "HADS_FAKE_RO_WRITE" in prompt and is_discussion(prompt):
+        Path("RO-STRAY.txt").write_text("a read-only run wrote this\n", encoding="utf-8")
 
     if "HADS_FAKE_LEAVE_CHILD" in prompt:
         child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])

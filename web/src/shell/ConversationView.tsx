@@ -14,6 +14,7 @@ import {
   GATE_VERDICT_LABEL,
   INTERPRETATION_REFUSAL_LABEL,
   PROFILE_LABEL,
+  READ_ONLY_PLACE_LABEL,
   RECEIPT_LABEL,
   REQUEST_STATE_LABEL,
   RUN_EXECUTION_LABEL,
@@ -294,6 +295,23 @@ export function ConversationView(props: {
       <StageBanner conv={conv} />
       <ProgressBanner conv={conv} detail={detail} caseId={caseId} projectId={props.project.id} onChanged={props.onChanged} />
       <PredecessorLine relations={conv.relations ?? []} projectId={props.project.id} />
+      {(conv.read_only_changes ?? []).length > 0 && (
+        <div className="sh-banner sh-warn" data-testid="read-only-change-banner">
+          읽기 전용 실행 동안 작업 폴더가 바뀌었다 — 실패로 표시하지 않았다(D-96: CLI 가 읽기 전용을 막지 못한다). 누가 바꿨는지는
+          모른다(같은 폴더의 다른 실행·사람의 편집도 잡힌다).{' '}
+          {(conv.read_only_changes ?? []).map((c) => (
+            <button
+              key={c.run_id}
+              type="button"
+              className="sh-link sh-mono"
+              onClick={() => emit('hads:open-run', { caseId, runId: c.run_id })}
+              data-testid={`read-only-change-${c.run_id}`}
+            >
+              {c.run_id} ({c.where.map((w) => READ_ONLY_PLACE_LABEL[w] ?? w).join(', ')})
+            </button>
+          ))}
+        </div>
+      )}
       {conv.send.runner_connection.state !== 'connected' &&
         conv.send.runner_connection.state !== 'not_determined' && (
           <div className="sh-banner sh-warn" data-testid="pc-disconnected">

@@ -379,6 +379,9 @@ class FakeCliExecutor:
         #: timeout`·받은 제한으로 끝난다(`lambda call: ...`, 인자는 `calls` 의 항목). 실제로 끊기는 모습은
         #: `tests/test_run_timeout.py` 가 실제 실행기·가짜 codex 로 본다.
         self.times_out: Any = None
+        #: D-96(P4-10b). **읽기 전용 실행인데도** 작업 디렉터리에 쓸 파일 {상대경로: 내용} — 권한 확인을 건너뛰는 CLI 가
+        #: 읽기 전용을 어기는 경우를 흉내 낸다(Runner 의 전후 대조가 그것을 알린다). 기본은 비어 있다.
+        self.read_only_write_files: dict[str, str] = {}
         self.calls: list[dict[str, Any]] = []
 
     def _session_ref(self, run_id: str) -> str:
@@ -463,6 +466,11 @@ class FakeCliExecutor:
         # 기준 질문이 시험마다 튀어나온다 — 실제 읽기 전용 CLI 가 하지 않는 일이다(시험 도구의 특성).
         if permission is not Permission.READ_ONLY and not timed_out:
             for rel, body in self.write_files.items():
+                target = Path(workspace) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(body, encoding="utf-8")
+        if permission is Permission.READ_ONLY:
+            for rel, body in self.read_only_write_files.items():
                 target = Path(workspace) / rel
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(body, encoding="utf-8")

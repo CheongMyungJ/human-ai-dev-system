@@ -790,6 +790,21 @@ function RunDetail(props: {
               {run.not_started_reason && (
                 <li className="sh-plain-row sh-warn">CLI 를 부르기 전에 멈췄다 — {run.not_started_reason} · 소비 0 으로 정산</li>
               )}
+              {run.read_only_change && (
+                <li
+                  className={`sh-plain-row${run.read_only_change.changed ? ' sh-warn' : ''}`}
+                  data-testid="run-detail-read-only"
+                  data-changed={String(run.read_only_change.changed)}
+                >
+                  읽기 전용 실행 전후 대조:{' '}
+                  {run.read_only_change.changed
+                    ? `바뀜 — ${run.read_only_change.where.join(', ')} (실패로 표시하지 않았다, D-96)`
+                    : run.read_only_change.observed
+                      ? '바뀌지 않음'
+                      : '관측하지 못함(git 저장소가 아니거나 실패)'}
+                  {run.read_only_change.unobserved.length > 0 && ` · 관측 못 함 ${run.read_only_change.unobserved.join(', ')}`}
+                </li>
+              )}
               <li className="sh-plain-row" data-testid="run-detail-timeout" data-stop-reason={run.stop_reason ?? ''}>
                 제한 시간 {formatTimeout(run.timeout_seconds)}
                 {run.stop_reason ? ` · ${stopReasonText(run.stop_reason, run.timeout_seconds)}` : ''}

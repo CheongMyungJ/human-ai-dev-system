@@ -1996,3 +1996,30 @@ def test_a_not_met_verification_is_fixed_and_reverified_by_the_progressor_and_th
     assert runs2 == ["T1", "T2", "FIX1", "REVERIFY1"]
     page.context.close()
     page2.context.close()
+
+
+def test_a_read_only_run_that_changes_the_folder_shows_a_banner_not_a_failure(stack):
+    """P4-PLAN-10b AC-6 (D-96) — 권한 확인을 건너뛰는 CLI 의 읽기 전용 실행(논의 응답)이 원래 저장소에 파일을 쓰면, 응답은 그대로
+    대화에 붙고(실패 아님) 대화 화면에 배너가 뜬다. 배너에서 그 실행의 상세로 가면 "바뀜" 이 보인다. 목록 행에도 배지가 있다.
+    """
+    project = stack.project("읽기 전용 변경")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_RO_WRITE 이 저장소 구조를 설명해줘")
+    expect(page.locator('article[data-author="assistant"]').last).to_contain_text("가짜 응답입니다", timeout=60_000)
+    banner = page.locator('[data-testid="read-only-change-banner"]')
+    expect(banner).to_be_visible(timeout=30_000)
+    expect(banner).to_contain_text("실패로 표시하지 않았다")
+    [run] = [r for r in stack.http.get(f"/api/cases/{case_id}").json()["runs"] if r["purpose"] == "discussion_reply"]
+    assert run["outcome"] == "completed" and run["read_only_change"]["changed"] is True
+    assert run["read_only_change"]["where"] == ["original_repo"]
+    rows = stack.http.get(f"/api/projects/{project['id']}/conversations").json()
+    row = next(r for r in (rows["conversations"] if isinstance(rows, dict) else rows) if r["id"] == case_id)
+    assert row["read_only_changes"] == 1
+    banner.locator(f'[data-testid="read-only-change-{run["run_id"]}"]').click()
+    detail = page.locator('[data-testid="run-detail"]')
+    expect(detail).to_have_attribute("data-run-id", run["run_id"], timeout=20_000)
+    expect(detail.locator('[data-testid="run-detail-read-only"]')).to_have_attribute("data-changed", "true")
+    page.context.close()

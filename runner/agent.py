@@ -636,6 +636,9 @@ class RunnerAgent:
         # P4-06. 등록 보고. 원장에도 남아 재전송이 같은 보고(같은 원문 참조)를 보낸다.
         if knowledge_report:
             result_payload["knowledge_report"] = knowledge_report
+        # D-96. 읽기 전용 실행의 전후 대조 — 사실만(경로·본문 없음). 결과를 바꾸지 않는다.
+        if getattr(output, "read_only_change", None) is not None:
+            result_payload["read_only_change"] = output.read_only_change
         # P4-10(이슈 #8, D-95). 끊긴 이유와 적용한 제한 시간 — 제어부가 시간 초과를 실패와 나눠 적는다.
         if getattr(output, "stop_reason", None):
             result_payload["stop_reason"] = output.stop_reason
@@ -750,6 +753,17 @@ class RunnerAgent:
                 {"head": before.head, "entries": list(before.entries), "digest": before.digest},
             )
 
+        # D-96. **읽기 전용 실행의 전후 대조.** 권한 확인을 건너뛰는 CLI(특히 허용 도구 목록이 없는 Codex)는 읽기 전용을
+        # 막지 못한다 — 도는 폴더(작업공간 또는 원래 저장소)와, 작업공간이 있으면 원래 저장소도 본다. git 저장소가 아니거나
+        # 관측이 실패하면 `unobserved` 다(바뀌지 않음으로 읽지 않는다).
+        read_only_places: list[tuple[str, Path]] = []
+        read_only_before: dict[str, Any] | None = None
+        if permission is Permission.READ_ONLY:
+            read_only_places = [("workspace" if space else "original_repo", work_dir)]
+            if space and repo_dir is not None:
+                read_only_places.append(("original_repo", repo_dir))
+            read_only_before = _observe_places(read_only_places)
+
         run_id = assignment["run_id"]
         with self._inflight_lock:
             entry = self._inflight.get(run_id)
@@ -776,6 +790,9 @@ class RunnerAgent:
             if lock is not None:
                 lock.release()
 
+        if read_only_before is not None:
+            # D-96. 읽기 전용인데 막지 못한 실행 — 바뀌었으면 사실만 올려 사람에게 알린다(실패로 바꾸지 않는다).
+            output.read_only_change = _compare_read_only(read_only_before, _observe_places(read_only_places))
         if watching:
             after = workspace.observe(work_dir)
             if repo_dir is not None:
@@ -2091,6 +2108,29 @@ class RunnerAgent:
                 print(f"[runner] control tick failed: {exc!r}", flush=True)
             self._shutdown.wait(interval)
         worker.join(timeout=5)
+
+
+def _observe_places(places: list[tuple[str, Path]]) -> dict[str, Any]:
+    """D-96. 자리마다 작업 트리 지문. git 저장소가 아니거나 관측이 실패하면 `None`(모른다)."""
+    out: dict[str, Any] = {}
+    for name, path in places:
+        try:
+            out[name] = workspace.observe(path).digest if workspace.is_git_repo(path) else None
+        except Exception:  # noqa: BLE001 — 관측 실패는 "모른다" 이지 실행 실패가 아니다
+            out[name] = None
+    return out
+
+
+def _compare_read_only(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    """D-96. 전후 지문 대조 — 사실만(`observed`·`changed`·`where`·`unobserved`). 경로·본문은 여기 남지 않는다."""
+    changed = [n for n in before if before[n] is not None and after.get(n) is not None and before[n] != after[n]]
+    unobserved = [n for n in before if before[n] is None or after.get(n) is None]
+    return {
+        "observed": len(unobserved) < len(before),
+        "changed": bool(changed),
+        "where": changed,
+        "unobserved": unobserved,
+    }
 
 
 def main() -> None:

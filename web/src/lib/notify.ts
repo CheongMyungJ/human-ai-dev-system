@@ -13,6 +13,7 @@ export type NoticeKind =
   | 'blocked'
   | 'request_unknown'
   | 'budget_stop'
+  | 'read_only_change'
   | 'done'
   | 'project_attention'
 
@@ -25,6 +26,8 @@ export interface NoticeRow {
   current_request_state?: string | null
   // 예산 hard 도달로 새 실행이 중지됐는가(UI-04b 보충, 사용자 결정 2026-09-24).
   budget_stopped?: boolean
+  // D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀐 실행 수 — 늘면 알린다(실패가 아니다).
+  read_only_changes?: number
 }
 
 export interface NoticeProject {
@@ -56,6 +59,7 @@ export const NOTICE_LABEL: Record<NoticeKind, string> = {
   blocked: '막힘',
   request_unknown: '실행 상태 확인 필요',
   budget_stop: '예산 도달',
+  read_only_change: '읽기 전용 실행이 폴더를 바꿈',
   done: '완료',
   project_attention: '다른 프로젝트의 주의',
 }
@@ -113,6 +117,10 @@ export function diffConversations(
     // 예산 hard 도달 — 새 실행이 중지됐다. 한도를 올리면 풀리고, 다시 닿으면 다시 알린다.
     if (row.budget_stopped === true && !(old?.budget_stopped ?? false)) {
       push(row, 'budget_stop', '예산 한도에 닿아 새 실행이 중지됐다 — 한도 조정은 상세 설정에서')
+    }
+    // D-96(P4-10b). 읽기 전용 실행 동안 작업 폴더가 바뀌었다 — 알리기만 한다(실행은 실패가 아니다).
+    if ((row.read_only_changes ?? 0) > (old?.read_only_changes ?? 0)) {
+      push(row, 'read_only_change', '읽기 전용 실행 동안 작업 폴더가 바뀌었다 — 실패로 표시하지 않았다. 대화에서 확인한다')
     }
     const closedNow = CLOSED.has(row.status)
     if ((closedNow && !wasClosed) || (row.progress_state === 'done' && wasProgress !== 'done' && !closedNow)) {

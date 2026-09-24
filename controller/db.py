@@ -616,6 +616,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         "TEXT CHECK (stop_reason IS NULL OR stop_reason IN ('timeout', 'stop_requested'))",
     )
     _migrate_v29_progress_limit_setting(conn)
+    #      `run.read_only_change_json`(D-96, P4-10b) 읽기 전용 실행 전후의 작업 트리 대조(사실만 — 경로·본문 없음). 옛 실행은 NULL.
+    _add_column_if_missing(
+        conn,
+        "run",
+        "read_only_change_json",
+        "TEXT CHECK (read_only_change_json IS NULL OR length(read_only_change_json) <= 500)",
+    )
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
