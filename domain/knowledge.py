@@ -382,6 +382,177 @@ def adoption_blocked(findings: Iterable[AdoptionFinding]) -> list[str]:
     return [f.code for f in findings if f.blocking]
 
 
+# ------------------------------------------------------------------ 자동 활성 조건 (P4-07b)
+
+
+@dataclass(frozen=True)
+class AutoReferenceFinding:
+    """참고 후보의 **자동 활성 조건** 하나(P4-07b). 전부 `met` 이어야 "조건 충족"이다.
+
+    사용자 결정(2026-09-24): 반자동 — 시스템은 충족을 **계산해 표시**하고, 활성화는 사람이 한 번에 한다.
+    이 값은 판정이 아니라 표시이며 사람의 클릭 없이 활성화하지 않는다.
+    """
+
+    code: str
+    met: bool
+    detail: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"code": self.code, "met": self.met, "detail": self.detail}
+
+
+#: 자동 활성 조건 코드(P4-PLAN-07b 3.1). 순서대로 표시한다.
+AUTO_CANDIDATE = "candidate"
+AUTO_REFERENCE = "reference"
+AUTO_OBSERVATIONAL_KIND = "observational_kind"
+AUTO_TWO_RUNS = "two_runs"
+AUTO_VERIFIED_RUN = "verified_run"
+AUTO_OBSERVED_REPOSITORY = "observed_repository"
+AUTO_NO_CONTRADICTION = "no_contradiction"
+AUTO_ADOPTION_CLEAR = "adoption_clear"
+
+AUTO_REFERENCE_CODES: tuple[str, ...] = (
+    AUTO_CANDIDATE,
+    AUTO_REFERENCE,
+    AUTO_OBSERVATIONAL_KIND,
+    AUTO_TWO_RUNS,
+    AUTO_VERIFIED_RUN,
+    AUTO_OBSERVED_REPOSITORY,
+    AUTO_NO_CONTRADICTION,
+    AUTO_ADOPTION_CLEAR,
+)
+
+#: 조건 (2): 관찰·운영 팁의 종류. 결정·제약은 사람이 정한다(project-knowledge 2절).
+AUTO_REFERENCE_KINDS: frozenset[str] = frozenset(
+    {KnowledgeKind.OPERATION.value, KnowledgeKind.KNOWN_PROBLEM.value}
+)
+
+#: 조건 (3b): 근거 실행 중 하나는 이 목적이고 종료 코드 0 명령이 있어야 한다. 명령·종료 코드는 AI 자기보고다.
+AUTO_REFERENCE_PURPOSES: frozenset[str] = frozenset(
+    {RunPurpose.VERIFICATION_RUN.value, RunPurpose.LIMITED_ANALYSIS.value}
+)
+
+#: 한 번에 활성화의 고정 사유. 사람이 눌렀다는 사실은 `adoption.by` 에 남는다.
+AUTO_REFERENCE_REASON = "자동 활성 조건 충족 — 사람이 한 번에 활성화"
+
+
+def auto_reference_check(
+    candidate: dict[str, Any],
+    *,
+    evidence_runs: Iterable[dict[str, Any]],
+    contradicting_candidates: int,
+    open_conflicts: int,
+    adoption_blocked_codes: Iterable[str],
+) -> list[AutoReferenceFinding]:
+    """참고 후보의 자동 활성 조건 여덟을 본다. 순수 규칙이다 — 여기에는 DB 도 HTTP 도 없다.
+
+    `candidate` 는 후보의 현재 버전(`state`·`obligation`·`kind`·`scope_kind`·`repository_id`·`relation`·`observed`).
+    `evidence_runs` 는 **서로 다른** 근거 실행(`run_id`·`purpose`·`ok_command` — 종료 코드 0 명령이 있는가)이며
+    호출자가 실행 id 로 중복을 뺀다. `contradicting_candidates` 는 이 항목을 대상으로 한 `contradicts` 후보 수,
+    `adoption_blocked_codes` 는 QG-08 채택 확인의 막는 코드다.
+
+    **계산만 한다.** 전부 충족이어도 활성화는 사람이 한다(사용자 결정 2026-09-24: 반자동).
+    """
+    runs = list(evidence_runs)
+    out: list[AutoReferenceFinding] = []
+    state = candidate.get("state")
+    out.append(
+        AutoReferenceFinding(
+            AUTO_CANDIDATE,
+            state == KnowledgeState.CANDIDATE.value,
+            "후보다" if state == KnowledgeState.CANDIDATE.value else f"후보가 아니다: {state}",
+        )
+    )
+    obligation = candidate.get("obligation")
+    out.append(
+        AutoReferenceFinding(
+            AUTO_REFERENCE,
+            obligation == KnowledgeObligation.REFERENCE.value,
+            "효력 참고" if obligation == KnowledgeObligation.REFERENCE.value else "필수 제안은 사람이 정한다",
+        )
+    )
+    kind = candidate.get("kind")
+    out.append(
+        AutoReferenceFinding(
+            AUTO_OBSERVATIONAL_KIND,
+            kind in AUTO_REFERENCE_KINDS,
+            f"종류 {kind}(관찰·운영 팁)" if kind in AUTO_REFERENCE_KINDS else f"종류 {kind} — 결정·제약은 사람이 정한다",
+        )
+    )
+    out.append(
+        AutoReferenceFinding(
+            AUTO_TWO_RUNS,
+            len(runs) >= 2,
+            f"근거 실행 {len(runs)}건" + ("" if len(runs) >= 2 else " — 서로 다른 실행 둘 이상 필요"),
+        )
+    )
+    verified = [
+        r for r in runs if r.get("purpose") in AUTO_REFERENCE_PURPOSES and bool(r.get("ok_command"))
+    ]
+    out.append(
+        AutoReferenceFinding(
+            AUTO_VERIFIED_RUN,
+            bool(verified),
+            (
+                f"종료 코드 0 명령이 있는 검증·분석 실행 {len(verified)}건(자기보고)"
+                if verified
+                else "종료 코드 0 명령이 있는 검증·분석 실행이 없다"
+            ),
+        )
+    )
+    observed = candidate.get("observed") or {}
+    observed_repository = observed.get("repository_id")
+    if not observed_repository:
+        repository_ok = False
+        repository_detail = "관측 문맥이 없다(논의 응답의 제안) — 관측 저장소를 모른다"
+    elif candidate.get("scope_kind") != ScopeKind.REPOSITORY.value:
+        repository_ok = False
+        repository_detail = "프로젝트 범위다 — 관측 저장소로 좁혀지지 않았다"
+    elif candidate.get("repository_id") != observed_repository:
+        repository_ok = False
+        repository_detail = "관측한 저장소와 다른 저장소 범위다"
+    else:
+        repository_ok = True
+        repository_detail = f"관측한 저장소 {observed.get('repository_name') or observed_repository} 범위"
+    out.append(AutoReferenceFinding(AUTO_OBSERVED_REPOSITORY, repository_ok, repository_detail))
+    problems: list[str] = []
+    if candidate.get("relation") == Relation.CONTRADICTS.value:
+        problems.append("반증 관계의 후보다")
+    if contradicting_candidates:
+        problems.append(f"이 항목을 반증하는 후보 {contradicting_candidates}건")
+    if open_conflicts:
+        problems.append(f"열린 충돌 {open_conflicts}건")
+    out.append(
+        AutoReferenceFinding(
+            AUTO_NO_CONTRADICTION, not problems, "반증·충돌 없음" if not problems else " · ".join(problems)
+        )
+    )
+    blocked = list(adoption_blocked_codes)
+    out.append(
+        AutoReferenceFinding(
+            AUTO_ADOPTION_CLEAR,
+            not blocked,
+            "채택 확인에 막는 항목 없음" if not blocked else "채택 확인이 막는다: " + ", ".join(blocked),
+        )
+    )
+    return out
+
+
+def auto_reference_ready(findings: Iterable[AutoReferenceFinding]) -> bool:
+    return all(f.met for f in findings)
+
+
+def auto_reference_summary(findings: Iterable[AutoReferenceFinding]) -> dict[str, Any]:
+    """`{ready, met, unmet, findings}` — 조회·화면·`adoption` 기록이 같은 모양을 쓴다."""
+    items = list(findings)
+    return {
+        "ready": auto_reference_ready(items),
+        "met": [f.code for f in items if f.met],
+        "unmet": [f.code for f in items if not f.met],
+        "findings": [f.to_dict() for f in items],
+    }
+
+
 def role_for(version: dict[str, Any]) -> str:
     if version["state"] == KnowledgeState.CANDIDATE.value:
         return ROLE_CANDIDATE

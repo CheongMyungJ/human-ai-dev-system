@@ -2,23 +2,28 @@
 // 이동하는 자리다. 관리 화면의 지식 패널(P4-06·07)과 같은 API 를 쓴다 — 화면이 판정하지 않는다.
 //
 //   **등록·활성화·개정·무효는 실행 권한·동의·인수가 아니다.** 주입은 준수의 증거가 아니다.
-//   **AI 제안은 후보로만** 들어가고 활성화는 사람의 결정이다(QG-08 채택 확인을 지난다, 자동 활성화 없음).
+//   **AI 제안은 후보로만** 들어가고 활성화는 사람의 결정이다(QG-08 채택 확인을 지난다).
+//   **자동 활성 조건은 표시다**(P4-07b, 사용자 결정 2026-09-24: 반자동) — 시스템이 조건 충족을 계산해 배지로
+//   보이고, 사람이 "한 번에 활성화"를 눌러야 활성이 된다. 클릭 없는 활성화는 없고 필수로 올리지 않는다.
 //   **본문은 누를 때만** 열람 경로로 온다(서버 본문, P4-06b). 화면이 본문을 다른 곳에 두지 않는다.
 //   **출처 없는 규칙을 만들지 않는다.** 수동 등록은 출처 대화(이 프로젝트의 대화)를 고른다.
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 
 import {
   ApiError,
   KNOWLEDGE_ADOPTION_LABEL,
   KNOWLEDGE_AUTHORITY_LABEL,
+  KNOWLEDGE_AUTO_REFERENCE_LABEL,
   KNOWLEDGE_KIND_LABEL,
   KNOWLEDGE_RELATION_LABEL,
   KNOWLEDGE_STATE_LABEL,
   knowledgeApi,
   shellApi,
   type ConversationRow,
+  type KnowledgeActivateReadyResult,
   type KnowledgeAdoptionCheck,
+  type KnowledgeAutoReference,
   type KnowledgeItemView,
   type KnowledgeKind,
   type KnowledgeObligation,
@@ -67,6 +72,26 @@ function scopeText(version: KnowledgeVersion): string {
     : `저장소 ${version.repository_name ?? version.repository_id ?? '?'}${version.paths.length ? ` · 경로 ${version.paths.join(', ')}` : ''}`
 }
 
+/** P4-07b. 자동 활성 조건 배지의 글 — 충족이면 "한 번에 활성화 대상", 아니면 남은 조건. 판정·권한이 아니다. */
+export function autoReferenceText(auto: KnowledgeAutoReference): string {
+  if (auto.ready) return '자동 활성 조건 충족 — 한 번에 활성화 대상(사람의 결정)'
+  return `자동 활성 조건 미충족: ${auto.unmet.map((c) => KNOWLEDGE_AUTO_REFERENCE_LABEL[c] ?? c).join(', ')}`
+}
+
+function readyResultText(result: KnowledgeActivateReadyResult): string {
+  const done = result.activated.map((a) => `${a.knowledge_key} v${a.version}`).join(', ')
+  const skipped = result.skipped
+    .map((s) => {
+      const why =
+        s.reason === 'refused'
+          ? (s.refusals ?? []).map((c) => KNOWLEDGE_ADOPTION_LABEL[c] ?? c).join(', ')
+          : (s.unmet ?? []).map((c) => KNOWLEDGE_AUTO_REFERENCE_LABEL[c] ?? c).join(', ')
+      return `${s.knowledge_key}(${s.reason === 'refused' ? '거부' : '미충족'}: ${why})`
+    })
+    .join(', ')
+  return `활성화 ${result.activated.length}건${done ? ` — ${done}` : ''}${skipped ? ` · 건너뜀 ${result.skipped.length}건 — ${skipped}` : ''}`
+}
+
 type Guard = (fn: () => Promise<unknown>) => Promise<void>
 
 export function ProjectRules(props: {
@@ -82,6 +107,7 @@ export function ProjectRules(props: {
   const [repositories, setRepositories] = useState<ProjectRepository[]>([])
   const [error, setError] = useState<string | null>(null)
   const [showHistory, setShowHistory] = useState(false)
+  const [readyResult, setReadyResult] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(props.focusItem ? [props.focusItem] : []))
 
   const load = useCallback(async () => {
@@ -121,7 +147,14 @@ export function ProjectRules(props: {
   const required = live.filter((i) => i.current!.state === 'active' && i.current!.obligation === 'required')
   const reference = live.filter((i) => i.current!.state === 'active' && i.current!.obligation === 'reference')
   const candidates = live.filter((i) => i.current!.state === 'candidate')
+  // P4-07b. 화면이 지금 "조건 충족"으로 보이는 후보 — 한 번에 활성화는 이 id 들만 보낸다(본 것만 활성화한다).
+  const ready = candidates.filter((i) => i.auto_reference?.ready)
   const history = items.filter((i) => i.current && (i.current.state === 'superseded' || i.current.state === 'invalid'))
+  const activateReady = () =>
+    guard(async () => {
+      const result = await knowledgeApi.activateReady(project.id, ready.map((i) => i.id))
+      setReadyResult(readyResultText(result))
+    })
   const toggle = (key: string) =>
     setExpanded((prev) => {
       const next = new Set(prev)
@@ -130,11 +163,12 @@ export function ProjectRules(props: {
       return next
     })
 
-  const renderSection = (title: string, list: KnowledgeItemView[], testId: string, empty: string) => (
+  const renderSection = (title: string, list: KnowledgeItemView[], testId: string, empty: string, head?: ReactNode) => (
     <section data-testid={testId}>
       <h3 className="sh-section-title">
         {title} · {list.length}
       </h3>
+      {head}
       {list.length === 0 && <p className="sh-muted sh-rule-empty">{empty}</p>}
       <ul className="sh-result-list">
         {list.map((item) => (
@@ -163,7 +197,8 @@ export function ProjectRules(props: {
           <h1>프로젝트 규칙 · {project.name}</h1>
           <span className="sh-muted">
             공통 규칙·참고 지식·AI 후보. 등록·활성화·개정·무효는 실행 권한·동의·인수가 아니고, 주입은 준수의 증거가
-            아니다. AI 제안은 후보로만 들어가며 활성화는 사람의 결정이다(자동 활성화 없음)
+            아니다. AI 제안은 후보로만 들어가며 활성화는 사람의 결정이다 — 참고 후보의 자동 활성 조건 충족은 표시일
+            뿐이고 사람이 한 번에 활성화한다(클릭 없는 활성화 없음)
           </span>
         </div>
         <div className="sh-header-actions">
@@ -184,7 +219,35 @@ export function ProjectRules(props: {
             </p>
             {renderSection('활성 필수 규칙', required, 'rules-required', '활성 필수 규칙이 없다')}
             {renderSection('활성 참고 지식', reference, 'rules-reference', '활성 참고 지식이 없다')}
-            {renderSection('후보(AI 제안 — 규칙이 아니다)', candidates, 'rules-candidates', '후보가 없다')}
+            {renderSection(
+              '후보(AI 제안 — 규칙이 아니다)',
+              candidates,
+              'rules-candidates',
+              '후보가 없다',
+              <div className="sh-composer-bar sh-rule-actions" data-testid="rules-ready-bar">
+                <span className="sh-muted">
+                  자동 활성 조건(효력 참고 · 운영 사실/알려진 문제 · 서로 다른 실행 둘 이상의 근거 중 하나는 종료 코드 0 명령의
+                  검증·분석 실행 · 관측한 저장소 범위 · 반증/충돌 없음 · 채택 확인 막음 없음) 충족 {ready.length}건 — 시스템은
+                  표시만 하고 활성화는 사람이 한다. 효력은 참고 그대로다
+                </span>
+                <span className="sh-spacer" />
+                <button
+                  type="button"
+                  className="sh-primary"
+                  disabled={ready.length === 0}
+                  onClick={() => void activateReady()}
+                  data-testid="rules-activate-ready"
+                  data-count={ready.length}
+                >
+                  조건 충족 {ready.length}건 한 번에 활성화(사람의 결정)
+                </button>
+                {readyResult && (
+                  <span className="sh-notice sh-notice-ok" data-testid="rules-activate-ready-result">
+                    {readyResult}
+                  </span>
+                )}
+              </div>,
+            )}
             <section data-testid="rules-history">
               <button type="button" className="sh-list-toggle" onClick={() => setShowHistory((v) => !v)} data-testid="rules-history-toggle">
                 {showHistory ? '▾' : '▸'} 대체·무효 {history.length}
@@ -251,6 +314,8 @@ function RuleRow(props: {
   const sourceCase = current.source_case_id
   const sourceTitle = current.source_case_title ?? sourceCase
   const sourceSeq = current.source_message_seq ?? null
+  // P4-07b. 후보의 자동 활성 조건 배지 — 표시일 뿐이며 활성화는 사람이 한 번에 한다.
+  const auto = current.state === 'candidate' ? item.auto_reference ?? null : null
 
   return (
     <li className="sh-rule" data-testid={`rule-${key}`} data-state={current.state} data-obligation={current.obligation}>
@@ -260,6 +325,14 @@ function RuleRow(props: {
         </button>
         <strong>{key}</strong> v{current.version} · {KNOWLEDGE_STATE_LABEL[current.state]} ·{' '}
         {current.obligation === 'required' ? '필수' : '참고'} · {KNOWLEDGE_KIND_LABEL[current.kind]} · {current.summary}
+        {auto && (
+          <>
+            {' '}
+            <span className={`sh-badge ${auto.ready ? 'sh-badge-info' : ''}`} data-testid={`rule-auto-${key}`} data-ready={auto.ready ? '1' : '0'}>
+              {autoReferenceText(auto)}
+            </span>
+          </>
+        )}
       </div>
       <div className="sh-muted sh-rule-line">
         {scopeText(current)} · 활동 {current.activities.join(', ') || '모든 작업'} · 권위{' '}
@@ -296,7 +369,23 @@ function RuleRow(props: {
                 ? current.adoption.findings.map((f) => KNOWLEDGE_ADOPTION_LABEL[f.code] ?? f.code).join(', ')
                 : '항목 없음'}{' '}
               · 독립 검토 {current.adoption.independent_review === 'not_run' ? '없음' : current.adoption.independent_review}
+              {current.adoption.auto_reference
+                ? ` · 자동 활성 조건 충족(${current.adoption.auto_reference.met.length}) 을 사람이 한 번에 활성화 — 근거 실행 ${current.adoption.auto_reference.evidence_runs.length}건`
+                : ''}
             </div>
+          )}
+          {auto && (
+            <ul className="sh-result-list sh-rule-findings" data-testid={`rule-auto-list-${key}`}>
+              {auto.findings.map((f) => (
+                <li key={f.code} className="sh-plain-row" data-met={f.met ? '1' : '0'}>
+                  {f.met ? '충족' : '미충족'} · {KNOWLEDGE_AUTO_REFERENCE_LABEL[f.code] ?? f.code} — {f.detail}
+                </li>
+              ))}
+              <li className="sh-plain-row sh-muted">
+                조건 충족은 표시다 — 활성화는 사람이 후보 절 머리의 "한 번에 활성화"로 한다(효력 참고 그대로). 명령·종료 코드는
+                AI 자기보고다
+              </li>
+            </ul>
           )}
           {evidence.length > 0 && (
             <div className="sh-muted sh-rule-line" data-testid={`rule-evidence-${key}`}>

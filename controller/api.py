@@ -3822,6 +3822,15 @@ class KnowledgeActivateIn(KnowledgeActIn):
     activities: list[str] | None = Field(default=None, max_length=8)
 
 
+class KnowledgeActivateReadyIn(BaseModel):
+    """P4-07b. 조건 충족 후보를 **사람이 한 번에** 활성화한다(사용자 결정 2026-09-24: 반자동). `knowledge_ids`
+    는 화면이 지금 충족으로 본 항목들이다 — 없으면 이 Project 의 후보 전부를 다시 계산한다. 효력은 참고
+    그대로이며 필수로 올리지 않는다."""
+
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    knowledge_ids: list[str] | None = Field(default=None, max_length=200)
+
+
 class KnowledgeConflictIn(BaseModel):
     knowledge_a: str
     knowledge_b: str
@@ -3972,6 +3981,30 @@ def activate_knowledge(
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
     return {"version": version, "adoption": version.get("adoption")}
+
+
+@router.get("/api/knowledge/{knowledge_id}/auto-reference")
+def knowledge_auto_reference(request: Request, knowledge_id: str) -> dict[str, Any]:
+    """P4-07b. 참고 후보의 자동 활성 조건(여덟)의 충족/미충족. **표시일 뿐이다** — 충족이어도 활성화는 사람이
+    `activate-ready` 로 한다(사용자 결정 2026-09-24: 반자동)."""
+    try:
+        return _repo(request).auto_reference_check_for(knowledge_id)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/projects/{project_id}/knowledge/activate-ready")
+def activate_ready_knowledge(
+    request: Request, project_id: str, payload: KnowledgeActivateReadyIn
+) -> dict[str, Any]:
+    """P4-07b. 조건 충족 후보를 **사람이 한 번에** 활성화한다 — 이 호출이 사람의 클릭이다. 각 후보는 QG-08 채택
+    확인을 그대로 지나고, 충족이 아니거나 거부된 것은 건너뛰어 결과에 적는다(200). 효력 참고·범위 그대로."""
+    try:
+        return _repo(request).activate_ready_knowledge(
+            project_id, payload.actor, knowledge_ids=payload.knowledge_ids
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
 
 
 @router.post("/api/knowledge/{knowledge_id}/invalidate")

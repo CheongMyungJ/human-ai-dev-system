@@ -11,6 +11,8 @@
 // P4-07. 작업 실행이 남긴 **후보**(관계·근거·관측 문맥)와 QG-08 **채택 확인**. 활성화는 확인의 막는 항목이
 //   없을 때만 되고, 범위·효력·활동은 좁힐 수만 있으며, "K-00x 의 새 버전으로" 적용할 수 있다. 확인 결과는
 //   판정이 아니라 사람이 보는 값이다 — 활성화는 여전히 사람의 결정이다.
+// P4-07b. 참고 후보의 **자동 활성 조건** 배지(사용자 결정 2026-09-24: 반자동) — 표시일 뿐이고 한 번에 활성화는
+//   프로젝트 규칙 화면에서 사람이 누른다. 이 패널은 항목별 활성화 폼 그대로다.
 
 import { useCallback, useEffect, useState } from 'react'
 
@@ -18,6 +20,7 @@ import {
   ApiError,
   KNOWLEDGE_ADOPTION_LABEL,
   KNOWLEDGE_AUTHORITY_LABEL,
+  KNOWLEDGE_AUTO_REFERENCE_LABEL,
   KNOWLEDGE_KIND_LABEL,
   KNOWLEDGE_RELATION_LABEL,
   KNOWLEDGE_STATE_LABEL,
@@ -209,6 +212,20 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
               <strong>{item.knowledge_key}</strong> v{current.version} · {KNOWLEDGE_STATE_LABEL[current.state]} ·{' '}
               {current.obligation === 'required' ? '필수' : '참고'} · {KNOWLEDGE_KIND_LABEL[current.kind]} ·{' '}
               {current.summary}
+              {current.state === 'candidate' && item.auto_reference && (
+                <span
+                  className="muted"
+                  data-testid={`knowledge-auto-${item.knowledge_key}`}
+                  data-ready={item.auto_reference.ready ? '1' : '0'}
+                >
+                  {' '}
+                  [
+                  {item.auto_reference.ready
+                    ? '자동 활성 조건 충족 — 프로젝트 규칙 화면에서 사람이 한 번에 활성화'
+                    : `자동 활성 조건 미충족: ${item.auto_reference.unmet.map((c) => KNOWLEDGE_AUTO_REFERENCE_LABEL[c] ?? c).join(', ')}`}
+                  ]
+                </span>
+              )}
               <div className="muted">
                 범위{' '}
                 {current.scope_kind === 'project'
@@ -333,7 +350,8 @@ export function KnowledgePanel(props: { projectId: string; caseId: string; runne
         적용 내용(조건·예외 포함)은 <strong>서버에 저장된다</strong> — 어느 PC 의 실행에도 주입하기 위해서다.{' '}
         <strong>비밀값(토큰·비밀번호·키)을 적지 말 것.</strong> 사람이 등록한 확정 결정·규칙은 다시 승인받지 않고
         바로 활성이다. AI 가 제안한 것은 후보로만 적는다. 작업 실행이 남긴 후보는 위 목록에 후보로 나타나며
-        채택 확인을 본 뒤 사람이 활성화한다(자동 활성화는 없다).
+        채택 확인을 본 뒤 사람이 활성화한다. 참고 후보의 자동 활성 조건 충족은 표시일 뿐이고 사람이 프로젝트 규칙
+        화면에서 한 번에 활성화한다(클릭 없는 활성화는 없다).
       </p>
       <textarea
         rows={3}

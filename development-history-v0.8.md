@@ -46,7 +46,7 @@ P4-04는 **고정 문맥을 "주려 한 것"과 "실제로 읽은 것"으로 나
 
 **핵심 입력을 빼고 실행하지 않는다.** AI의 이전 제안(대화의 AI 말)만 보조이고 요청·결정·금지·동의 범위·사람의 답과 피드백·재작성의 이전 버전은 핵심이다. 실행당 인라인 한도(기본 256 KiB, 상세 설계 제안값·제어부 설정)를 넘으면 **보조만 오래된 것부터 드러내어 생략**하고, 핵심만으로 넘으면 `context_over_inline_limit`로 **보류**한다. 핵심 원문이 저장 대기·유실이면 `required_context_unavailable`로 진입이 거부되고, Runner가 핵심을 못 읽거나 다른 내용이면 **CLI를 부르지 않고** `not_started_reason`과 함께 실패로 보고한다. **시작하지 않은 실행은 소비 0**으로 확정된다(기존 사전 거부 두 경로 포함). 결과 시점에 고정 뒤 새로 생긴 입력을 **최신성**으로 남기며(표시이며 판정을 바꾸지 않는다), Runner가 재시작 뒤 착수만 기록된 실행을 받으면 CLI를 다시 부르지 않고 **원시 출력에서 사용량·세션·이벤트를 되찾아** `unknown`으로 보고한다. 분할 검토·체크포인트·단계적 조회는 넣지 않았다(plan 3.9절). 상세는 [P4-04 결과](p4/evidence/P4-04-results.md)를 따른다.
 
-## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절, S-026 에 1.9절, S-027 에 1.10절)
+## 2. 완료된 작업의 경계와 시작점 (당시 1.1절 일부·1.2·1.3절, S-022 에 1.4절, S-023 에 1.5절, S-024 에 1.6절, S-025 에 1.7·1.8절, S-026 에 1.9절, S-027 에 1.10절, S-029 에 1.12절)
 
 **당시 1.1절 — P4-04 연결 문단**
 
@@ -186,6 +186,18 @@ P4-05 의 재작성·재시도 상한을 **설정으로 바꾼다**. 사용자�
 
 구현은 [P4-PLAN-07](plans/P4-PLAN-07.md)·[P4-07 결과](p4/evidence/P4-07-results.md)다. S-027 은 사용자에게 물을 수 없는 자율 실행이라 참고 후보의 자동 활성화를 **하지 않는 쪽**으로 두고 제안 조건을 인계에 적었다.
 
+### 1.12 P4-07b — 참고 후보의 자동 활성 조건 표시(반자동) (완료 — 당시 인계로 보존, S-029 에 옮김)
+
+**결정(사용자, 2026-09-24, S-028):** 참고 후보의 자동 활성화는 **반자동**이다 — 시스템이 조건 충족을 계산해 프로젝트 규칙 화면에 표시하고, 사람이 한 번에 활성화한다. **사람의 클릭 없이 활성화하지 않는다.** 완전 자동(조건 충족 시 시스템이 활성화)은 후보가 실제로 쌓이면 다시 묻는다. 작은 작업이며 UI-04b 와 섞지 않는다.
+
+- **조건(전부 만족, S-027 제안 그대로):** (1) 효력 `reference`, (2) 종류 `operation` 또는 `known_problem`, (3) 근거가 **서로 다른 실행 둘 이상**(출처 실행 + `knowledge_evidence` 의 `supports`/`duplicate` 행을 실행 id 로 센다)이고 그중 하나는 **종료 코드 0 명령이 있는 검증·분석 실행**(그 실행의 명령 기록에 `exit_code = 0` 이 있고 목적이 `verification_run`/`limited_analysis` — 명령·종료 코드가 자기보고라는 한계는 9절 그대로), (4) 범위가 관측한 저장소(`scope_kind = repository` 이고 `repository_id` 가 `observed.repository_id` 와 같음), (5) `relation` 이 `contradicts` 가 아니고 그 항목을 대상으로 한 `contradicts` 후보가 없고 열린 충돌이 없음, (6) `adoption_check` 에 막는 항목 없음.
+- **넣는 것:** `domain.knowledge` 의 순수 함수(조건의 충족/미충족 항목 목록 — `adoption_check` 와 같은 모양), `knowledge_view` 항목의 `auto_reference`, `POST /api/projects/{id}/knowledge/activate-ready`(조건 충족 후보를 **한 번에** 활성화 — 각각 `activate_knowledge` 를 효력 참고·범위 그대로, 사유 "자동 활성 조건 충족 — 사람이 한 번에 활성화", `adoption.by` = 누른 사람, `adoption` 에 충족 항목 기록; 하나가 거부되면 그것만 건너뛰고 결과에 적는다), 프로젝트 규칙 화면의 배지 "자동 활성 조건 충족"(미충족이면 남은 조건)과 후보 절 머리의 "조건 충족 n건 한 번에 활성화" 버튼, 대화 후보 카드·관리 화면 지식 패널의 같은 배지.
+- **넣지 않는 것:** 클릭 없는 활성화(완전 자동), 필수 승격(DB CHECK 그대로), 독립 AI 검토 실행, 조건의 Project 설정화(상세 설정은 UI-04b), 스키마 변경(`adoption_json` 에 항목을 더하는 것으로 충분한지 plan 에서 정한다 — 상한 2,000자).
+- **검증:** 순수 표 시험, 서버 시험(검증 실행 둘이 같은 내용을 보고 → 근거 둘·명령 있음 → `ready`; 하나뿐이면 근거 부족; `contradicts`·프로젝트 범위·필수 제안·열린 충돌은 미충족; 한 번에 활성화 → 활성 참고·다음 실행에 참고로 주입), 브라우저 시험 한 건. 실제 codex 라이브는 후보가 근거 둘을 갖는 경우가 드물어(두 라이브 모두 근거 1) 선택 사항.
+- 코드 대조 시작점: `domain/knowledge.py`(`adoption_check`·`AdoptionFinding`·`adoption_blocked`), `controller/repository.py` 의 `adoption_check_for`·`activate_knowledge`·`knowledge_evidence_for`·`knowledge_view`·실행 명령 조회(`list_run_commands`), `controller/api.py` 의 지식 끝점, `web/src/shell/ProjectRules.tsx`·`ProgressCards.tsx`·`KnowledgePanel.tsx`, `tests/test_knowledge_extraction.py` 의 도우미.
+
+구현은 [P4-PLAN-07b](plans/P4-PLAN-07b.md)·[P4-07b 결과](p4/evidence/P4-07b-results.md)다(S-029). 조건은 코드에 여덟(후보·채택 확인 막음 없음을 별도 항목으로)으로 적었고 스키마는 바꾸지 않았다.
+
 ## 3. P3의 남은 작업 (당시 5절, P3 완료)
 
 | 하위 작업 | 범위 | 성공 기준과 검증 |
@@ -224,7 +236,26 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 
 ## 6. 이전 인계 (당시 10절)
 
-S-026 은 S-028 에, S-025 는 S-027 에, S-024 는 S-026 에 옮겼다.
+S-027 은 S-029 에, S-026 은 S-028 에, S-025 는 S-027 에, S-024 는 S-026 에 옮겼다.
+
+### 이전 개발 인계 — S-027 / 2026-09-24 / P4-07 선택적 지식 추출 (**완료**, S-029 에 옮김)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan 검증 인계 절차를 지켜줘." 다음 단계는 1.10절의 **P4-07**(S-026 에서 P4-07 → UI-04 로 정함)이었다.
+- **수행:** 시작 상태(`main`/`c0c49fc`, clean, fetch 뒤 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → 웹 빌드·웹 단위 18, pytest **677 통과·2 건너뜀**, P1 계약 18, 8분 0초)을 직접 확인한 뒤 [P4-PLAN-07](plans/P4-PLAN-07.md)을 **구현 전에 기록**하고 구현·검증했다. 결과 [P4-07](p4/evidence/P4-07-results.md).
+- **제품 판단(사용자 답 대기):** 인계가 "참고 지식 자동 활성화의 조건"을 새 제품 판단으로 표시했지만 이 세션은 사용자에게 물을 수 없는 자율 실행이었다. **가장 좁은 쪽으로 갔다 — 자동 활성화 없음**(모든 AI 후보는 사람이 활성화). 대신 QG-08 채택 확인을 값으로 만들어 조건이 확정되면 그 위에 얹을 수 있게 했다. **제안 조건(사용자가 정한다):** 효력 `reference` 이고 종류가 `operation`·`known_problem` 이며, 근거가 서로 다른 실행 둘 이상(그중 하나는 종료 코드 0 명령이 있는 검증·분석 실행)이고, 범위가 관측한 저장소로 좁혀져 있고, 반증·충돌 관계가 없고, 채택 확인에 막는 항목이 없을 때만 참고로 자동 활성. 확정 전에는 적용하지 않는다(decisions.md D-67 구현 기록).
+- **설계 선택(plan 9절, D-67 안):** 추출 자리는 기존 작업 실행(별도 추출 실행·목적 없음, 예산은 그 실행의 것), 논의 응답의 `proposal: true` 가 "정리해줘" 의 자리, 중복은 원문 해시(같은 내용 → 근거 행), 대체 제안·반증은 관계로만(대상 사슬 그대로, 자동 무효·자동 충돌 없음), 관측 문맥은 실행이 아는 만큼(분석 실행은 저장소만), 독립 AI 검토 없음(`adoption.independent_review = not_run`).
+- **서버:** `domain/knowledge.py`(`Relation`·`EXTRACTION_PURPOSES`·`MAX_CANDIDATES_PER_RUN = 3`·`parse_report_item` 의 관계·근거·제안·`adoption_check`·`adoption_blocked`), v24(`knowledge_version` 컬럼 넷, `knowledge_evidence`, `knowledge_intake` 재구성 — `_rebuild_table` 의 외래 키 검사를 다시 만든 표로 한정), `report_result` 가 네 작업 목적의 보고를 받음, `apply_extraction_report`(결과 뒤 훅, 처리기 설정 무관)·`_apply_report`(공유)·`_register_candidate`·`_record_evidence`·`_knowledge_with_hash`·`_observed_context`, `adoption_check_for`·`activate_knowledge`(축소·`into_knowledge_id`·`KnowledgeAdoptionRefused`), `knowledge_view` 의 근거, `knowledge_registrations_view` 의 `origin`·`basis`·`evidence`·`observed`, `_knowledge_meta_by_seq` 의 관계·관측, `assignment_payload` 의 작업 실행 `knowledge_index`(+ `run_repository`). API `GET /api/knowledge/{id}/adoption-check`, `POST /activate` 확장(409 = 코드·항목 목록).
+- **Runner·화면:** `KNOWLEDGE_EXTRACTION_RULE`·`extraction_rule`(지식 목록이 실린 작업 실행에만), 등록 규칙의 `proposal: true` 줄, `knowledge_head` 의 관계·관측, `_detach_knowledge`(응답·결과 원문에서 블록 뗌), `_store_knowledge(with_authority)`. 새 화면 `KnowledgeCandidateCards`·제안 카드·근거 카드, 관리 화면 `CandidateActions`(채택 확인·활성화 폼), `api.ts` 형·`knowledgeApi.activate/adoptionCheck`.
+- **기존 시험의 의미 검토:** `test_data_boundary.py` 표 목록에 `knowledge_evidence` 추가(검사 유지). 다른 기존 시험은 그대로 통과.
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **18**, pytest **688 통과·2 건너뜀·0 실패**(8분 46초, +11), P1 계약 **18**. 새 pytest 11건 = `test_knowledge_extraction.py` 10 + 브라우저 1. 첫 전체 실행의 브라우저 실패 1건은 세션 공유 DB 를 전체 단언한 시험 결함이라 이 대화로 좁혀 고친 뒤 다시 돌렸다. 가짜 codex 표지 `HADS_FAKE_CANDIDATE`·`HADS_FAKE_CANDIDATE_SUPPORTS=K-001`·`HADS_FAKE_PROPOSAL`.
+- **실제 CLI·실제 브라우저:** `p4/live/p407_extraction.py`(제품 코드 import 없음, 실제 `codex-cli 0.156.1`, Runner 하나) 두 회차. 첫째 `061616170` **통과 5/5** — 구현·검증 실행 셋과 정리 응답 모두 후보 없음(AI 판단; 논의 응답은 실행 결과를 보지 않으므로 "관찰 사실이 없다"는 답이 정직하다), JSON 사본 `P4-07-live-results-061616170.json`(로그 파일은 회차마다 새로 쓰인다 — 첫 회차 로그는 없다). 둘째 `062331187` **통과 13/13, 관찰 15, 남은 프로세스 0** — 저장소에 비자명한 시험 조건(README 시험 절·`tests/test_app.py`·`samples/app.log`·`LOGTOOL_SAMPLES`)을 둔 뒤(`enrich_repo`) 구현 실행은 여전히 후보 없음, "저장소를 읽고 직접 확인한 사실만 후보로" 청한 정리 응답이 `proposal: true` 둘(K-001 시험 실행 방법·검사 범위, K-002 표본 경로·형식, 운영 사실·참고·저장소 범위·`verification` 활동)을 붙였고 후보·서버 본문·권위 메시지 없음 → 채택 확인 `blocked = []` → 활성화 K-001 v2(`user_decision`·`adoption`) → 다른 대화의 검증 실행 2개에 `knowledge_reference`·영수증 `read`·Manifest v2(의도·설계·계획·구현은 활동 비적용). **실제 codex 는 작업 실행에서 후보를 내지 않았다**(두 회차 네 실행) — 규칙은 있었고 판단은 AI 의 것이다.
+- **경계:** 강제 축은 넷 그대로. 후보·근거·채택 확인·활성화는 권한·동의·인수·준수가 아니다. AI 제안은 어떤 경로로도 활성 필수가 되지 않는다(DB CHECK). 원문 PC 경계의 예외는 지식뿐(후보 원문·근거 원문은 지식 원문). UI-04·P5·QG-08 독립 검토·자동 활성화는 넣지 않았다.
+- **다음 행동:** **UI-04**(1.11절)를 다른 세션에서 하위 plan(UI-PLAN-04a …)으로 시작한다. 완료된 plan 을 다시 열지 않는다.
+- **사람에게 물어야 할 것:** (1) 참고 후보의 **자동 활성화 조건**(위 제안 조건을 그대로 / 고쳐서 / 자동 활성화 없이 유지) — **아직 답을 받지 못했다.** (2) 이 세션 작업의 커밋·push 여부 — **사용자의 답(2026-09-24): "좋아 다된거야? 그럼커밋푸시해줘"** → 커밋·push 지시. (3) UI-04 첫 하위 plan 의 범위 제안(결정 사항 패널·프로젝트 규칙 화면 — 후보·채택 확인의 새 화면 자리)에 동의하는지 — 답 없음, 다음 세션이 다시 묻는다.
+- **사용자 지시로 한 일:** 작업 보고 뒤 사용자가 커밋·push 를 지시했다. 이 세션 작업을 **`8defdfd`** 로 커밋한 뒤 이 인계 기록을 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 fetch 해 원격이 `c0c49fc` 그대로임을 확인). 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`c0c49fc` clean. 이 세션의 변경은 `8defdfd`(P4-07)와 인계 기록 커밋으로 `origin/main` 에 push됐다 — 새 파일 `plans/P4-PLAN-07.md`, `tests/test_knowledge_extraction.py`, `p4/live/p407_extraction.py`, `p4/evidence/P4-07-results.md`·`P4-07-live.log`·`P4-07-live-results.json`·`P4-07-live-results-061616170.json`·`P4-07-live-{A,C}-stopped.png`. 수정 파일 `controller/{api,db,repository,schema.sql}`, `domain/knowledge.py`, `runner/{agent,prompts}.py`, `tests/{fake_cli/fake_codex,test_data_boundary,test_web_shell}.py`, `web/src/{api.ts,KnowledgePanel.tsx}`, `web/src/shell/{ConversationView,ProgressCards}.tsx`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`(1.10절·S-025 인계 옮김)·`README.md`·`decisions.md`(D-67 구현 기록)·`project-knowledge.md`·`quality-gates.md`·`review-acceptance-matrix.md`. `web/dist` 는 빌드 산출물(`.gitignore`). `git status --short` 로 재확인한다. 이 저장소는 `core.autocrlf = true` 이고 문서는 `eol=lf` 다 — 이 세션의 편집이 CRLF 를 남겨 LF 로 되돌렸다(`git ls-files --eol` 로 확인).
+- **남은 자원:** 라이브 제어부·Runner·codex·Edge 는 스크립트가 내렸다(남은 프로세스 0). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-p4-07-live\{061616170, 062331187}` 에 있고 저장소 `var\` 는 건드리지 않았다. 새 의존성 없음.
+- **다음 세션이 이어서 할 때:** 후보 시험은 `tests/test_knowledge_extraction.py` 의 `_candidate`(항목)·`_block`(블록)·`_run_to_completion`(대화 → 종료)·`_registrations(h, case_id, origin)` 이다. 가짜 실행기는 `executor.verification_response = FAKE_VERIFICATION_RESPONSE + _block([...])`. 관계 대상은 키(`relates_to="K-001"`)로 준다. v24 이행 시험은 현재 `schema.sql` 의 v24 절 앞을 v23 으로 쓴다(커밋 뒤에도 성립). 이행 시험(`test_migration.py`)의 건너뜀은 스키마 커밋이 늘수록 늘어난다(9절) — 그 시험을 다루는 작업에서 창을 정한다.
 
 ### 이전 개발 인계 — S-026 / 2026-09-24 / P4-06b 지식 원문 서버 저장 (**완료**, S-028 에 옮김)
 

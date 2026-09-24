@@ -260,6 +260,8 @@ export interface KnowledgeAdoption {
   from_candidate: string
   into: string | null
   independent_review: string
+  // P4-07b. 한 번에 활성화(사람의 결정)였다면 그때의 충족 항목과 근거 실행 id.
+  auto_reference?: { met: string[]; evidence_runs: string[] } | null
 }
 
 export interface KnowledgeAdoptionCheck {
@@ -293,6 +295,43 @@ export interface KnowledgeEvidence {
   source_case_title?: string | null
 }
 
+//: P4-07b. 참고 후보의 **자동 활성 조건**(여덟)의 충족/미충족 — 사용자 결정(2026-09-24): 반자동. 시스템은
+//: 계산해 표시할 뿐이고 활성화는 사람이 `activateReady` 로 한 번에 한다. `ready` 는 판정·권한이 아니다.
+export interface KnowledgeAutoReferenceFinding {
+  code: string
+  met: boolean
+  detail: string
+}
+
+export interface KnowledgeAutoReference {
+  knowledge_id: string
+  knowledge_key: string
+  version_id: string
+  ready: boolean
+  met: string[]
+  unmet: string[]
+  findings: KnowledgeAutoReferenceFinding[]
+  evidence_runs: { run_id: string; purpose: string | null; ok_command: boolean }[]
+}
+
+export const KNOWLEDGE_AUTO_REFERENCE_LABEL: Record<string, string> = {
+  candidate: '후보',
+  reference: '효력 참고',
+  observational_kind: '종류 운영 사실·알려진 문제',
+  two_runs: '서로 다른 실행 둘 이상의 근거',
+  verified_run: '종료 코드 0 명령의 검증·분석 실행',
+  observed_repository: '관측한 저장소 범위',
+  no_contradiction: '반증·충돌 없음',
+  adoption_clear: '채택 확인 막음 없음',
+}
+
+export interface KnowledgeActivateReadyResult {
+  project_id: string
+  by: string
+  activated: { knowledge_id: string; knowledge_key: string; version_id: string; version: number }[]
+  skipped: { knowledge_id: string; knowledge_key: string; reason: 'not_ready' | 'refused'; unmet?: string[]; refusals?: string[] }[]
+}
+
 export interface KnowledgeItemView {
   id: string
   project_id: string
@@ -302,6 +341,8 @@ export interface KnowledgeItemView {
   current: KnowledgeVersion | null
   versions: KnowledgeVersion[]
   evidence?: KnowledgeEvidence[]
+  // P4-07b. 현재 버전이 후보일 때만 있다(표시).
+  auto_reference?: KnowledgeAutoReference | null
 }
 
 export interface KnowledgeConflict {
@@ -384,6 +425,8 @@ export interface KnowledgeRegistration {
   // 실행은 메시지가 없어 null).
   source_message_seq?: number | null
   reply_seq?: number | null
+  // P4-07b. 지금도 후보인 등록 행의 자동 활성 조건(표시).
+  auto_reference?: KnowledgeAutoReference | null
 }
 
 //: UI-04a. 이 업무의 실행들에 **제공된** 규칙(Manifest 집계, 버전별). 제공 기록이며 준수의 증거가 아니다.
@@ -513,6 +556,17 @@ export const knowledgeApi = {
     const query = params.toString()
     return request<KnowledgeAdoptionCheck>(`/api/knowledge/${knowledgeId}/adoption-check${query ? `?${query}` : ''}`)
   },
+
+  // P4-07b. 자동 활성 조건(표시)만 다시 본다.
+  autoReference: (knowledgeId: string) => request<KnowledgeAutoReference>(`/api/knowledge/${knowledgeId}/auto-reference`),
+
+  // P4-07b. 조건 충족 후보를 **사람이 한 번에** 활성화한다 — 이 호출이 사람의 클릭이다. 화면이 본 항목 id 만
+  // 보내고, 각 후보는 QG-08 채택 확인을 그대로 지난다(거부·미충족은 건너뛰어 결과에 적힌다). 효력 참고 그대로.
+  activateReady: (projectId: string, knowledgeIds: string[]) =>
+    request<KnowledgeActivateReadyResult>(`/api/projects/${projectId}/knowledge/activate-ready`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner', knowledge_ids: knowledgeIds }),
+    }),
 
   invalidate: (knowledgeId: string, reason: string) =>
     request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/invalidate`, {

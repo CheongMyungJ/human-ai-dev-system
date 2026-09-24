@@ -31,6 +31,7 @@ import {
   type ProgressWait,
 } from '../api'
 import { rulesLink } from '../lib/address'
+import { autoReferenceText } from './ProjectRules'
 import { peekBody } from './bodies'
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
@@ -646,7 +647,9 @@ export function KnowledgeCards(props: {
 
 /**
  * P4-07. 작업 실행(검증·분석·실험·구현)이 결과와 함께 남긴 **지식 후보**와 근거. 후보는 규칙이 아니다 —
- * 사람이 관리 화면에서 채택 확인을 보고 활성화한다(자동 활성화 없음). 카드는 요약·관계·근거 한 줄뿐이다.
+ * 사람이 프로젝트 규칙 화면에서 채택 확인을 보고 활성화한다. 카드는 요약·관계·근거 한 줄뿐이다.
+ * P4-07b: 자동 활성 조건 충족은 배지로 **표시만** 한다(사용자 결정 2026-09-24: 반자동) — 활성화는 규칙 화면의
+ * "한 번에 활성화"를 사람이 누를 때다.
  */
 export function KnowledgeCandidateCards(props: {
   registrations: KnowledgeRegistration[]
@@ -672,6 +675,18 @@ export function KnowledgeCandidateCards(props: {
                 {KNOWLEDGE_KIND_LABEL[r.kind ?? 'operation']} · {r.summary}
                 {r.relation && r.relates_to_key ? ` · ← ${r.relates_to_key} ${KNOWLEDGE_RELATION_LABEL[r.relation]}` : ''}
                 {r.current_state && r.current_state !== 'candidate' ? ` · 지금 ${KNOWLEDGE_STATE_LABEL[r.current_state]}` : ''}
+                {r.auto_reference && (
+                  <>
+                    {' '}
+                    <span
+                      className={`sh-badge ${r.auto_reference.ready ? 'sh-badge-info' : ''}`}
+                      data-testid={`knowledge-candidate-auto-${r.report_index}`}
+                      data-ready={r.auto_reference.ready ? '1' : '0'}
+                    >
+                      {autoReferenceText(r.auto_reference)}
+                    </span>
+                  </>
+                )}
               </>
             )}
             {r.intake_state === 'evidence' && r.evidence && (
@@ -696,7 +711,8 @@ export function KnowledgeCandidateCards(props: {
         ))}
       </ul>
       <div className="sh-muted">
-        AI 의 관찰·제안이다. 다음 작업에는 후보(단서)로만 들어가고 지켜야 할 규칙이 되지 않는다.{' '}
+        AI 의 관찰·제안이다. 다음 작업에는 후보(단서)로만 들어가고 지켜야 할 규칙이 되지 않는다. 자동 활성 조건 충족은
+        표시일 뿐이며 활성화는 사람이 한다.{' '}
         <a className="sh-link" href={rules} data-testid="knowledge-candidate-rules">
           프로젝트 규칙에서 채택 확인·활성화
         </a>

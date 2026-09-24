@@ -1022,3 +1022,103 @@ def test_a_rule_registered_on_the_rules_screen_reaches_the_work_and_a_candidate_
     expect(panel.locator('[data-testid="knowledge-K-002"]')).to_contain_text("활성")
     expect(panel.locator('[data-testid="knowledge-adoption-K-002"]')).to_contain_text("채택 확인")
     page.context.close()
+
+
+# ================================================== P4-07b 참고 후보의 자동 활성 조건(반자동)
+
+
+def _git_repo(project: dict[str, Any]) -> None:
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+
+def _run_work_with_candidate(page: Page) -> str:
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_CANDIDATE 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+    return case_id
+
+
+def test_a_candidate_seen_by_two_runs_shows_the_ready_badge_and_a_human_activates_it_at_once(stack):
+    """P4-07b AC-8 — 검증 실행 하나의 후보는 카드·규칙 화면에 "자동 활성 조건 미충족(근거 실행)" 배지, 다른 대화의
+    검증 실행이 같은 내용을 보고하면 "충족" 배지. **그래도 후보 그대로다.** 사람이 규칙 화면의 "한 번에 활성화"를 누르면
+    활성 참고(v2, `user_decision`, 충족 항목 기록)가 되고 버튼은 0건으로 돌아간다. 사용자 결정(2026-09-24): 반자동.
+    """
+    project = stack.project("자동 활성 조건")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+
+    first = _run_work_with_candidate(page)
+    card = page.locator('[data-testid="knowledge-candidate-card"]')
+    expect(card).to_be_visible(timeout=30_000)
+    badge = card.locator('[data-testid="knowledge-candidate-auto-0"]')
+    expect(badge).to_have_attribute("data-ready", "0")
+    expect(badge).to_contain_text("미충족")
+    expect(badge).to_contain_text("서로 다른 실행 둘 이상의 근거")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    [item] = view["items"]
+    assert item["knowledge_key"] == "K-001" and item["current"]["state"] == "candidate"
+    assert item["auto_reference"]["unmet"] == ["two_runs"]
+
+    # 둘째 대화 — 같은 후보를 다시 보고(같은 내용 → 근거). 조건 충족이지만 **활성화되지 않는다**.
+    second = _run_work_with_candidate(page)
+    assert second != first
+    evidence_row = page.locator('[data-testid="knowledge-candidate-card"] [data-testid="knowledge-candidate-row-0"]')
+    expect(evidence_row).to_have_attribute("data-state", "evidence", timeout=30_000)
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    [item] = view["items"]
+    assert item["auto_reference"]["ready"] is True and item["current"]["state"] == "candidate"
+    assert len(item["auto_reference"]["evidence_runs"]) == 2
+
+    # 규칙 화면 — 충족 배지, 상태는 후보, 버튼 "조건 충족 1건". 누르면(사람의 결정) 활성 참고 v2.
+    page.click('[data-testid="open-rules"]')
+    screen = page.locator('[data-testid="rules-screen"]')
+    expect(screen).to_be_visible(timeout=30_000)
+    rule = screen.locator('[data-testid="rule-K-001"]')
+    expect(rule).to_have_attribute("data-state", "candidate")
+    expect(rule.locator('[data-testid="rule-auto-K-001"]')).to_have_attribute("data-ready", "1")
+    expect(rule.locator('[data-testid="rule-auto-K-001"]')).to_contain_text("자동 활성 조건 충족")
+    button = screen.locator('[data-testid="rules-activate-ready"]')
+    expect(button).to_have_attribute("data-count", "1")
+    expect(button).to_be_enabled()
+    expect(screen.locator('[data-testid="rules-candidates"]')).to_contain_text("K-001")
+    rule.locator('[data-testid="rule-toggle-K-001"]').click()
+    conditions = rule.locator('[data-testid="rule-auto-list-K-001"] [data-met]')
+    expect(conditions).to_have_count(8)
+    assert conditions.evaluate_all("els => els.every(e => e.dataset.met === '1')")
+    assert stack.http.get(f"/api/projects/{project['id']}/knowledge").json()["items"][0]["current"]["state"] == "candidate"
+
+    button.click()
+    expect(screen.locator('[data-testid="rules-activate-ready-result"]')).to_contain_text("활성화 1건 — K-001 v2", timeout=15_000)
+    expect(rule).to_have_attribute("data-state", "active", timeout=15_000)
+    expect(rule).to_have_attribute("data-obligation", "reference")
+    expect(screen.locator('[data-testid="rules-reference"]')).to_contain_text("K-001")
+    assert screen.locator('[data-testid="rules-candidates"] [data-testid="rule-K-001"]').count() == 0
+    expect(button).to_have_attribute("data-count", "0")
+    expect(button).to_be_disabled()
+    # 펼침 상태는 항목 키로 기억되므로 절이 바뀌어도(후보 → 활성 참고) 펼쳐진 채다. 접혀 있으면 연다.
+    if rule.locator('[data-testid="rule-details-K-001"]').count() == 0:
+        rule.locator('[data-testid="rule-toggle-K-001"]').click()
+    expect(rule.locator('[data-testid="rule-adoption-K-001"]')).to_contain_text("사람이 한 번에 활성화")
+    assert rule.locator('[data-testid="rule-auto-K-001"]').count() == 0  # 후보가 아니면 배지가 없다
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    [item] = view["items"]
+    assert [(v["version"], v["state"], v["authority_kind"], v["obligation"]) for v in item["versions"]] == [
+        (1, "superseded", "ai_proposal", "reference"), (2, "active", "user_decision", "reference")
+    ]
+    new = item["current"]
+    assert new["reason_summary"] == "자동 활성 조건 충족 — 사람이 한 번에 활성화"
+    assert new["adoption"]["by"] == "owner" and len(new["adoption"]["auto_reference"]["met"]) == 8
+    assert len(new["adoption"]["auto_reference"]["evidence_runs"]) == 2
+    assert item["auto_reference"] is None
+    page.context.close()

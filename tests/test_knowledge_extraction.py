@@ -24,7 +24,7 @@ from typing import Any
 import pytest
 
 from controller import db
-from controller.repository import Repository
+from controller.repository import KnowledgeAdoptionRefused, Repository
 from domain import knowledge as knowmod
 from runner import prompts
 from tests.conftest import FAKE_VERIFICATION_RESPONSE, RUNNER_ID
@@ -632,3 +632,213 @@ def test_a_v23_database_gets_the_evidence_table_and_new_columns_empty(tmp_path):
         "SELECT COUNT(*) FROM schema_version WHERE version = ?", (db.SCHEMA_VERSION,)
     ).fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM knowledge_intake").fetchone()[0] == 2
+
+
+# ================================================== P4-07b 참고 후보의 자동 활성 조건(반자동, 사용자 결정 2026-09-24)
+#
+# 시스템은 조건 충족을 **계산해 표시**하고, 활성화는 사람이 한 번에 한다. 클릭 없는 활성화는 없다.
+# 시험 이름 옆의 AC 번호는 P4-PLAN-07b 4절이다.
+
+ALL_AUTO_CODES = list(knowmod.AUTO_REFERENCE_CODES)
+
+
+def _auto_codes(findings: list[knowmod.AutoReferenceFinding]) -> dict[str, bool]:
+    return {f.code: f.met for f in findings}
+
+
+def _auto_check(candidate: dict[str, Any], runs: list[dict[str, Any]], **kw: Any) -> list[knowmod.AutoReferenceFinding]:
+    args = {"contradicting_candidates": 0, "open_conflicts": 0, "adoption_blocked_codes": []}
+    args.update(kw)
+    return knowmod.auto_reference_check(candidate, evidence_runs=runs, **args)
+
+
+def _auto(h, knowledge_id: str) -> dict[str, Any]:
+    response = h.client.get(f"/api/knowledge/{knowledge_id}/auto-reference")
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_the_auto_reference_conditions_are_all_or_nothing_and_each_one_can_fail_alone():
+    """AC-1 — 조건 여덟이 전부 충족이면 `ready`, 하나라도 아니면 그 코드가 `unmet` 에 있다. 계산일 뿐 활성화하지 않는다."""
+    good = _cand(kind="operation", observed={"repository_id": "r-a", "repository_name": "app"})
+    two = [
+        {"run_id": "r1", "purpose": "verification_run", "ok_command": True},
+        {"run_id": "r2", "purpose": "feature_implementation", "ok_command": False},
+    ]
+    ready = _auto_check(good, two)
+    assert knowmod.auto_reference_ready(ready) and all(_auto_codes(ready).values())
+    summary = knowmod.auto_reference_summary(ready)
+    assert (summary["ready"], summary["met"], summary["unmet"]) == (True, ALL_AUTO_CODES, [])
+
+    def unmet(candidate: dict[str, Any] = good, runs: list[dict[str, Any]] = two, **kw: Any) -> list[str]:
+        findings = _auto_check(candidate, runs, **kw)
+        assert not knowmod.auto_reference_ready(findings)
+        return knowmod.auto_reference_summary(findings)["unmet"]
+
+    assert unmet(_cand(kind="operation", state="active", observed=good["observed"])) == ["candidate"]
+    assert unmet(dict(good, obligation="required")) == ["reference"]
+    assert unmet(dict(good, kind="decision")) == ["observational_kind"]
+    assert unmet(dict(good, kind="constraint")) == ["observational_kind"]
+    assert unmet(good, [two[0]]) == ["two_runs"]
+    # 검증 실행 둘 중 하나만 종료 코드 0 이어도 된다.
+    assert knowmod.auto_reference_ready(_auto_check(good, [dict(two[0], run_id="a"), dict(two[0], run_id="b", ok_command=False)]))
+    only_impl = [{"run_id": "x", "purpose": "feature_implementation", "ok_command": True}, dict(two[1], run_id="y")]
+    assert unmet(good, only_impl) == ["verified_run"]
+    failed = [{"run_id": "x", "purpose": "verification_run", "ok_command": False}, {"run_id": "y", "purpose": "limited_analysis", "ok_command": False}]
+    assert unmet(good, failed) == ["verified_run"]
+    analysis = [{"run_id": "x", "purpose": "limited_analysis", "ok_command": True}, dict(two[1])]
+    assert knowmod.auto_reference_ready(_auto_check(good, analysis))
+    assert unmet(dict(good, scope_kind="project", repository_id=None)) == ["observed_repository"]
+    assert unmet(dict(good, repository_id="r-b")) == ["observed_repository"]
+    no_observation = _auto_check(dict(good, observed=None), two)
+    assert knowmod.auto_reference_summary(no_observation)["unmet"] == ["observed_repository"]
+    assert "관측 문맥이 없다" in next(f.detail for f in no_observation if f.code == "observed_repository")
+    assert unmet(dict(good, relation="contradicts")) == ["no_contradiction"]
+    assert unmet(good, two, contradicting_candidates=1) == ["no_contradiction"]
+    assert unmet(good, two, open_conflicts=1) == ["no_contradiction"]
+    assert unmet(good, two, adoption_blocked_codes=["open_conflict"]) == ["adoption_clear"]
+    # 여러 조건이 함께 깨지면 전부 적힌다(순서는 조건 표 순서).
+    assert unmet(dict(good, obligation="required", scope_kind="project", repository_id=None), [two[0]]) == [
+        "reference", "two_runs", "observed_repository"
+    ]
+
+
+def test_a_candidate_is_ready_only_with_two_runs_and_is_activated_only_when_a_human_clicks(processing_harness, monkeypatch):
+    """AC-2~7·9 — 검증 실행 하나의 후보는 `two_runs` 미충족, 다른 대화의 검증 실행이 같은 내용을 보고하면 근거 실행
+    둘 → `ready`. **그래도 후보 그대로다.** 필수 제안·결정 종류·프로젝트 범위·논의 응답의 제안·반증·열린 충돌은 미충족
+    사유로 보인다. 한 번에 활성화(사람의 호출)는 `ready` 인 것만 참고 활성(사유 고정·`adoption.by`·충족 항목)으로
+    만들고 나머지는 건너뛰어 적는다. 거부는 건너뛴다. 활성 참고는 다음 실행에 참고로 들어간다."""
+    h = processing_harness
+    project, _path = h.create_git_project("kx-auto")
+    executor = h.agent.cli_executor
+    executor.verification_response = FAKE_VERIFICATION_RESPONSE + _block([
+        _candidate(repository="primary"),
+        _candidate(summary="필수 제안", content="REQ-MARK 시험 전에 표본을 만든다", repository="primary", obligation="required"),
+        _candidate(summary="프로젝트 전체 관찰", content="WIDE-MARK 모든 저장소가 표본 시험을 돈다", repository=None),
+    ])
+    first = _run_to_completion(h, project)
+    view = _knowledge(h, project["id"])
+    k1, k2, k3 = (_item(view, k) for k in ("K-001", "K-002", "K-003"))
+    auto = k1["auto_reference"]
+    assert auto["ready"] is False and auto["unmet"] == ["two_runs"]
+    assert [(r["purpose"], r["ok_command"]) for r in auto["evidence_runs"]] == [("verification_run", True)]
+    assert [f["code"] for f in auto["findings"]] == ALL_AUTO_CODES
+    assert k2["auto_reference"]["unmet"] == ["reference", "two_runs"]
+    assert k3["auto_reference"]["unmet"] == ["two_runs", "observed_repository"]
+    assert _auto(h, k1["id"]) == auto
+    rows = _registrations(h, first, "extraction")
+    assert [r["auto_reference"]["unmet"] for r in rows] == [["two_runs"], ["reference", "two_runs"], ["two_runs", "observed_repository"]]
+
+    # 둘째 대화 — 같은 내용(K-001 의 duplicate 근거), K-003 을 뒷받침하는 관측, 결정 종류의 제안.
+    executor.verification_response = FAKE_VERIFICATION_RESPONSE + _block([
+        _candidate(repository="primary"),
+        _candidate(relates_to="K-003", relation="supports", summary="전체 관찰 확인", content="SUP3-MARK 다른 저장소에서도 돌았다", repository=None),
+        _candidate(kind="decision", summary="결정 제안", content="DEC-MARK 표본은 둘로 고정한다", repository="primary"),
+    ])
+    second = _run_to_completion(h, project, "오류 줄 필터를 구현해줘 (둘째)")
+    rows = _registrations(h, second, "extraction")
+    assert [(r["intake_state"], r.get("knowledge_key")) for r in rows] == [("evidence", None), ("evidence", None), ("registered", "K-004")]
+    assert rows[2]["auto_reference"]["unmet"] == ["observational_kind", "two_runs"]
+    view = _knowledge(h, project["id"])
+    k1 = _item(view, "K-001")
+    auto = k1["auto_reference"]
+    assert auto["ready"] is True and auto["unmet"] == [] and auto["met"] == ALL_AUTO_CODES
+    assert len({r["run_id"] for r in auto["evidence_runs"]}) == 2
+    assert k1["current"]["state"] == "candidate"  # 충족은 표시다 — 클릭 없이 활성화하지 않는다
+    assert _item(view, "K-003")["auto_reference"]["unmet"] == ["observed_repository"]
+    assert _item(view, "K-002")["auto_reference"]["unmet"] == ["reference", "two_runs"]
+
+    # 반증 후보가 있으면 대상도 미충족, 후보 자신도 미충족. 무효로 하면 다시 충족.
+    executor.verification_response = FAKE_VERIFICATION_RESPONSE + _block([
+        _candidate(relates_to="K-001", relation="contradicts", summary="반증", content="CONTRA-MARK 표본 하나로도 돈다", repository="primary"),
+    ])
+    third = _run_to_completion(h, project, "오류 줄 필터를 구현해줘 (셋째)")
+    [contra] = _registrations(h, third, "extraction")
+    assert contra["knowledge_key"] == "K-005"
+    assert _auto(h, k1["id"])["unmet"] == ["no_contradiction"]
+    assert _auto(h, contra["knowledge_id"])["unmet"] == ["two_runs", "no_contradiction"]
+    h.client.post(f"/api/knowledge/{contra['knowledge_id']}/invalidate", json={"reason_summary": "반증이 아니었다"})
+    assert _auto(h, k1["id"])["ready"] is True
+    # 열린 충돌은 반증·채택 확인 둘 다 깬다. 해소하면 다시 충족.
+    conflict = h.client.post(
+        f"/api/projects/{project['id']}/knowledge-conflicts",
+        json={"knowledge_a": k1["id"], "knowledge_b": _item(view, "K-002")["id"], "reason_summary": "겹친다"},
+    ).json()
+    assert _auto(h, k1["id"])["unmet"] == ["no_contradiction", "adoption_clear"]
+    h.client.post(f"/api/knowledge-conflicts/{conflict['id']}/resolve", json={"reason_summary": "겹치지 않는다"})
+    assert _auto(h, k1["id"])["ready"] is True
+
+    # 논의 응답의 제안 — 관측 문맥이 없어 조건 (4)를 만족하지 못한다(사람이 항목의 폼에서 활성화한다).
+    talk = h.create_conversation(project["id"], "이야기")["case_id"]
+    executor.discussion_response = (
+        "정리했습니다." + _block([dict(_candidate(summary="AI 관찰", content="PROP-MARK 시험은 루트에서 돈다", proposal=True), repository=None)])
+        + '\n\n```hads-interpretation\n{"kind": "discussion"}\n```'
+    )
+    h.send_message(talk, "이 프로젝트에서 배운 것을 정리해줘", "c-auto-1")
+    h.agent.poll_once()
+    [proposal] = _registrations(h, talk)
+    assert proposal["knowledge_key"] == "K-006"
+    prop_auto = proposal["auto_reference"]
+    assert prop_auto["unmet"] == ["two_runs", "verified_run", "observed_repository"]
+    assert "관측 문맥이 없다" in next(f["detail"] for f in prop_auto["findings"] if f["code"] == "observed_repository")
+
+    # 한 번에 활성화 — 화면이 보낸 id 만 본다. 충족이 아닌 것은 건너뛴다(후보 그대로).
+    k2_id = _item(view, "K-002")["id"]
+    partial = h.client.post(f"/api/projects/{project['id']}/knowledge/activate-ready", json={"knowledge_ids": [k2_id]})
+    assert partial.status_code == 200, partial.text
+    assert partial.json()["activated"] == []
+    assert partial.json()["skipped"] == [{"knowledge_id": k2_id, "knowledge_key": "K-002", "reason": "not_ready", "unmet": ["reference", "two_runs"]}]
+    assert _item(_knowledge(h, project["id"]), "K-002")["current"]["state"] == "candidate"
+    assert _item(_knowledge(h, project["id"]), "K-001")["current"]["state"] == "candidate"  # 부르지 않은 것은 그대로
+
+    # 거부는 건너뛴다 — 활성화 함수를 끼워 넣어 막힘을 흉내 낸다(같은 호출 안에서 조건과 채택 확인 사이에 끼어들 길이 없다).
+    original = Repository.activate_knowledge
+
+    def refusing(self, knowledge_id, *args, **kwargs):
+        if knowledge_id == k1["id"]:
+            raise KnowledgeAdoptionRefused({"blocked": ["open_conflict"], "findings": []})
+        return original(self, knowledge_id, *args, **kwargs)
+
+    monkeypatch.setattr(Repository, "activate_knowledge", refusing)
+    refused = h.client.post(f"/api/projects/{project['id']}/knowledge/activate-ready", json={"actor": "tester"}).json()
+    assert refused["activated"] == []
+    assert {s["knowledge_key"]: s["reason"] for s in refused["skipped"]} == {
+        "K-001": "refused", "K-002": "not_ready", "K-003": "not_ready", "K-004": "not_ready", "K-006": "not_ready"
+    }
+    assert next(s for s in refused["skipped"] if s["knowledge_key"] == "K-001")["refusals"] == ["open_conflict"]
+    monkeypatch.setattr(Repository, "activate_knowledge", original)
+
+    # 실제 한 번에 활성화(사람의 호출) — K-001 만 참고 활성이 된다. 사유 고정·`adoption.by`·충족 항목·근거 실행.
+    result = h.client.post(f"/api/projects/{project['id']}/knowledge/activate-ready", json={"actor": "tester"}).json()
+    assert [(a["knowledge_key"], a["version"]) for a in result["activated"]] == [("K-001", 2)]
+    assert sorted(s["knowledge_key"] for s in result["skipped"]) == ["K-002", "K-003", "K-004", "K-006"]
+    assert all(s["reason"] == "not_ready" for s in result["skipped"]) and result["by"] == "tester"
+    view = _knowledge(h, project["id"])
+    k1 = _item(view, "K-001")
+    assert [(v["version"], v["state"]) for v in k1["versions"]] == [(1, "superseded"), (2, "active")]
+    new = k1["current"]
+    assert (new["authority_kind"], new["obligation"], new["scope_kind"], new["activities"]) == (
+        "user_decision", "reference", "repository", ["verification"]
+    )
+    assert new["repository_id"] == h.project_repository_id(project["id"]) and new["kind"] == "operation"
+    assert new["reason_summary"] == knowmod.AUTO_REFERENCE_REASON
+    adoption = new["adoption"]
+    assert adoption["by"] == "tester" and adoption["auto_reference"]["met"] == ALL_AUTO_CODES
+    assert sorted(adoption["auto_reference"]["evidence_runs"]) == sorted(r["run_id"] for r in auto["evidence_runs"])
+    assert {f["code"] for f in adoption["findings"]} == {"independent_review_not_run"}
+    assert k1["auto_reference"] is None  # 후보가 아니면 조건을 계산하지 않는다
+    # 필수 제안(K-002)은 `reference` 미충족이라 이 길로는 활성이 되지 않는다 — 활성 필수는 사람의 권위뿐이다.
+    assert _item(view, "K-002")["current"]["state"] == "candidate"
+    # 다시 불러도 아무 것도 더 활성화하지 않는다(멱등 — 충족인 후보가 없다).
+    again = h.client.post(f"/api/projects/{project['id']}/knowledge/activate-ready", json={}).json()
+    assert again["activated"] == [] and "K-001" not in {s["knowledge_key"] for s in again["skipped"]}
+
+    # 다음 실행(다른 대화의 검증 실행)에 활성 참고로 들어간다 — 후보가 아니라 참고 역할, Manifest provided v2.
+    executor.verification_response = FAKE_VERIFICATION_RESPONSE
+    fourth = _run_to_completion(h, project, "오류 줄 필터를 구현해줘 (넷째)")
+    verify = next(r for r in _runs(h, fourth) if r["purpose"] == "verification_run")
+    refs = [r for r in h.context_refs(verify["run_id"]) if r["role"] == "knowledge_reference"]
+    assert [(r["knowledge"]["key"], r["knowledge"]["version"], r["tier"]) for r in refs] == [("K-001", 2, "supporting")]
+    decisions = {i["knowledge_key"]: (i["decision"], i["version"], i["state"]) for i in _manifest(h, verify["run_id"])["items"]}
+    assert decisions["K-001"] == ("provided", 2, "active")
+    assert h.client.get(f"/api/cases/{fourth}").json()["status"] == "closed"

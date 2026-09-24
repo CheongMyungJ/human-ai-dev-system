@@ -13269,13 +13269,15 @@ class Repository:
         repository_id: str | None = None,
         paths: list[str] | None = None,
         activities: list[str] | None = None,
+        extra_adoption: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """후보 → 활성. **사람의 결정이며 새 버전이다**(`user_decision`) — 후보 행을 덮어쓰지 않는다.
 
         P4-07. 먼저 QG-08 채택 확인을 지난다 — 막는 항목이 있으면 `KnowledgeAdoptionRefused`(코드 목록).
         경고는 새 버전의 `adoption` 에 남는다. 범위·효력·활동은 **좁힐 수만** 있다(확인이 막는다).
         `into_knowledge_id` 를 주면 **그 항목의 새 버전**으로 적용하고 후보 버전은 그 새 버전에 대체된
-        것으로 닫는다(후보 키·이력은 남는다).
+        것으로 닫는다(후보 키·이력은 남는다). P4-07b: `extra_adoption` 은 `adoption` 에 합쳐 남기는 짧은
+        구조(한 번에 활성화의 충족 항목)다 — 상한은 `register_knowledge` 가 본다.
         """
         current = self.current_knowledge_version(knowledge_id)
         if current is None:
@@ -13314,6 +13316,8 @@ class Repository:
             "into": check["into"]["knowledge_key"] if check["into"] else None,
             "independent_review": "not_run",
         }
+        if extra_adoption:
+            adoption.update(extra_adoption)
         target_id = into_knowledge_id or knowledge_id
         relates_to = current.get("relates_to_knowledge_id")
         relation = current.get("relation")
@@ -13349,6 +13353,135 @@ class Repository:
                     ),
                 )
         return version
+
+    # ------------------------------------------------------------- 자동 활성 조건 (P4-07b)
+    #
+    # 사용자 결정(2026-09-24): 반자동. 여기서는 사실(근거 실행·명령·반증 후보·열린 충돌·채택 확인)을 모아
+    # `domain.knowledge.auto_reference_check` 에 넘기고, **사람이 누른** 한 번에 활성화만 활성화한다. 결과 뒤
+    # 훅·처리기·기동 복구 어디에서도 이것을 부르지 않는다.
+
+    def auto_reference_check_for(self, knowledge_id: str) -> dict[str, Any]:
+        """참고 후보의 자동 활성 조건(여덟)의 충족/미충족. 계산·표시이며 판정·활성화가 아니다.
+
+        근거 실행 = 출처 실행 + 근거 행(`supports`·`duplicate`)의 실행을 실행 id 로 중복 제거. 각 실행의
+        목적과 명령 기록(`run_command.exit_code == 0` 하나라도)을 본다 — 명령·종료 코드는 AI 자기보고다.
+        """
+        current = self.current_knowledge_version(knowledge_id)
+        if current is None:
+            raise NotFoundError(f"knowledge not found: {knowledge_id}")
+        run_ids: list[str] = []
+        if current.get("source_run_id"):
+            run_ids.append(current["source_run_id"])
+        for evidence in self.knowledge_evidence_for(knowledge_id):
+            if evidence.get("source_run_id") and evidence["source_run_id"] not in run_ids:
+                run_ids.append(evidence["source_run_id"])
+        evidence_runs: list[dict[str, Any]] = []
+        for run_id in run_ids:
+            try:
+                run = self.get_run(run_id)
+            except NotFoundError:
+                continue
+            commands = self.list_run_commands(run_id)
+            evidence_runs.append(
+                {
+                    "run_id": run_id,
+                    "purpose": run.get("purpose"),
+                    "ok_command": any(c.get("exit_code") == 0 for c in commands),
+                }
+            )
+        contradicting = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM knowledge_version kv"
+            " WHERE kv.relates_to_knowledge_id = ? AND kv.relation = ? AND kv.state = ?"
+            " AND kv.version = (SELECT MAX(v2.version) FROM knowledge_version v2"
+            "                   WHERE v2.knowledge_id = kv.knowledge_id)",
+            (knowledge_id, knowmod.Relation.CONTRADICTS.value, knowmod.KnowledgeState.CANDIDATE.value),
+        ).fetchone()["n"]
+        open_conflicts = self.conn.execute(
+            "SELECT COUNT(*) AS n FROM knowledge_conflict WHERE state = 'open'"
+            " AND (knowledge_a = ? OR knowledge_b = ?)",
+            (knowledge_id, knowledge_id),
+        ).fetchone()["n"]
+        blocked: list[str] = []
+        if current["state"] == knowmod.KnowledgeState.CANDIDATE.value:
+            blocked = self.adoption_check_for(knowledge_id)["blocked"]
+        findings = knowmod.auto_reference_check(
+            current,
+            evidence_runs=evidence_runs,
+            contradicting_candidates=int(contradicting),
+            open_conflicts=int(open_conflicts),
+            adoption_blocked_codes=blocked,
+        )
+        return {
+            "knowledge_id": knowledge_id,
+            "knowledge_key": current["knowledge_key"],
+            "version_id": current["id"],
+            **knowmod.auto_reference_summary(findings),
+            "evidence_runs": evidence_runs,
+        }
+
+    def activate_ready_knowledge(
+        self, project_id: str, actor: str, knowledge_ids: list[str] | None = None
+    ) -> dict[str, Any]:
+        """조건 충족 후보를 **사람이 한 번에** 활성화한다(효력 참고·범위 그대로). 사람의 클릭이 이 호출이다.
+
+        대상은 `knowledge_ids`(화면이 본 것) 또는 이 Project 의 후보 전부. 각각 조건을 다시 계산해 충족인
+        것만 `activate_knowledge` 로(QG-08 채택 확인을 그대로 지난다). 충족이 아니거나 거부되면 그것만
+        건너뛰고 결과에 적는다 — 항목마다 독립이다. 필수로 올리지 않는다.
+        """
+        self.get_project(project_id)
+        if knowledge_ids is None:
+            targets = [
+                v["knowledge_id"]
+                for v in self._current_knowledge_versions(project_id)
+                if v["state"] == knowmod.KnowledgeState.CANDIDATE.value
+            ]
+        else:
+            targets = []
+            for knowledge_id in knowledge_ids:
+                if self.get_knowledge_item(knowledge_id)["project_id"] != project_id:
+                    raise ConflictError("the knowledge belongs to another project")
+                if knowledge_id not in targets:
+                    targets.append(knowledge_id)
+        activated: list[dict[str, Any]] = []
+        skipped: list[dict[str, Any]] = []
+        for knowledge_id in targets:
+            check = self.auto_reference_check_for(knowledge_id)
+            if not check["ready"]:
+                skipped.append(
+                    {"knowledge_id": knowledge_id, "knowledge_key": check["knowledge_key"],
+                     "reason": "not_ready", "unmet": check["unmet"]}
+                )
+                continue
+            try:
+                version = self.activate_knowledge(
+                    knowledge_id,
+                    actor,
+                    knowmod.AUTO_REFERENCE_REASON,
+                    obligation=knowmod.KnowledgeObligation.REFERENCE.value,
+                    extra_adoption={
+                        "auto_reference": {
+                            "met": check["met"],
+                            "evidence_runs": [r["run_id"] for r in check["evidence_runs"]],
+                        }
+                    },
+                )
+            except KnowledgeAdoptionRefused as exc:
+                skipped.append(
+                    {"knowledge_id": knowledge_id, "knowledge_key": check["knowledge_key"],
+                     "reason": "refused", "refusals": list(exc.refusals)}
+                )
+                continue
+            except (ConflictError, NotFoundError) as exc:
+                skipped.append(
+                    {"knowledge_id": knowledge_id, "knowledge_key": check["knowledge_key"],
+                     "reason": "refused", "refusals": [f"refused: {exc}"[:120]]}
+                )
+                continue
+            activated.append(
+                {"knowledge_id": knowledge_id, "knowledge_key": version["knowledge_key"],
+                 "version_id": version["id"], "version": version["version"]}
+            )
+        return {"project_id": project_id, "by": actor, "activated": activated, "skipped": skipped}
 
     # ------------------------------------------------------------- 근거 (P4-07)
 
@@ -13590,13 +13723,20 @@ class Repository:
                     )["availability"]
                 except NotFoundError:
                     version["availability"] = "missing"
+            current = versions[-1] if versions else None
             items.append(
                 {
                     **dict(row),
-                    "current": versions[-1] if versions else None,
+                    "current": current,
                     "versions": versions,
                     # P4-07. 이 항목에 더해진 근거(관측 실행). 참조·요약뿐이다.
                     "evidence": self.knowledge_evidence_for(row["id"]),
+                    # P4-07b. 후보의 자동 활성 조건(표시). 후보가 아니면 `None`.
+                    "auto_reference": (
+                        self.auto_reference_check_for(row["id"])
+                        if current is not None and current["state"] == knowmod.KnowledgeState.CANDIDATE.value
+                        else None
+                    ),
                 }
             )
         conflicts = [
@@ -13863,6 +14003,12 @@ class Repository:
                 item["storage"] = registered["storage"]
                 item["source_storage"] = registered["source_storage"]
                 item["observed"] = registered.get("observed")
+                # P4-07b. 지금도 후보면 자동 활성 조건(표시)을 함께 준다 — 카드의 배지.
+                item["auto_reference"] = (
+                    self.auto_reference_check_for(item["knowledge_id"])
+                    if current is not None and current["state"] == knowmod.KnowledgeState.CANDIDATE.value
+                    else None
+                )
             out.append(item)
         return out
 
