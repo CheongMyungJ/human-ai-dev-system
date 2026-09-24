@@ -817,3 +817,208 @@ def test_a_work_run_leaves_a_candidate_card_and_the_admin_panel_checks_and_activ
     ]
     assert versions[1]["adoption"]["by"] == "owner"
     page.context.close()
+
+
+# ================================================== UI-04a 결정 사항 패널 · 프로젝트 규칙 화면
+
+
+def _address(page: Page) -> str:
+    return page.evaluate("location.href")
+
+
+def test_the_decisions_panel_and_the_rules_screen_lead_back_to_the_message(stack):
+    """UI-04a AC-1·2·4·5·7·9 — 대화에서 말한 규칙이 결정 사항 패널의 "이 대화에서 정한 규칙" 에 보이고 메시지로
+    이동한다. 프로젝트 규칙 화면이 등록부를 보이며 "원래 대화로" 가 그 메시지를 강조한다(주소의 `seq` 는 소비).
+    개정은 새 버전(이력), 무효는 사유와 함께 상태만 바꾼다. 카드 링크는 프로젝트 규칙 화면을 가리킨다.
+    """
+    project = stack.project("규칙 화면")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    # 먼저 한 마디 나눈 뒤(#1·#2) 규칙을 말한다(#3) — 가짜 codex 는 고정 컨텍스트 뒤의 마지막 메시지에서만
+    # 규칙을 옮기므로, 첫 메시지에서 말하면 지시문 머리를 옮긴다(시험 도구의 특성이지 제품 규칙이 아니다).
+    _send(page, "먼저 이야기부터 하자")
+    expect(page.locator('[data-testid="message-2"] [data-testid="message-body"]')).to_contain_text("가짜 응답", timeout=60_000)
+    expect(page.locator('[data-testid="send-refusal"]')).to_have_count(0, timeout=30_000)  # 요청이 끝나 전송이 열렸다
+    _send(page, "HADS_FAKE_RULE 이 프로젝트에서는 앞으로 오류 로그에 시각을 붙이지 마")
+    card = page.locator('[data-testid="knowledge-card"]')
+    expect(card).to_be_visible(timeout=60_000)
+    expect(card).to_have_attribute("data-state", "active")
+    expect(card.locator('[data-testid="knowledge-card-rules"]')).to_have_attribute(
+        "href", f"?project={project['id']}&screen=rules&item=K-001"
+    )
+
+    # 결정 사항 패널 — 이 대화에서 정한 규칙, 메시지로 이동(강조), 프로젝트 규칙으로 가는 링크. 활성화 버튼은 없다.
+    page.click('[data-testid="open-decisions"]')
+    row = page.locator('[data-testid="decisions-rule-K-001"]')
+    expect(row).to_be_visible()
+    expect(row).to_contain_text("K-001 v1")
+    expect(row).to_contain_text("지금 활성")
+    expect(row).to_contain_text("이 대화에서 한 말")
+    expect(row).to_have_attribute("data-state", "active")
+    assert page.locator('[data-testid="decisions"] [data-testid^="rule-activate-"]').count() == 0
+    expect(row.locator('[data-testid="decisions-rule-message-K-001"]')).to_contain_text("메시지 #3")
+    row.locator('[data-testid="decisions-rule-message-K-001"]').click()
+    expect(page.locator('[data-testid="message-3"]')).to_have_attribute("data-focus", "1")
+    expect(row.locator('[data-testid="decisions-rule-open-K-001"]')).to_have_attribute(
+        "href", f"?project={project['id']}&screen=rules&item=K-001"
+    )
+
+    # 프로젝트 규칙 화면(왼쪽 목록) — 등록부, 출처 링크.
+    page.click('[data-testid="open-rules"]')
+    screen = page.locator('[data-testid="rules-screen"]')
+    expect(screen).to_be_visible()
+    assert "screen=rules" in _address(page)
+    assert page.locator('[data-testid="review-panel"]').count() == 0  # 규칙 화면에서는 오른쪽 패널이 닫힌다
+    rule = screen.locator('[data-testid="rule-K-001"]')
+    expect(rule).to_have_attribute("data-state", "active")
+    expect(rule).to_have_attribute("data-obligation", "required")
+    expect(screen.locator('[data-testid="rules-required"]')).to_contain_text("K-001")
+    link = rule.locator('[data-testid="rule-source-link-K-001"]')
+    expect(link).to_contain_text("메시지 #3")
+    expect(link).to_have_attribute("href", f"?project={project['id']}&case={case_id}&seq=3")
+
+    # 원래 대화로 이동 — 그 메시지가 강조되고 주소의 `seq` 는 소비된다.
+    link.click()
+    page.wait_for_selector('[data-testid="conversation-title"]')
+    expect(page.locator('[data-testid="message-3"]')).to_have_attribute("data-focus", "1", timeout=30_000)
+    _wait(lambda: "seq=" not in _address(page), 10, "seq 소비")
+    assert f"case={case_id}" in _address(page)
+
+    # 규칙 화면에서 개정(새 버전) → 이력, 내용 보기, 무효(사유).
+    page.click('[data-testid="open-rules"]')
+    rule = page.locator('[data-testid="rule-K-001"]')
+    rule.locator('[data-testid="rule-toggle-K-001"]').click()
+    expect(rule.locator('[data-testid="rule-storage-K-001"]')).to_contain_text("서버 저장")
+    rule.locator('[data-testid="rule-revise-K-001"]').click()
+    rule.locator('[data-testid="rule-revise-summary-K-001"]').fill("오류 로그에 시각 없음(개정)")
+    rule.locator('[data-testid="rule-revise-reason-K-001"]').fill("표현을 다듬음")
+    rule.locator('[data-testid="rule-revise-submit-K-001"]').click()
+    expect(rule).to_contain_text("v2", timeout=15_000)
+    expect(rule.locator('[data-testid="rule-history-K-001"]')).to_contain_text("v1 대체됨")
+    expect(rule.locator('[data-testid="rule-history-K-001"]')).to_contain_text("표현을 다듬음")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    item = next(i for i in view["items"] if i["knowledge_key"] == "K-001")
+    assert [(v["version"], v["state"], v["authority_kind"]) for v in item["versions"]] == [
+        (1, "superseded", "user_statement"), (2, "active", "user_registration")
+    ]
+    assert item["current"]["source_case_title"] == "새 대화" and item["current"]["source_message_seq"] is None
+    rule.locator('[data-testid="rule-show-K-001"]').click()
+    expect(rule.locator('[data-testid="rule-body-K-001"]')).to_contain_text("오류 로그에 시각을 붙이지 마", timeout=15_000)
+    rule.locator('[data-testid="rule-invalidate-K-001"]').click()
+    rule.locator('[data-testid="rule-invalidate-reason-K-001"]').fill("더 이상 맞지 않는다")
+    rule.locator('[data-testid="rule-invalidate-confirm-K-001"]').click()
+    expect(page.locator('[data-testid="rules-history-toggle"]')).to_contain_text("대체·무효 1", timeout=15_000)
+    assert page.locator('[data-testid="rules-required"] [data-testid="rule-K-001"]').count() == 0
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    current = next(i for i in view["items"] if i["knowledge_key"] == "K-001")["current"]
+    assert (current["state"], current["invalid_reason"]) == ("invalid", "더 이상 맞지 않는다")
+    page.context.close()
+
+
+def test_a_rule_registered_on_the_rules_screen_reaches_the_work_and_a_candidate_is_activated_there(stack):
+    """UI-04a AC-1·3·6·8·9·14 — 규칙 화면의 수동 등록(출처 대화 선택)은 바로 활성이고 그 뒤의 업무 실행에
+    들어간다. 결정 사항 패널이 목표·기준·결정·적용된 규칙(Manifest 집계)·실행 후보를 보이고, 후보의 채택 확인·
+    활성화는 규칙 화면에서 한다(카드 링크로 항목이 펼쳐진다). 관리 화면의 지식 패널은 그대로다.
+    """
+    project = stack.project("규칙 적용")
+    repo = Path(project["repo_path"])
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@example.invalid"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, capture_output=True)
+    (repo / "reader.py").write_text("def read(path):\n    return open(path).read()\n", encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
+
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+
+    # 규칙 화면에서 수동 등록 — 출처는 이 대화, 바로 활성(재승인 없음).
+    page.click('[data-testid="open-rules"]')
+    screen = page.locator('[data-testid="rules-screen"]')
+    expect(screen).to_be_visible()
+    expect(screen.locator('[data-testid="rules-note"]')).to_contain_text("서버에 저장")
+    expect(screen.locator('[data-testid="rules-note"]')).to_contain_text("비밀값")
+    expect(screen.locator('[data-testid="rules-required"]')).to_contain_text("활성 필수 규칙이 없다")
+    page.select_option('[data-testid="rules-register-case"]', case_id)
+    page.fill('[data-testid="rules-register-content"]', "구현할 때 함수마다 한 줄 docstring 을 단다. 예외: 시험 파일")
+    page.fill('[data-testid="rules-register-summary"]', "한 줄 docstring")
+    page.click('[data-testid="rules-register"]')
+    expect(screen.locator('[data-testid="rules-register-done"]')).to_contain_text("K-001 v1", timeout=15_000)
+    rule = screen.locator('[data-testid="rule-K-001"]')
+    expect(rule).to_have_attribute("data-state", "active")
+    expect(rule.locator('[data-testid="rule-source-link-K-001"]')).to_contain_text("새 대화")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    current = next(i for i in view["items"] if i["knowledge_key"] == "K-001")["current"]
+    assert (current["authority_kind"], current["storage"], current["source_case_id"]) == (
+        "user_registration", "server", case_id
+    )
+
+    # 대화로 돌아가 업무를 돌린다 — 규칙이 실행에 들어가고 검증 실행이 후보를 남긴다.
+    page.click('[data-testid="rules-back"]')
+    page.wait_for_selector('[data-testid="composer-input"]')
+    assert "screen=rules" not in _address(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_CANDIDATE 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=120_000)
+
+    # 결정 사항 패널 — 목표·기준, 결정(의도 동의 → 의도 v1), 적용된 규칙(집계 = 서버 값), 실행 후보.
+    page.click('[data-testid="open-decisions"]')
+    expect(page.locator('[data-testid="decisions-goal"]')).to_contain_text("의도 v1")
+    expect(page.locator('[data-testid="decisions-goal"]')).to_contain_text("의도 동의됨")
+    expect(page.locator('[data-testid="decision-intent_agreement"]').first).to_contain_text("의도 v1")
+    applied = page.locator('[data-testid="applied-K-001"]')
+    expect(applied).to_be_visible(timeout=15_000)
+    expect(applied).to_contain_text("필수")
+    expect(applied).to_contain_text("제공 실행")
+    expect(page.locator('[data-testid="decisions-applied"]')).to_contain_text("준수의 증거가 아니다")
+    use = stack.http.get(f"/api/cases/{case_id}/knowledge-use").json()
+    [use_item] = use["items"]
+    assert use_item["knowledge_key"] == "K-001" and use_item["provided_runs"] >= 1
+    assert applied.get_attribute("data-provided") == str(use_item["provided_runs"])
+    assert use["runs_unrecorded"] == 0
+    candidate = page.locator('[data-testid="decisions-rule-K-002"]')
+    expect(candidate).to_have_attribute("data-state", "candidate")
+    expect(candidate).to_contain_text("실행이 남긴 후보")
+    assert page.locator('[data-testid="decisions"] [data-testid^="rule-activate-"]').count() == 0
+    expect(page.locator('[data-testid="knowledge-candidate-rules"]')).to_have_attribute(
+        "href", f"?project={project['id']}&screen=rules&item=K-002"
+    )
+
+    # 프로젝트 규칙에서 보기 → 항목이 펼쳐진다 → 채택 확인 → 활성화(사람의 결정, 새 버전).
+    candidate.locator('[data-testid="decisions-rule-open-K-002"]').click()
+    screen = page.locator('[data-testid="rules-screen"]')
+    expect(screen).to_be_visible(timeout=30_000)
+    rule = screen.locator('[data-testid="rule-K-002"]')
+    expect(rule.locator('[data-testid="rule-details-K-002"]')).to_be_visible()
+    expect(rule.locator('[data-testid="rule-origin-K-002"]')).to_contain_text("관측: 저장소")
+    expect(rule.locator('[data-testid="rule-source-K-002"]')).to_contain_text("AI 제안")
+    expect(screen.locator('[data-testid="rules-candidates"]')).to_contain_text("K-002")
+    rule.locator('[data-testid="rule-check-K-002"]').click()
+    result = rule.locator('[data-testid="rule-check-result-K-002"]')
+    expect(result).to_be_visible(timeout=15_000)
+    expect(result).to_contain_text("막는 항목 없음")
+    expect(result).to_contain_text("독립 AI 검토는 돌리지 않았다")
+    rule.locator('[data-testid="rule-activate-reason-K-002"]').fill("시험으로 확인한 관찰이다")
+    rule.locator('[data-testid="rule-activate-K-002"]').click()
+    expect(rule).to_have_attribute("data-state", "active", timeout=15_000)
+    expect(rule.locator('[data-testid="rule-adoption-K-002"]')).to_contain_text("채택 확인")
+    expect(screen.locator('[data-testid="rules-reference"]')).to_contain_text("K-002")
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    versions = next(i for i in view["items"] if i["knowledge_key"] == "K-002")["versions"]
+    assert [(v["version"], v["state"], v["authority_kind"]) for v in versions] == [
+        (1, "superseded", "ai_proposal"), (2, "active", "user_decision")
+    ]
+    assert versions[1]["adoption"]["by"] == "owner" and versions[1]["obligation"] == "reference"
+
+    # 관리 화면의 지식 패널은 그대로 동작한다.
+    page.goto(f"{stack.base}/?view=admin&project={project['id']}&case={case_id}")
+    panel = page.locator('[data-testid="knowledge-panel"]')
+    expect(panel).to_be_visible(timeout=30_000)
+    expect(panel.locator('[data-testid="knowledge-K-002"]')).to_contain_text("활성")
+    expect(panel.locator('[data-testid="knowledge-adoption-K-002"]')).to_contain_text("채택 확인")
+    page.context.close()

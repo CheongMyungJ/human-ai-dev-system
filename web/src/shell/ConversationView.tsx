@@ -41,7 +41,7 @@ import { splitRunOutput } from '../lib/runOutput'
 import { buildResultDocs, findDocFor, isLatest, type ResultDoc } from '../lib/versions'
 import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodies'
 import { Composer, randomId, refusalText } from './Composer'
-import { emit } from './events'
+import { emit, listen } from './events'
 import type { PanelTab } from './ReviewPanel'
 import {
   KnowledgeCandidateCards,
@@ -107,6 +107,9 @@ export function ConversationView(props: {
   runners: RunnerWithConnection[]
   panel: PanelTab | null
   scrollTop: number | null
+  // UI-04a. 주소의 `seq` — 대화를 연 뒤 그 메시지로 한 번 이동한다(원래 대화·근거로 이동, D-80).
+  focusSeq: number | null
+  onFocused: () => void
   onScroll: (top: number) => void
   onPanel: (tab: PanelTab) => void
   onChanged: () => void
@@ -117,6 +120,9 @@ export function ConversationView(props: {
   const nearBottom = useRef(true)
   const scrollTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
+  // 강조 중인 메시지 순번(잠시). 강조는 표시일 뿐이며 아무 것도 보내지 않는다.
+  const [focused, setFocused] = useState<number | null>(null)
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   // 원문을 가진 PC 의 연결. **서버가 도출한 값**을 쓴다.
   const connected = useMemo(() => {
@@ -161,6 +167,34 @@ export function ConversationView(props: {
     }
     if (nearBottom.current) el.scrollTop = el.scrollHeight
   }, [conv, props.scrollTop])
+
+  // ---------------------------------------------------------- 메시지로 이동
+  const focusMessage = (seq: number): boolean => {
+    const el = scroller.current
+    const target = el?.querySelector<HTMLElement>(`[data-testid="message-${seq}"]`) ?? null
+    if (!el || !target) return false
+    nearBottom.current = false
+    target.scrollIntoView({ block: 'center' })
+    setFocused(seq)
+    clearTimeout(focusTimer.current)
+    focusTimer.current = setTimeout(() => setFocused(null), 6000)
+    return true
+  }
+  const { focusSeq, onFocused } = props
+  const messageCount = conv?.messages.length ?? 0
+  useEffect(() => {
+    if (focusSeq === null || messageCount === 0) return
+    if (focusMessage(focusSeq)) onFocused()
+    // 그 순번의 메시지가 아직 목록에 없으면(옛 대화·늦은 조회) 다음 조회에서 다시 본다.
+  }, [focusSeq, messageCount, onFocused])
+  useEffect(
+    () =>
+      listen('hads:focus-message', (detail) => {
+        if (detail.caseId === caseId) focusMessage(detail.seq)
+      }),
+    [caseId],
+  )
+  useEffect(() => () => clearTimeout(focusTimer.current), [])
 
   const onScroll = () => {
     const el = scroller.current
@@ -269,6 +303,7 @@ export function ConversationView(props: {
                 message={message}
                 messages={conv.messages}
                 docs={docs}
+                focused={focused === message.seq}
                 connected={connected(ownerOf(message.artifact_id, message.artifact_rev))}
                 questionSummary={
                   message.question_id
@@ -411,6 +446,7 @@ function MessageItem(props: {
   message: ConversationMessage
   messages: ConversationMessage[]
   docs: ResultDoc[]
+  focused: boolean
   connected: boolean
   questionSummary: string | null
 }) {
@@ -431,9 +467,12 @@ function MessageItem(props: {
 
   return (
     <article
-      className={assistant ? 'sh-message sh-message-ai' : 'sh-message sh-message-user'}
+      className={[assistant ? 'sh-message sh-message-ai' : 'sh-message sh-message-user', props.focused ? 'sh-message-focus' : '']
+        .filter(Boolean)
+        .join(' ')}
       data-testid={`message-${message.seq}`}
       data-author={message.author}
+      data-focus={props.focused ? '1' : '0'}
     >
       <div className="sh-message-meta">
         <span>{assistant ? 'AI' : '나'}</span>

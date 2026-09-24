@@ -805,3 +805,109 @@ textarea {
   display: flex;
   gap: 6px;
 }
+
+/* ---------------------------------------------------------------- UI-04a: 메시지로 이동 · 프로젝트 규칙 */
+
+/* 결정 사항·규칙 화면에서 "메시지 #n" 으로 온 뒤 잠시 강조한다 — 표시일 뿐이다. */
+.sh-message-focus {
+  outline: 2px solid var(--sh-accent);
+  outline-offset: 6px;
+  border-radius: 10px;
+  transition: outline-color 0.6s ease;
+}
+
+.sh-rules-entry {
+  font-size: 13px;
+}
+
+.sh-rules {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.sh-rules-body {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 12px 24px 24px;
+}
+
+.sh-rules-body > * {
+  max-width: 900px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.sh-rules-note {
+  font-size: 12px;
+}
+
+.sh-rule {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--sh-line);
+  font-size: 13px;
+}
+
+.sh-rule-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.sh-rule-toggle {
+  padding: 0 4px;
+}
+
+.sh-rule-line {
+  font-size: 12px;
+  margin: 2px 0 0 22px;
+}
+
+.sh-rule-details {
+  margin-left: 22px;
+  padding: 6px 0 2px;
+}
+
+.sh-rule-details .sh-rule-line {
+  margin-left: 0;
+}
+
+.sh-rule-actions {
+  margin-top: 6px;
+}
+
+.sh-rule-input {
+  width: auto;
+  min-width: 140px;
+  flex: 1;
+}
+
+.sh-rule-candidate {
+  border-left: 2px solid var(--sh-warn);
+  padding-left: 8px;
+  margin: 6px 0;
+}
+
+.sh-rule-form {
+  border-left: 2px solid var(--sh-accent);
+  padding-left: 8px;
+  margin: 6px 0;
+}
+
+.sh-rule-form textarea,
+.sh-rules-body textarea {
+  width: 100%;
+  margin-top: 6px;
+}
+
+.sh-rule-findings {
+  margin: 6px 0;
+}
+
+.sh-rule-empty {
+  font-size: 12px;
+  margin: 2px 0;
+}

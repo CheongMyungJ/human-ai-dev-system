@@ -30,9 +30,11 @@ import {
   type Prefs,
   type ThemeChoice,
 } from '../lib/prefs'
+import { formatAddress, parseAddress, type Screen } from '../lib/address'
 import type { VersionRef } from '../lib/versions'
 import { ConversationView } from './ConversationView'
 import { listen } from './events'
+import { ProjectRules } from './ProjectRules'
 import { ReviewPanel, type PanelTab } from './ReviewPanel'
 import { Sidebar } from './Sidebar'
 import { useCaseData } from './useCaseData'
@@ -64,17 +66,15 @@ function useSystemDark(): boolean {
   return dark
 }
 
-function readAddress(): { project: string | null; case: string | null } {
-  const params = new URLSearchParams(window.location.search)
-  return { project: params.get('project'), case: params.get('case') }
-}
-
-function writeAddress(projectId: string | null, caseId: string | null) {
-  const params = new URLSearchParams()
-  if (projectId) params.set('project', projectId)
-  if (caseId) params.set('case', caseId)
-  const query = params.toString()
-  window.history.replaceState(null, '', query ? `?${query}` : window.location.pathname)
+function writeAddress(address: {
+  project: string | null
+  case: string | null
+  screen: Screen
+  item: string | null
+  seq: number | null
+}) {
+  const query = formatAddress(address)
+  window.history.replaceState(null, '', query || window.location.pathname)
 }
 
 export function Shell() {
@@ -90,12 +90,16 @@ export function Shell() {
   const [runners, setRunners] = useState<RunnerWithConnection[]>([])
   const [rows, setRows] = useState<ConversationRow[]>([])
   const [topError, setTopError] = useState<string | null>(null)
-  const initial = useRef(readAddress())
+  const initial = useRef(parseAddress(window.location.search))
   const [projectId, setProjectId] = useState<string | null>(
     initial.current.project ?? prefs.lastProjectId,
   )
   const [caseId, setCaseId] = useState<string | null>(initial.current.case)
   const [panel, setPanel] = useState<PanelTab | null>(null)
+  // UI-04a. 가운데 화면(대화 / 프로젝트 규칙)과 규칙 화면에서 펼칠 항목, 대화를 연 뒤 한 번 소비하는 메시지 이동.
+  const [screen, setScreen] = useState<Screen>(initial.current.screen)
+  const [rulesItem, setRulesItem] = useState<string | null>(initial.current.item)
+  const [focusSeq, setFocusSeq] = useState<number | null>(initial.current.seq)
   const [openRequest, setOpenRequest] = useState<{ ref: VersionRef; nonce: number } | null>(null)
   const [listNonce, setListNonce] = useState(0)
 
@@ -155,6 +159,7 @@ export function Shell() {
     setProjectId(id)
     setCaseId(prefs.lastCaseByProject[id] ?? null)
     setPanel(null)
+    setRulesItem(null)
     updatePrefs((prev) => ({ ...prev, lastProjectId: id }))
   }
 
@@ -162,6 +167,8 @@ export function Shell() {
     (id: string | null) => {
       setCaseId(id)
       setPanel(null)
+      setScreen('conversation')
+      setRulesItem(null)
       if (projectId && id) {
         updatePrefs((prev) => ({
           ...prev,
@@ -181,7 +188,15 @@ export function Shell() {
     }
   }, [caseId, projectId, rows, prefs.lastCaseByProject])
 
-  useEffect(() => writeAddress(projectId, caseId), [projectId, caseId])
+  useEffect(
+    () => writeAddress({ project: projectId, case: caseId, screen, item: rulesItem, seq: focusSeq }),
+    [projectId, caseId, screen, rulesItem, focusSeq],
+  )
+
+  const openRules = () => {
+    setScreen('rules')
+    setPanel(null)
+  }
 
   // 메시지의 참조를 누르면 결과물 패널에서 **그 버전**을 연다(D-85).
   useEffect(
@@ -249,10 +264,11 @@ export function Shell() {
 
   const setTheme = (choice: ThemeChoice) => updatePrefs((prev) => ({ ...prev, theme: choice }))
 
+  const panelOpen = panel !== null && screen === 'conversation'
   const layoutClass = [
     'sh-layout',
     prefs.sidebarCollapsed ? 'sh-sidebar-collapsed' : '',
-    panel ? 'sh-panel-open' : '',
+    panelOpen ? 'sh-panel-open' : '',
   ].join(' ')
 
   const conv = data.conv && data.conv.case_id === caseId ? data.conv : null
@@ -278,9 +294,11 @@ export function Shell() {
             rows={rows}
             caseId={caseId}
             theme={prefs.theme}
+            rulesOpen={screen === 'rules'}
             onSelectProject={selectProject}
             onSelectCase={selectCase}
             onNewConversation={createConversation}
+            onOpenRules={openRules}
             onProjectCreated={(id) => {
               setListNonce((n) => n + 1)
               selectProject(id)
@@ -308,7 +326,20 @@ export function Shell() {
           </button>
         )}
         {topError && <div className="sh-banner sh-error">서버와 통신하지 못했다: {topError}</div>}
-        {caseId && project ? (
+        {screen === 'rules' && project ? (
+          <ProjectRules
+            key={project.id}
+            project={project}
+            rows={rows}
+            runners={runners}
+            focusItem={rulesItem}
+            lastCaseId={caseId ?? prefs.lastCaseByProject[project.id] ?? null}
+            onBack={() => {
+              setScreen('conversation')
+              setRulesItem(null)
+            }}
+          />
+        ) : caseId && project ? (
           <ConversationView
             key={caseId}
             caseId={caseId}
@@ -320,6 +351,8 @@ export function Shell() {
             runners={runners}
             panel={panel}
             scrollTop={prefs.scrollByCase[caseId] ?? null}
+            focusSeq={focusSeq}
+            onFocused={() => setFocusSeq(null)}
             onScroll={(top) =>
               updatePrefs((prev) => ({ ...prev, scrollByCase: { ...prev.scrollByCase, [caseId]: top } }))
             }
@@ -333,7 +366,7 @@ export function Shell() {
           <EmptyCenter hasProject={Boolean(project)} onNew={createConversation} />
         )}
       </main>
-      {panel && caseId && (
+      {panelOpen && panel && caseId && project && (
         <>
           <div
             className="sh-resizer"
@@ -344,6 +377,7 @@ export function Shell() {
           <ReviewPanel
             key={caseId}
             caseId={caseId}
+            projectId={project.id}
             tab={panel}
             conv={conv}
             detail={detail}

@@ -59,6 +59,8 @@ export interface Decision {
   subject_revision: number
   actor: string
   decided_at: string
+  // 근거 메시지의 원문 참조(artifact_id). 원문은 PC 에 있다.
+  evidence_ref?: string | null
 }
 
 export interface RunEvent {
@@ -207,6 +209,9 @@ export interface KnowledgeVersion {
   observed?: KnowledgeObserved | null
   adoption?: KnowledgeAdoption | null
   source_report_index?: number | null
+  // UI-04a. 원래 대화로 이동(D-80) — 출처 대화의 제목과 권위 메시지의 순번. 본문·요약이 아니다.
+  source_case_title?: string | null
+  source_message_seq?: number | null
 }
 
 export type KnowledgeRelation = 'supports' | 'supersedes' | 'contradicts'
@@ -284,6 +289,8 @@ export interface KnowledgeEvidence {
   recorded_by: string
   created_at: string
   storage: 'server' | 'runner'
+  // UI-04a. 근거 실행의 대화 제목(이동용).
+  source_case_title?: string | null
 }
 
 export interface KnowledgeItemView {
@@ -373,10 +380,82 @@ export interface KnowledgeRegistration {
   current_state?: KnowledgeState | null
   storage?: 'server' | 'runner'
   source_storage?: 'server' | 'runner' | null
+  // UI-04a. 원래 메시지로 이동 — 권위 메시지(사용자 말)의 순번, 그 실행이 붙인 응답 메시지의 순번(작업
+  // 실행은 메시지가 없어 null).
+  source_message_seq?: number | null
+  reply_seq?: number | null
+}
+
+//: UI-04a. 이 업무의 실행들에 **제공된** 규칙(Manifest 집계, 버전별). 제공 기록이며 준수의 증거가 아니다.
+export interface CaseKnowledgeUseItem {
+  knowledge_id: string
+  knowledge_key: string
+  version: number
+  version_id: string
+  summary: string
+  kind: KnowledgeKind
+  obligation: KnowledgeObligation
+  // 제공 당시의 상태(Manifest 그대로)와 그 버전의 지금 상태.
+  state: KnowledgeState
+  state_now: KnowledgeState
+  authority_kind: string
+  scope_kind: 'project' | 'repository'
+  repository_name: string | null
+  provided_runs: number
+  skipped: Record<string, number>
+  last_run_id: string | null
+  last_run_purpose: string | null
+  first_at: string
+}
+
+export interface CaseKnowledgeUse {
+  case_id: string
+  items: CaseKnowledgeUseItem[]
+  runs_recorded: number
+  runs_unrecorded: number
+  note: string
+}
+
+//: 사람의 결정 종류(`decision.kind`)를 사람 말로. 서버의 `DecisionKind` 와 같은 목록이다.
+export const DECISION_KIND_LABEL: Record<string, string> = {
+  intent_agreement: '의도 동의',
+  design_review: '설계 검토',
+  plan_review: '계획 검토',
+  final_acceptance: '최종 인수',
+  exception_closure: '예외 수용 종료',
+  push_approval: 'push 승인',
+  publication_grant: '게시 허용',
+  material_delta_confirmation: '동의된 의도의 변경 확인',
 }
 
 export const knowledgeApi = {
   list: (projectId: string) => request<KnowledgeView>(`/api/projects/${projectId}/knowledge`),
+
+  // UI-04a. 이 업무의 실행들에 제공된 규칙(버전별 집계). 결정 사항 패널이 쓴다.
+  caseUse: (caseId: string) => request<CaseKnowledgeUse>(`/api/cases/${caseId}/knowledge-use`),
+
+  // UI-04a. 개정 — 새 버전(`user_registration`). 주지 않은 칸은 현재 버전 그대로. 새 내용은 출처 대화와
+  // 출처 PC 가 필요하다(서버 본문 저장 경로, P4-06b).
+  revise: (
+    knowledgeId: string,
+    body: {
+      reason_summary: string
+      content?: string | null
+      case_id?: string | null
+      target_runner_id?: string | null
+      summary?: string | null
+      kind?: KnowledgeKind | null
+      obligation?: KnowledgeObligation | null
+      scope_kind?: 'project' | 'repository' | null
+      repository_id?: string | null
+      paths?: string[] | null
+      activities?: string[] | null
+    },
+  ) =>
+    request<{ version: KnowledgeVersion }>(`/api/knowledge/${knowledgeId}/versions`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner', ...body }),
+    }),
 
   // 사람의 등록 — 권위 승계, 재승인 없음. **적용 내용은 서버에 저장된다**(P4-06b, 사용자 결정
   // 2026-09-24) — 비밀값을 적지 말라고 화면이 알린다. 등록은 실행 권한을 만들지 않는다.
@@ -420,10 +499,17 @@ export const knowledgeApi = {
       body: JSON.stringify({ reason_summary: reason, actor: 'owner', ...options }),
     }),
 
-  adoptionCheck: (knowledgeId: string, intoKnowledgeId?: string | null, obligation?: KnowledgeObligation | null) => {
+  adoptionCheck: (
+    knowledgeId: string,
+    intoKnowledgeId?: string | null,
+    obligation?: KnowledgeObligation | null,
+    scope?: { scope_kind?: 'project' | 'repository' | null; repository_id?: string | null },
+  ) => {
     const params = new URLSearchParams()
     if (intoKnowledgeId) params.set('into_knowledge_id', intoKnowledgeId)
     if (obligation) params.set('obligation', obligation)
+    if (scope?.scope_kind) params.set('scope_kind', scope.scope_kind)
+    if (scope?.repository_id) params.set('repository_id', scope.repository_id)
     const query = params.toString()
     return request<KnowledgeAdoptionCheck>(`/api/knowledge/${knowledgeId}/adoption-check${query ? `?${query}` : ''}`)
   },

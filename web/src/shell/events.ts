@@ -11,6 +11,8 @@ export interface ShellEvents {
   'hads:open-ref': { caseId: string; ref: VersionRef }
   // P4-05. 확인 카드가 결과물·결정 패널을 연다.
   'hads:open-panel': { caseId: string; tab: 'results' | 'decisions' }
+  // UI-04a. 결정 사항 패널의 `메시지 #n` 이 대화의 그 메시지로 스크롤·강조한다(D-80 "원래 대화·근거로 이동").
+  'hads:focus-message': { caseId: string; seq: number }
 }
 
 export function emit<K extends keyof ShellEvents>(name: K, detail: ShellEvents[K]) {

@@ -61,9 +61,12 @@ export function Sidebar(props: {
   rows: ConversationRow[]
   caseId: string | null
   theme: ThemeChoice
+  // UI-04a. 가운데가 프로젝트 규칙 화면인가(D-80). 프로젝트 설정 화면이 생기면 그 안으로 옮긴다.
+  rulesOpen: boolean
   onSelectProject: (id: string) => void
   onSelectCase: (id: string) => void
   onNewConversation: () => void
+  onOpenRules: () => void
   onProjectCreated: (id: string) => void
   onTheme: (choice: ThemeChoice) => void
   onCollapse: () => void
@@ -129,6 +132,15 @@ export function Sidebar(props: {
         data-testid="new-conversation"
       >
         ＋ 새 대화
+      </button>
+      <button
+        type="button"
+        className={props.rulesOpen ? 'sh-row sh-row-active sh-rules-entry' : 'sh-row sh-rules-entry'}
+        disabled={!props.project}
+        onClick={props.onOpenRules}
+        data-testid="open-rules"
+      >
+        <span className="sh-row-title">프로젝트 규칙</span>
       </button>
 
       <nav className="sh-lists">

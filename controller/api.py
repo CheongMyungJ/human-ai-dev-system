@@ -4015,6 +4015,16 @@ def resolve_knowledge_conflict(
     return conflict
 
 
+@router.get("/api/cases/{case_id}/knowledge-use")
+def get_case_knowledge_use(request: Request, case_id: str) -> dict[str, Any]:
+    """UI-04a. 이 업무의 실행들에 **제공된** 프로젝트 규칙(Manifest 집계, 버전별). 결정 사항 패널이 쓴다.
+    제공 기록이며 준수의 증거가 아니다. 본문 없음."""
+    try:
+        return _repo(request).case_knowledge_use_view(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
 @router.get("/api/runs/{run_id}/knowledge")
 def get_run_knowledge(request: Request, run_id: str) -> dict[str, Any]:
     """P4-06. 한 실행의 지식 Manifest(선택·제공·생략·비적용·범위 미확정). 준수 판정이 아니다."""

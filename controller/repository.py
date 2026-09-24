@@ -12639,16 +12639,27 @@ class Repository:
             "server" if self._has_server_body(item["artifact_id"], item["artifact_rev"]) else "runner"
         )
         item["source_storage"] = None
+        # UI-04a. **원래 대화로 이동**(D-80)의 표시 — 출처 대화의 제목과 권위 메시지의 순번뿐이다.
+        # 본문·요약을 옮기지 않는다.
+        item["source_message_seq"] = None
         if item.get("source_message_id"):
             row = self.conn.execute(
-                "SELECT artifact_id, artifact_rev FROM conversation_message WHERE id = ?",
+                "SELECT artifact_id, artifact_rev, seq FROM conversation_message WHERE id = ?",
                 (item["source_message_id"],),
             ).fetchone()
             if row is not None:
                 item["source_storage"] = (
                     "server" if self._has_server_body(row["artifact_id"], row["artifact_rev"]) else "runner"
                 )
+                item["source_message_seq"] = int(row["seq"])
+        item["source_case_title"] = self._case_title(item.get("source_case_id"))
         return item
+
+    def _case_title(self, case_id: str | None) -> str | None:
+        if not case_id:
+            return None
+        row = self.conn.execute('SELECT title FROM "case" WHERE id = ?', (case_id,)).fetchone()
+        return row["title"] if row is not None else None
 
     def get_knowledge_item(self, knowledge_id: str) -> dict[str, Any]:
         row = self.conn.execute(
@@ -13351,6 +13362,8 @@ class Repository:
             raise NotFoundError(f"knowledge evidence not found: {evidence_id}")
         item = dict(row)
         item["storage"] = "server" if self._has_server_body(item["artifact_id"], item["artifact_rev"]) else "runner"
+        # UI-04a. 근거 실행의 대화로 이동하기 위한 제목(본문 없음).
+        item["source_case_title"] = self._case_title(item.get("source_case_id"))
         return item
 
     def knowledge_evidence_for(self, knowledge_id: str) -> list[dict[str, Any]]:
@@ -13798,7 +13811,11 @@ class Repository:
             " kv.source_message_id, kv.authority_kind, kv.relation, kv.reason_summary,"
             " rel.knowledge_key AS relates_to_key, r.purpose AS run_purpose,"
             " ke.id AS evidence_id, ke.kind AS evidence_kind, ke.summary AS evidence_summary,"
-            " ei.knowledge_key AS evidence_key"
+            " ei.knowledge_key AS evidence_key,"
+            # UI-04a. 원래 메시지로 이동 — 권위 메시지(사용자 말)와 그 실행이 붙인 응답 메시지의 순번.
+            " sm.seq AS source_message_seq,"
+            " (SELECT MIN(rm.seq) FROM conversation_message rm WHERE rm.run_id = ki.run_id"
+            "  AND rm.case_id = ki.case_id) AS reply_seq"
             " FROM knowledge_intake ki"
             " LEFT JOIN knowledge_version kv ON kv.id = ki.knowledge_version_id"
             " LEFT JOIN knowledge_item item ON item.id = kv.knowledge_id"
@@ -13807,6 +13824,7 @@ class Repository:
             " LEFT JOIN run r ON r.run_id = ki.run_id"
             " LEFT JOIN knowledge_evidence ke ON ke.id = ki.evidence_id"
             " LEFT JOIN knowledge_item ei ON ei.id = ke.knowledge_id"
+            " LEFT JOIN conversation_message sm ON sm.id = kv.source_message_id"
             " WHERE ki.case_id = ? ORDER BY ki.created_at, ki.report_index",
             (case_id,),
         ).fetchall()
@@ -13847,6 +13865,83 @@ class Repository:
                 item["observed"] = registered.get("observed")
             out.append(item)
         return out
+
+    def case_knowledge_use_view(self, case_id: str) -> dict[str, Any]:
+        """UI-04a. **이 업무에 적용된 프로젝트 규칙** — 이 Case 의 실행들의 지식 Manifest 를 버전별로 센다.
+
+        `provided` 만 "제공" 이고 나머지(한도 생략·활동/저장소 비적용·범위 미확정)는 사유별 수다. Manifest
+        기록 전(v22 이전) 실행은 `runs_unrecorded` 로 따로 센다 — "지식 없음" 이 아니다. 주입은 제공 기록이며
+        준수의 증거가 아니다(FR-19). 본문 없음.
+        """
+        self.get_case(case_id)
+        runs = self.conn.execute(
+            "SELECT run_id, purpose, created_at FROM run WHERE case_id = ? ORDER BY created_at, run_id",
+            (case_id,),
+        ).fetchall()
+        # v22 적용 시각보다 앞선 실행만 기록 전이다(`_run_knowledge_recorded` 와 같은 규칙, 한 번만 읽는다).
+        applied_row = self.conn.execute(
+            "SELECT MIN(applied_at) AS at FROM schema_version WHERE version >= 22"
+        ).fetchone()
+        applied = applied_row["at"] if applied_row else None
+        recorded = 0
+        unrecorded = 0
+        for run in runs:
+            if applied and run["created_at"] and run["created_at"] >= applied:
+                recorded += 1
+            else:
+                unrecorded += 1
+        rows = self.conn.execute(
+            "SELECT rk.*, ki.knowledge_key, kv.version, kv.summary, kv.kind, kv.authority_kind,"
+            " kv.scope_kind, kv.state AS state_now, pr.name AS repository_name,"
+            " r.purpose AS run_purpose, r.created_at AS run_at"
+            " FROM run_knowledge rk"
+            " JOIN run r ON r.run_id = rk.run_id"
+            " JOIN knowledge_version kv ON kv.id = rk.version_id"
+            " JOIN knowledge_item ki ON ki.id = rk.knowledge_id"
+            " LEFT JOIN project_repository pr ON pr.id = kv.repository_id"
+            " WHERE r.case_id = ? ORDER BY r.created_at, r.run_id, ki.knowledge_key",
+            (case_id,),
+        ).fetchall()
+        items: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            entry = items.get(row["version_id"])
+            if entry is None:
+                entry = items[row["version_id"]] = {
+                    "knowledge_id": row["knowledge_id"],
+                    "knowledge_key": row["knowledge_key"],
+                    "version": row["version"],
+                    "version_id": row["version_id"],
+                    "summary": row["summary"],
+                    "kind": row["kind"],
+                    "obligation": row["obligation"],
+                    # `state` 는 제공 당시의 상태(Manifest 그대로), `state_now` 는 그 버전의 지금 상태다.
+                    "state": row["state"],
+                    "state_now": row["state_now"],
+                    "authority_kind": row["authority_kind"],
+                    "scope_kind": row["scope_kind"],
+                    "repository_name": row["repository_name"],
+                    "provided_runs": 0,
+                    "skipped": {},
+                    "last_run_id": None,
+                    "last_run_purpose": None,
+                    "first_at": row["run_at"],
+                }
+            if row["decision"] == knowmod.Decision.PROVIDED.value:
+                entry["provided_runs"] += 1
+                entry["last_run_id"] = row["run_id"]
+                entry["last_run_purpose"] = row["run_purpose"]
+            else:
+                entry["skipped"][row["decision"]] = entry["skipped"].get(row["decision"], 0) + 1
+        return {
+            "case_id": case_id,
+            "items": sorted(items.values(), key=lambda i: (i["knowledge_key"], i["version"])),
+            "runs_recorded": recorded,
+            "runs_unrecorded": unrecorded,
+            "note": (
+                "주입은 제공 기록이며 준수의 증거가 아니다. 이 Case 실행들의 Manifest 를 버전별로 센 것이며"
+                " 실제로 읽었는가(영수증)·지켰는가(판정)는 세지 않는다"
+            ),
+        }
 
     # ================================================================== P4-06b
     #

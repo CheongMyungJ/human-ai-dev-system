@@ -12,14 +12,21 @@ import { useEffect, useMemo, useState } from 'react'
 
 import {
   CRITERION_VERDICT_LABEL,
+  DECISION_KIND_LABEL,
   INTERPRETATION_REFUSAL_LABEL,
+  KNOWLEDGE_KIND_LABEL,
+  KNOWLEDGE_STATE_LABEL,
+  knowledgeApi,
   PROFILE_LABEL,
   PROGRESS_ACTION_LABEL,
   PROGRESS_STEP_LABEL,
+  type CaseKnowledgeUse,
   type ConversationView,
+  type KnowledgeRegistration,
   type PreparationArtifact,
   type RunnerWithConnection,
 } from '../api'
+import { rulesLink } from '../lib/address'
 import { splitRunOutput } from '../lib/runOutput'
 import { diffLines } from '../lib/textDiff'
 import {
@@ -56,6 +63,7 @@ function pretty(kind: ResultDoc['kind'], text: string): string {
 
 export function ReviewPanel(props: {
   caseId: string
+  projectId: string
   tab: PanelTab
   conv: ConversationView | null
   detail: ShellCaseDetail | null
@@ -133,7 +141,9 @@ export function ReviewPanel(props: {
             )}
           </>
         )}
-        {detail && props.tab === 'decisions' && <Decisions conv={props.conv} detail={detail} />}
+        {detail && props.tab === 'decisions' && (
+          <Decisions conv={props.conv} detail={detail} caseId={props.caseId} projectId={props.projectId} />
+        )}
       </div>
     </aside>
   )
@@ -403,10 +413,44 @@ function Viewer(props: {
   )
 }
 
-// ------------------------------------------------------------------ 결정 사항
+// ------------------------------------------------------------------ 결정 사항 (UI-03 → UI-04a, D-80)
+//
+// 이 대화의 **목표·기준·결정**과 여기서 정한 프로젝트 규칙·후보, 이 업무에 적용된 규칙을 **보고 이동**하는
+// 자리다. 값은 전부 서버 것이고 없으면 절을 만들지 않는다. 규칙의 변경(활성화·개정)은 프로젝트 규칙 화면에서
+// 한다. 의도 본문(목표·범위·제약)은 PC 원문이라 여기 적지 않는다 — 결과물 패널이 연다.
 
-function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDetail }) {
-  const { conv, detail } = props
+const AGREEMENT_LABEL: Record<string, string> = {
+  no_intent: '의도 초안 없음',
+  never_agreed: '의도 동의 전',
+  stale_agreement: '동의 이후 의도가 바뀜',
+  agreed_current: '의도 동의됨',
+}
+
+const ORIGIN_LABEL: Record<string, string> = {
+  statement: '이 대화에서 한 말(AI 가 옮겨 활성 등록)',
+  proposal: 'AI 제안(후보)',
+  extraction: '실행이 남긴 후보',
+}
+
+const PURPOSE_SHORT: Record<string, string> = {
+  discussion_reply: '논의 응답',
+  intent_authoring: '의도 초안',
+  intent_gate_review: 'QG-01',
+  quality_gate_review: '게이트 검토',
+  limited_analysis: '분석',
+  design_authoring: '설계',
+  plan_authoring: '계획',
+  feature_implementation: '구현',
+  verification_run: '검증',
+  local_experiment: '실험',
+}
+
+function registrationSeq(r: KnowledgeRegistration): number | null {
+  return r.source_message_seq ?? r.reply_seq ?? null
+}
+
+function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDetail; caseId: string; projectId: string }) {
+  const { conv, detail, caseId, projectId } = props
   const work = conv?.work_start as
     | (NonNullable<ConversationView['work_start']> & { started_at?: string; interpretation_run_id?: string | null })
     | null
@@ -419,14 +463,54 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
   const interpretations = conv?.interpretations ?? []
   const basis = detail.policy?.delegation_basis.current
   const events = conv?.progress?.events ?? []
+  const latest = detail.intent_state?.latest_intent_version ?? null
+  const criteria = (detail.result?.criteria ?? []) as unknown as {
+    id: string
+    summary: string
+    verdict?: string
+    result?: { verdict?: string }
+  }[]
+  const registrations = conv?.knowledge_registrations ?? []
+  const messagesByArtifact = new Map((conv?.messages ?? []).map((m) => [m.artifact_id, m.seq]))
+  const intentById = new Map(detail.intent_versions.map((iv) => [iv.id, iv]))
+
+  // 이 업무에 적용된 규칙(Manifest 집계). 패널을 열 때 한 번, 진행 상태·실행 수가 바뀌면 다시.
+  const [use, setUse] = useState<CaseKnowledgeUse | null>(null)
+  const useStamp = `${conv?.progress?.updated_at ?? ''}|${detail.runs.length}|${registrations.length}`
+  useEffect(() => {
+    let stopped = false
+    void knowledgeApi
+      .caseUse(caseId)
+      .then((next) => {
+        if (!stopped) setUse(next)
+      })
+      .catch(() => {
+        if (!stopped) setUse(null)
+      })
+    return () => {
+      stopped = true
+    }
+  }, [caseId, useStamp])
+
+  const focus = (seq: number) => emit('hads:focus-message', { caseId, seq })
+  const openIntent = (artifactId: string, revision: number) =>
+    emit('hads:open-ref', { caseId, ref: { artifact_id: artifactId, revision } })
+
   const empty =
-    !work && answered.length === 0 && detail.decisions.length === 0 && interpretations.length === 0 && events.length === 0
+    !work &&
+    !latest &&
+    answered.length === 0 &&
+    detail.decisions.length === 0 &&
+    interpretations.length === 0 &&
+    events.length === 0 &&
+    registrations.length === 0 &&
+    (use?.items.length ?? 0) === 0
   return (
     <div data-testid="decisions">
       {empty && <p className="sh-muted">아직 기록된 결정이 없다. 논의 중의 동의는 그 선택에만 적용된다.</p>}
       {work && (
         <section>
-          <h3 className="sh-section-title">업무화</h3>
+          <h3 className="sh-section-title">업무</h3>
           <p>
             {PROFILE_LABEL[work.profile] ?? work.profile} · 결정 주체{' '}
             {work.decided_by === 'ai_interpretation' ? 'AI 해석' : '사람'}
@@ -439,16 +523,155 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
           )}
         </section>
       )}
+      {latest && (
+        <section data-testid="decisions-goal">
+          <h3 className="sh-section-title">목표·기준</h3>
+          <p>
+            의도 v{latest.revision} · {latest.status} ·{' '}
+            {AGREEMENT_LABEL[detail.intent_state?.agreement_state ?? ''] ?? detail.intent_state?.agreement_state}
+            {latest.authoring_mode ? ` · ${latest.authoring_mode === 'ai_drafted' ? 'AI 초안' : '사람이 씀'}` : ''}{' '}
+            <button
+              type="button"
+              className="sh-link"
+              onClick={() => openIntent(latest.artifact_id, (latest as { artifact_rev?: number }).artifact_rev ?? 1)}
+              data-testid="decisions-open-intent"
+            >
+              원문 열기
+            </button>
+          </p>
+          <p className="sh-muted">목표·범위·제약의 본문은 PC 의 의도 원문에 있다 — 여기에는 서버가 아는 버전·동의·기준만 있다.</p>
+          {criteria.length > 0 && (
+            <ul className="sh-result-list">
+              {criteria.map((c) => {
+                const verdict = c.result?.verdict ?? c.verdict ?? 'unverified'
+                return (
+                  <li key={c.id} className="sh-plain-row">
+                    기준 · {c.summary} ·{' '}
+                    <strong>{CRITERION_VERDICT_LABEL[verdict as keyof typeof CRITERION_VERDICT_LABEL] ?? verdict}</strong>
+                  </li>
+                )
+              })}
+            </ul>
+          )}
+        </section>
+      )}
       {detail.decisions.length > 0 && (
-        <section>
-          <h3 className="sh-section-title">기록된 결정</h3>
+        <section data-testid="decisions-list">
+          <h3 className="sh-section-title">결정</h3>
           <ul className="sh-result-list">
-            {detail.decisions.map((d) => (
-              <li key={d.id} className="sh-plain-row">
-                {d.kind} · 대상 {d.subject_type} r{d.subject_revision} · {d.actor} · {d.decided_at.slice(0, 16)}
-              </li>
-            ))}
+            {detail.decisions.map((d) => {
+              const intent = d.subject_type === 'intent_version' ? intentById.get(d.subject_id) ?? null : null
+              const evidenceSeq = d.evidence_ref ? messagesByArtifact.get(d.evidence_ref) ?? null : null
+              return (
+                <li key={d.id} className="sh-plain-row" data-testid={`decision-${d.kind}`}>
+                  <strong>{DECISION_KIND_LABEL[d.kind] ?? d.kind}</strong> · 대상{' '}
+                  {intent ? (
+                    <button
+                      type="button"
+                      className="sh-link"
+                      onClick={() => openIntent(intent.artifact_id, (intent as { artifact_rev?: number }).artifact_rev ?? 1)}
+                    >
+                      의도 v{intent.revision}
+                    </button>
+                  ) : (
+                    `${d.subject_type} ${d.subject_id.slice(0, 12)} r${d.subject_revision}`
+                  )}{' '}
+                  · {d.actor} · {d.decided_at.replace('T', ' ').slice(0, 16)}
+                  {evidenceSeq !== null && (
+                    <>
+                      {' '}
+                      ·{' '}
+                      <button type="button" className="sh-link" onClick={() => focus(evidenceSeq)}>
+                        근거 메시지 #{evidenceSeq}
+                      </button>
+                    </>
+                  )}
+                  {' '}· 이 버전에만 적용된다
+                </li>
+              )
+            })}
           </ul>
+        </section>
+      )}
+      {registrations.length > 0 && (
+        <section data-testid="decisions-knowledge">
+          <h3 className="sh-section-title">이 대화에서 정한 프로젝트 규칙·후보</h3>
+          <ul className="sh-result-list">
+            {registrations.map((r) => {
+              const seq = registrationSeq(r)
+              const key = r.intake_state === 'evidence' ? r.evidence?.knowledge_key ?? null : r.knowledge_key
+              return (
+                <li
+                  key={`${r.run_id}-${r.report_index}`}
+                  className="sh-plain-row"
+                  data-testid={key ? `decisions-rule-${key}` : `decisions-rule-refused-${r.report_index}`}
+                  data-state={r.intake_state === 'registered' ? r.current_state ?? r.state ?? '' : r.intake_state}
+                >
+                  {r.intake_state === 'registered' && (
+                    <>
+                      <strong>{r.knowledge_key}</strong> v{r.version} · 지금{' '}
+                      {KNOWLEDGE_STATE_LABEL[r.current_state ?? r.state ?? 'active']}
+                      {r.current_version && r.current_version !== r.version ? ` v${r.current_version}` : ''} ·{' '}
+                      {r.obligation === 'required' ? '필수' : '참고'} · {KNOWLEDGE_KIND_LABEL[r.kind ?? 'constraint']} · {r.summary}
+                      <div className="sh-muted">{ORIGIN_LABEL[r.origin ?? 'statement']}</div>
+                    </>
+                  )}
+                  {r.intake_state === 'evidence' && r.evidence && (
+                    <>
+                      <strong>{r.evidence.knowledge_key}</strong> 의 근거로 이음 ·{' '}
+                      {r.evidence.kind === 'supports' ? '뒷받침하는 관측' : '같은 내용'} · {r.reported_summary ?? ''}
+                    </>
+                  )}
+                  {r.intake_state === 'refused' && <>등록하지 않음 · {r.reported_summary ?? ''} · {r.refusal ?? ''}</>}
+                  <div className="sh-muted">
+                    {seq !== null && (
+                      <>
+                        <button type="button" className="sh-link" onClick={() => focus(seq)} data-testid={key ? `decisions-rule-message-${key}` : undefined}>
+                          메시지 #{seq}
+                        </button>{' '}
+                        ·{' '}
+                      </>
+                    )}
+                    {r.run_id && seq === null ? `실행 ${r.run_id} · ` : ''}
+                    {key && (
+                      <a className="sh-link" href={rulesLink(projectId, key)} data-testid={`decisions-rule-open-${key}`}>
+                        프로젝트 규칙에서 보기
+                      </a>
+                    )}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+          <p className="sh-muted">활성화·개정은 프로젝트 규칙 화면에서, 무효화는 대화의 카드에서 한다. 등록은 실행 권한이 아니다.</p>
+        </section>
+      )}
+      {use && (use.items.length > 0 || use.runs_unrecorded > 0) && (
+        <section data-testid="decisions-applied">
+          <h3 className="sh-section-title">이 업무에 적용된 프로젝트 규칙</h3>
+          <p className="sh-muted">{use.note}</p>
+          <ul className="sh-result-list">
+            {use.items.map((item) => {
+              const skipped = Object.entries(item.skipped)
+              return (
+                <li key={item.version_id} className="sh-plain-row" data-testid={`applied-${item.knowledge_key}`} data-provided={item.provided_runs}>
+                  <strong>{item.knowledge_key}</strong> v{item.version} · {item.obligation === 'required' ? '필수' : '참고'} ·{' '}
+                  {KNOWLEDGE_STATE_LABEL[item.state]}
+                  {item.state_now !== item.state ? `(지금 ${KNOWLEDGE_STATE_LABEL[item.state_now]})` : ''} · {item.summary}
+                  <div className="sh-muted">
+                    제공 실행 {item.provided_runs}
+                    {item.last_run_id
+                      ? ` · 마지막 ${PURPOSE_SHORT[item.last_run_purpose ?? ''] ?? item.last_run_purpose ?? ''} ${item.last_run_id}`
+                      : ''}
+                    {skipped.length ? ` · 넣지 않음 ${skipped.map(([code, n]) => `${code} ${n}`).join(', ')}` : ''}
+                  </div>
+                </li>
+              )
+            })}
+          </ul>
+          {use.runs_unrecorded > 0 && (
+            <p className="sh-muted">Manifest 기록 전 실행 {use.runs_unrecorded}(지식 없음이 아니다 — P4-06 이전 실행)</p>
+          )}
         </section>
       )}
       {answered.length > 0 && (
@@ -498,7 +721,11 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
         </section>
       )}
       <p className="sh-muted">
-        프로젝트 공통 규칙·지식은 이후 작업(P4-06·UI-04)이다. 여기에는 이 대화의 기록만 있다.
+        여기에는 이 대화의 기록만 있다. 프로젝트 공통 규칙은{' '}
+        <a className="sh-link" href={rulesLink(projectId)} data-testid="decisions-open-rules">
+          프로젝트 규칙 화면
+        </a>
+        에서 확인·변경한다.
       </p>
     </div>
   )

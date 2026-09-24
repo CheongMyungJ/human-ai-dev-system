@@ -30,6 +30,7 @@ import {
   type ProgressView,
   type ProgressWait,
 } from '../api'
+import { rulesLink } from '../lib/address'
 import { peekBody } from './bodies'
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
@@ -654,7 +655,9 @@ export function KnowledgeCandidateCards(props: {
 }) {
   const rows = props.registrations.filter((r) => r.origin === 'extraction')
   if (rows.length === 0) return null
-  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
+  // UI-04a. 채택 확인·활성화는 프로젝트 규칙 화면(D-80)에서 — 첫 후보 항목을 펼쳐 연다.
+  const first = rows.find((r) => r.knowledge_key)?.knowledge_key ?? rows.find((r) => r.evidence)?.evidence?.knowledge_key ?? null
+  const rules = rulesLink(props.projectId, first)
   return (
     <div className="sh-card sh-card-event" data-testid="knowledge-candidate-card">
       <div className="sh-card-head">
@@ -694,8 +697,8 @@ export function KnowledgeCandidateCards(props: {
       </ul>
       <div className="sh-muted">
         AI 의 관찰·제안이다. 다음 작업에는 후보(단서)로만 들어가고 지켜야 할 규칙이 되지 않는다.{' '}
-        <a className="sh-link" href={admin} data-testid="knowledge-candidate-admin">
-          관리 화면에서 채택 확인·활성화
+        <a className="sh-link" href={rules} data-testid="knowledge-candidate-rules">
+          프로젝트 규칙에서 채택 확인·활성화
         </a>
       </div>
     </div>
@@ -707,13 +710,18 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
   const action = useAction(props.onChanged)
   const [reason, setReason] = useState('')
   const [asking, setAsking] = useState(false)
-  const admin = `?view=admin&project=${props.projectId}&case=${props.caseId}`
+  // UI-04a. 보기·고치기·채택 확인은 프로젝트 규칙 화면(D-80)에서 — 이 항목을 펼쳐 연다.
+  const rules = rulesLink(props.projectId, r.knowledge_key)
   if (r.intake_state === 'refused') {
     return (
       <div className="sh-card sh-card-event" data-testid="knowledge-refused-card">
         <strong>프로젝트 규칙으로 등록하지 않음</strong> · {r.reported_summary ?? ''}
         <div className="sh-muted">
-          {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''} — 필요하면 범위·내용을 분명히 해서 다시 말하거나 관리 화면에서 등록한다
+          {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''} — 필요하면 범위·내용을 분명히 해서 다시 말하거나{' '}
+          <a className="sh-link" href={rulesLink(props.projectId)}>
+            프로젝트 규칙
+          </a>
+          에서 등록한다
         </div>
       </div>
     )
@@ -739,8 +747,8 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
         {r.basis && <div className="sh-muted">{r.basis}</div>}
         <div className="sh-muted">
           당신의 말이 아니라 AI 의 관찰·제안이다. 규칙이 아니며 다음 작업에 단서로만 들어간다.{' '}
-          <a className="sh-link" href={admin}>
-            관리 화면에서 채택 확인·활성화
+          <a className="sh-link" href={rules} data-testid="knowledge-proposal-rules">
+            프로젝트 규칙에서 채택 확인·활성화
           </a>
         </div>
       </div>
@@ -775,8 +783,8 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
       </div>
       {live && r.knowledge_id && (
         <div className="sh-composer-bar">
-          <a className="sh-link" href={admin}>
-            관리 화면에서 보기·고치기
+          <a className="sh-link" href={rules} data-testid="knowledge-card-rules">
+            프로젝트 규칙에서 보기·고치기
           </a>
           {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
           <span className="sh-spacer" />
