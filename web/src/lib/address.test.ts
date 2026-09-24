@@ -2,7 +2,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
-import { formatAddress, messageLink, parseAddress, rulesLink } from './address.ts'
+import { formatAddress, isSettingsScreen, messageLink, parseAddress, rulesLink, screenOfTab, settingsLink, settingsTabOf } from './address.ts'
 
 test('parses project, case, screen, item and seq; ignores malformed values', () => {
   assert.deepEqual(parseAddress('?project=p1&case=c1'), {
@@ -41,4 +41,21 @@ test('links: rules screen with an item, and a message inside a conversation', ()
   assert.deepEqual(parseAddress(rulesLink('p1', 'K-001')), {
     project: 'p1', case: null, screen: 'rules', item: 'K-001', seq: null,
   })
+})
+
+// UI-04b. 설정 화면 — 규칙은 그 화면의 탭이고 주소는 UI-04a 그대로다.
+test('settings screens: rules is a tab of the settings screen and keeps its address', () => {
+  assert.deepEqual(parseAddress('?project=p1&screen=settings'), {
+    project: 'p1', case: null, screen: 'settings', item: null, seq: null,
+  })
+  assert.equal(parseAddress('?project=p1&screen=repositories').screen, 'repositories')
+  // `item` 은 규칙 탭에만 붙는다.
+  assert.equal(parseAddress('?project=p1&screen=settings&item=K-001').item, null)
+  assert.equal(formatAddress({ project: 'p1', screen: 'settings', item: 'K-001' }), '?project=p1&screen=settings')
+  assert.equal(settingsLink('p1'), '?project=p1&screen=settings')
+  assert.equal(settingsLink('p1', 'rules'), '?project=p1&screen=rules')
+  assert.equal(settingsLink('p1', 'repositories'), '?project=p1&screen=repositories')
+  assert.deepEqual(['conversation', 'rules', 'settings', 'repositories'].map((s) => isSettingsScreen(s as never)), [false, true, true, true])
+  assert.deepEqual(['conversation', 'rules', 'settings', 'repositories'].map((s) => settingsTabOf(s as never)), ['defaults', 'rules', 'defaults', 'repositories'])
+  assert.deepEqual((['defaults', 'rules', 'repositories'] as const).map(screenOfTab), ['settings', 'rules', 'repositories'])
 })

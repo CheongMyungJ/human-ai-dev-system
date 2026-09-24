@@ -2027,3 +2027,37 @@ CREATE TABLE IF NOT EXISTS knowledge_evidence (
 );
 
 CREATE INDEX IF NOT EXISTS idx_knowledge_evidence_item ON knowledge_evidence(knowledge_id);
+
+-- ===================================================================
+-- 스키마 v25 (UI-04b) — 프로젝트 기본값(D-72 · autonomy-budget-policy 5절의 Project 층)
+--
+-- 새 표 하나뿐이다. 프로젝트 기본 도구·Autonomy·진행 상한·인라인 한도·기본 예산을 **이력**으로
+-- 둔다(Case 정책·예산·상한 행과 같은 모양 — 바뀐 값을 덮어쓰지 않는다). 현재 행이 없는 키는
+-- "설정 없음 = 시스템 기본값" 이다. 기본값 복귀는 현재 행을 닫는 것이지 값이 아니다.
+--
+-- 적용 시점은 **그 뒤에 만든 대화(Case)·실행**이다. 기존 Case 의 정책·예산 행과 실행의 한도 기록은
+-- 바뀌지 않는다(소급 없음). 값은 짧은 값(도구 id·Autonomy·정수·지표 한도)이며 본문이 아니다.
+-- 설정은 실행 허용·동의·인수가 아니다.
+-- ===================================================================
+
+CREATE TABLE IF NOT EXISTS project_setting (
+    id              TEXT PRIMARY KEY,
+    project_id      TEXT NOT NULL REFERENCES project(id),
+    revision        INTEGER NOT NULL,
+    setting_key     TEXT NOT NULL,          -- default_tool_id | default_autonomy | repair_limit |
+                                            -- task_retry_limit | context_inline_limit_bytes |
+                                            -- budget:{metric}:{threshold}
+    value_json      TEXT NOT NULL,          -- JSON 스칼라(문자열·정수·실수). 본문이 아니다
+    set_by          TEXT NOT NULL,
+    reason_summary  TEXT,
+    state           TEXT NOT NULL CHECK (state IN ('current', 'superseded')),
+    created_at      TEXT NOT NULL,
+    superseded_at   TEXT,
+    UNIQUE (project_id, revision),
+    CHECK (length(setting_key) BETWEEN 1 AND 80),
+    CHECK (length(value_json) BETWEEN 1 AND 200),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_project_setting_current
+    ON project_setting(project_id, setting_key, state);

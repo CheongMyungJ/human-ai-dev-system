@@ -614,8 +614,9 @@ def test_lists_carry_activity_attention_and_derived_connection(processing_harnes
     assert (row["current_request_state"], row["current_request_stopping"]) == ("processing", False)
 
     projects = {p["id"]: p for p in h.client.get("/api/projects").json()}
+    # UI-04b 보충: 주의 수에 예산 도달(`budget_stopped`)이 더해졌다 — 한도가 없는 이 대화는 0 이다.
     assert projects[project["id"]]["attention"] == {
-        "needs_response": 0, "request_unknown": 0, "processing": 1
+        "needs_response": 0, "request_unknown": 0, "processing": 1, "budget_stopped": 0
     }
 
     runners = {r["id"]: r for r in h.client.get("/api/runners").json()}

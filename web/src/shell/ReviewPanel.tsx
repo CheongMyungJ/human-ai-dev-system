@@ -1,4 +1,4 @@
-// 오른쪽 검토 패널(D-71·D-80·D-85·D-89). `결과물`·`결정 사항`을 누를 때만 열린다.
+// 오른쪽 검토 패널(D-71·D-72·D-80·D-85·D-89). `결과물`·`결정 사항`·`설정`(UI-04b 상세 설정)을 누를 때만 열린다.
 //
 //   **실제로 있는 것만 보인다.** 산출물이 없으면 빈 탭을 만들지 않는다.
 //   **열람 버전을 고정한다.** 새 버전이 생기면 안내하고, 비교·전환은 사람이 고른다. 이미 쓴 참조는
@@ -24,6 +24,7 @@ import {
   type ConversationView,
   type KnowledgeRegistration,
   type PreparationArtifact,
+  type ProjectRepository,
   type RunnerWithConnection,
 } from '../api'
 import { rulesLink } from '../lib/address'
@@ -43,10 +44,11 @@ import {
   type ViewerState,
 } from '../lib/versions'
 import { BODY_STATUS_LABEL, retryBody, useBody, type BodyOptions } from './bodies'
+import { CaseSettings } from './CaseSettings'
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
 
-export type PanelTab = 'results' | 'decisions'
+export type PanelTab = 'results' | 'decisions' | 'settings'
 
 function pretty(kind: ResultDoc['kind'], text: string): string {
   if (kind === 'run_output') return splitRunOutput(text).message
@@ -70,6 +72,9 @@ export function ReviewPanel(props: {
   preparations: PreparationArtifact[]
   runners: RunnerWithConnection[]
   openRequest: { ref: VersionRef; nonce: number } | null
+  // UI-04b. 상세 설정 탭이 쓴다 — 등록 저장소 목록과 변경 뒤 다시 읽기.
+  repositories: ProjectRepository[]
+  onChanged: () => void
   onTab: (tab: PanelTab) => void
   onClose: () => void
 }) {
@@ -117,6 +122,14 @@ export function ReviewPanel(props: {
         >
           결정 사항
         </button>
+        <button
+          type="button"
+          className={props.tab === 'settings' ? 'sh-tab sh-tab-on' : 'sh-tab'}
+          onClick={() => props.onTab('settings')}
+          data-testid="panel-tab-settings"
+        >
+          설정
+        </button>
         <span className="sh-spacer" />
         <button type="button" className="sh-icon-button" title="패널 닫기" onClick={props.onClose}>
           ×
@@ -143,6 +156,15 @@ export function ReviewPanel(props: {
         )}
         {detail && props.tab === 'decisions' && (
           <Decisions conv={props.conv} detail={detail} caseId={props.caseId} projectId={props.projectId} />
+        )}
+        {detail && props.tab === 'settings' && (
+          <CaseSettings
+            caseId={props.caseId}
+            projectId={props.projectId}
+            detail={detail}
+            repositories={props.repositories}
+            onChanged={props.onChanged}
+          />
         )}
       </div>
     </aside>

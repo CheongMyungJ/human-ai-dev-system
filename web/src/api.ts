@@ -2222,6 +2222,8 @@ export const AUTONOMY_LABEL: Record<Autonomy, string> = {
 export const AUTONOMY_SOURCE_LABEL: Record<string, string> = {
   system_default: '시스템 기본값',
   case_explicit: '이 업무에 명시 설정',
+  // UI-04b. 프로젝트 설정 화면의 기본값이 이 Case 의 첫 행(또는 복귀)이 된 경우.
+  project_default: '프로젝트 기본값',
   // **기본값으로 읽지 않는다.** R1 이전 Case 는 이 축이 기록되지 않았다.
   migrated_unknown: '기록되지 않음 (v0.6 기준으로 진행한 업무)',
 }
@@ -2444,7 +2446,10 @@ export interface CasePolicy {
   autonomy_source: string
   autonomy_recorded: boolean
   policy_version: string
+  // UI-04b. 이 프로젝트의 새 Case 가 받을 기본값과 그 출처(`project_default` | `system_default`) — 복귀하면
+  // 무엇이 되는가. 이 Case 에 적용된 값이 아니다.
   default_autonomy: Autonomy
+  default_autonomy_source?: string
   work_depth: string | null
   work_depth_source: string
   completion_mode: string
@@ -2571,6 +2576,158 @@ export const policyApi = {
   clearBudget: (caseId: string, metric: string, thresholdKind: string) =>
     request<BudgetState>(`/api/cases/${caseId}/budget/${metric}/${thresholdKind}`, {
       method: 'DELETE',
+    }),
+
+  // UI-04b. Autonomy 를 기본값(프로젝트 → 시스템)으로 되돌린다 — 새 리비전이며 출처는 그 기본값이다.
+  resetAutonomy: (caseId: string, reason: string) =>
+    request<CasePolicy>(`/api/cases/${caseId}/autonomy/reset`, {
+      method: 'POST',
+      body: JSON.stringify({ set_by: 'owner', reason_summary: reason || null }),
+    }),
+
+  // UI-04b. 프로젝트 기본 예산을 이 업무에 다시 적용한다(같은 지표·경계 대체). 없으면 `applied = 0`.
+  applyProjectBudgetDefaults: (caseId: string) =>
+    request<BudgetState & { applied: number }>(`/api/cases/${caseId}/budget/project-defaults`, {
+      method: 'POST',
+      body: JSON.stringify({ set_by: 'owner' }),
+    }),
+}
+
+// ===================================================================== UI-04b
+//
+// 프로젝트 기본값(D-72 · autonomy-budget-policy 5절의 Project 층)과 Case 상세 설정이 쓰는 조회·변경.
+// **설정은 실행 허용·동의·인수가 아니다.** 값·출처·적용 시점은 서버가 준 그대로 보인다.
+
+export type ProjectSettingSource = 'project_setting' | 'system_default' | 'registration'
+
+export interface ProjectSettingRow {
+  id: string
+  project_id: string
+  revision: number
+  setting_key: string
+  value: string | number
+  set_by: string
+  reason_summary: string | null
+  state: 'current' | 'superseded'
+  created_at: string
+  superseded_at: string | null
+}
+
+export interface ProjectSettingValue {
+  value: string | number | null
+  source: ProjectSettingSource
+  setting: ProjectSettingRow | null
+  system_default: string | number | null
+}
+
+export interface ProjectBudgetDefault {
+  key: string
+  metric: string
+  threshold_kind: string
+  limit_value: number
+  unit: string
+  guarantee: string
+  setting: ProjectSettingRow
+}
+
+export interface ProjectSettingsView {
+  project_id: string
+  name: string
+  default_tool_id: string
+  tool_verified_on: { runner_id: string; host: string; state: string }[]
+  model: { value: null; note: string }
+  depth: { value: null; note: string }
+  settings: Record<string, ProjectSettingValue>
+  budget_defaults: ProjectBudgetDefault[]
+  budget_metrics: Record<string, { unit: string; hard_guarantee: string }>
+  ranges: { progress_limit: { min: number; max: number } }
+  history: ProjectSettingRow[]
+  applies_to: string
+  note: string
+}
+
+export const PROJECT_SETTING_LABEL: Record<string, string> = {
+  default_tool_id: '기본 도구(CLI)',
+  default_autonomy: '기본 확인 경계(Autonomy)',
+  repair_limit: '재작성 상한',
+  task_retry_limit: '재시도 상한',
+  context_inline_limit_bytes: '실행당 인라인 한도(바이트)',
+}
+
+export const PROJECT_SETTING_SOURCE_LABEL: Record<ProjectSettingSource, string> = {
+  project_setting: '프로젝트 설정',
+  system_default: '시스템 기본값',
+  registration: '등록 시 값',
+}
+
+export const projectSettingsApi = {
+  get: (projectId: string) => request<ProjectSettingsView>(`/api/projects/${projectId}/settings`),
+
+  // `null` 은 기본값 복귀(현재 행을 닫는다). 하나라도 잘못되면 422 이고 아무 것도 저장되지 않는다.
+  set: (projectId: string, values: Record<string, string | number | null>, reason: string) =>
+    request<ProjectSettingsView>(`/api/projects/${projectId}/settings`, {
+      method: 'PUT',
+      body: JSON.stringify({ values, set_by: 'owner', reason_summary: reason || null }),
+    }),
+}
+
+export interface ProjectRepositoryView {
+  project_id: string
+  repositories: ProjectRepository[]
+  journal_repository_id: string | null
+  legacy_repo_path: string
+  legacy_repo_path_matches_registry: boolean
+}
+
+export const repositoryApi = {
+  project: (projectId: string) => request<ProjectRepositoryView>(`/api/projects/${projectId}/repositories`),
+
+  // 등록은 선택도 허용도 아니다(D-38).
+  register: (projectId: string, name: string, repoPath: string) =>
+    request<ProjectRepository>(`/api/projects/${projectId}/repositories`, {
+      method: 'POST',
+      body: JSON.stringify({ name, repo_path: repoPath, registered_by: 'owner' }),
+    }),
+
+  // 기록 이슈를 만들 저장소. 코드 대상이 아니다(D-17).
+  setJournal: (projectId: string, repositoryId: string) =>
+    request<ProjectRepositoryView>(`/api/projects/${projectId}/journal-repository`, {
+      method: 'PUT',
+      body: JSON.stringify({ repository_id: repositoryId }),
+    }),
+
+  // Case 의 저장소 선택. **쓰기·게시 허용을 명시로 받는다**(기본값 없음, D-64).
+  select: (caseId: string, repositoryId: string, codeWrite: boolean, publish: boolean, reason: string) =>
+    request<CaseRepositoryState>(`/api/cases/${caseId}/repositories`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        repository_id: repositoryId,
+        selection_source: 'explicit',
+        code_write_allowed: codeWrite,
+        publish_allowed: publish,
+        selected_by: 'owner',
+        reason_summary: reason || null,
+      }),
+    }),
+}
+
+export const qualityGateApi = {
+  // QG-02~07 의 적용·검사 강도·수정 한도. 사유가 필수이며 강도를 낮추는 요청은 서버가 거부한다(P4-01·02).
+  setPolicy: (
+    caseId: string,
+    gate: string,
+    body: { setting: 'on' | 'off' | 'inherit'; inspection: string | null; repair_limit: number | null; reason: string },
+  ) =>
+    request<QualityGateState>(`/api/cases/${caseId}/quality-gates/${gate}/policy`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        task_key: '',
+        setting: body.setting,
+        inspection: body.inspection,
+        repair_limit: body.repair_limit,
+        actor: 'owner',
+        reason_summary: body.reason,
+      }),
     }),
 }
 
@@ -2908,6 +3065,8 @@ export interface ProjectAttention {
   needs_response: number
   request_unknown: number
   processing: number
+  // UI-04b 보충. 예산 hard 도달로 새 실행이 중지된 대화 수.
+  budget_stopped?: number
 }
 
 export interface ProjectWithAttention extends Project {
@@ -2930,6 +3089,8 @@ export interface ConversationRow extends Case {
   current_request_state: RequestState | null
   current_request_stopping: boolean
   needs_response: boolean
+  // UI-04b 보충. 예산 hard 도달로 새 실행이 중지됐는가(서버 도출, R3 판정 그대로).
+  budget_stopped?: boolean
   last_activity_at: string | null
 }
 
@@ -3016,7 +3177,8 @@ export interface ProgressLimitSettingRow {
 
 export interface ProgressLimitValue {
   value: number
-  source: 'case_setting' | 'system_default'
+  // UI-04b. `project_setting` 은 프로젝트 설정 화면의 기본값(Case 설정이 없을 때).
+  source: 'case_setting' | 'project_setting' | 'system_default'
   setting: ProgressLimitSettingRow | null
 }
 
@@ -3024,6 +3186,8 @@ export interface ProgressLimitsView {
   repair_limit: ProgressLimitValue
   task_retry_limit: ProgressLimitValue
   system_default: Record<ProgressLimitKey, number>
+  // UI-04b. 프로젝트 기본값(없으면 null).
+  project_default?: Record<ProgressLimitKey, number | null>
   range: { min: number; max: number }
   history: ProgressLimitSettingRow[]
   closed: boolean
@@ -3036,6 +3200,7 @@ export const PROGRESS_LIMIT_LABEL: Record<ProgressLimitKey, string> = {
 
 export const PROGRESS_LIMIT_SOURCE_LABEL: Record<ProgressLimitValue['source'], string> = {
   case_setting: '이 업무에서 정함',
+  project_setting: '프로젝트 기본값',
   system_default: '시스템 기본값',
 }
 
@@ -3164,6 +3329,13 @@ export const progressApi = {
         method: 'PUT',
         body: JSON.stringify({ ...values, set_by: 'owner', reason_summary: reasonSummary || null }),
       },
+    ),
+
+  // UI-04b. Case 별 상한 설정을 닫는다 — 프로젝트 기본값·시스템 기본값이 유효해진다(이력 보존).
+  clearLimit: (caseId: string, key: ProgressLimitKey) =>
+    request<{ limits: ProgressLimitsView; progress: ProgressView | null }>(
+      `/api/cases/${caseId}/progress/limits/${key}`,
+      { method: 'DELETE' },
     ),
 
   // 멈춤·막힘·실패 뒤 **계속 진행**. 확인·동의·인수가 아니다 — 다음 걸음을 다시 보라는 요청이다.

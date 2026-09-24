@@ -30,7 +30,7 @@ import {
   type SendOutcome,
 } from '../lib/drafts'
 import { browserStore } from '../lib/prefs'
-import { listen } from './events'
+import { emit, listen } from './events'
 import { checkReceipt, sendAndConfirm } from './send'
 import type { ShellCaseDetail } from './useCaseData'
 
@@ -384,6 +384,17 @@ const AUTONOMY_LABEL: Record<string, string> = {
   controlled: '시작·결과 확인(controlled)',
 }
 
+// UI-04b. 적용 값의 출처를 사람 말로(D-72 "설정 출처").
+const SOURCE_LABEL: Record<string, string> = {
+  case_explicit: '이 업무에서 정함',
+  project_default: '프로젝트 기본값',
+  system_default: '시스템 기본값',
+  migrated_unknown: '기록 없음(이행 취급)',
+  treatment_controlled: '이행 취급(controlled)',
+  case_setting: '이 업무에서 정함',
+  project_setting: '프로젝트 기본값',
+}
+
 function SettingsSummary(props: {
   conv: ConversationView
   detail: ShellCaseDetail | null
@@ -412,7 +423,7 @@ function SettingsSummary(props: {
   const auto = props.conv.processing?.auto
   return (
     <div className="sh-settings-summary" data-testid="settings-summary">
-      <button type="button" className="sh-summary-line" onClick={() => setOpen((v) => !v)}>
+      <button type="button" className="sh-summary-line" onClick={() => setOpen((v) => !v)} data-testid="settings-summary-line">
         <span>
           응답 {props.project.default_tool_id}
           {runner && !toolVerified ? ' (이 PC 에서 확인 안 됨)' : ''}
@@ -429,19 +440,31 @@ function SettingsSummary(props: {
       </button>
       {open && policy && (
         <div className="sh-summary-detail">
-          <p>
-            적용 값의 출처 — Autonomy: {policy.effective_source}
-            {policy.autonomy_recorded ? '' : ' (기록 없음)'} · 깊이: {policy.work_depth_source} · 완료:{' '}
-            {policy.completion_mode} ({policy.completion_mode_source})
+          <p data-testid="settings-summary-sources">
+            적용 값의 출처 — Autonomy: {SOURCE_LABEL[policy.autonomy_source] ?? policy.autonomy_source}
+            {policy.autonomy_recorded ? '' : ' (기록 없음)'}
+            {policy.is_treatment ? ' · 이행 취급' : ''} · 깊이: 수준 판단 · 완료: {policy.completion_mode} (
+            {policy.completion_mode_source})
+            {policy.progress_limits
+              ? ` · 진행 상한 ${policy.progress_limits.repair_limit.value}/${policy.progress_limits.task_retry_limit.value} (${SOURCE_LABEL[policy.progress_limits.repair_limit.source] ?? policy.progress_limits.repair_limit.source})`
+              : ''}
           </p>
           {activeLimits.map((l) => (
             <p key={l.id}>
-              {l.metric} {l.threshold_kind} {l.limit_value} {l.unit} · {l.enforcement} · 설정 {l.set_by}
+              {l.metric} {l.threshold_kind} {l.limit_value} {l.unit} · {l.enforcement} · 설정{' '}
+              {l.set_by === 'project_default' ? '프로젝트 기본값' : l.set_by}
             </p>
           ))}
           <p className="sh-muted">
-            이 값들은 서버 정책 그대로다. 대화별 설정 변경은 관리 화면에서 한다 — 입력창의 상세 설정은
-            이후 작업(UI-04)이다. 실행 중인 실행의 고정 입력은 바뀌지 않는다.
+            이 값들은 서버 정책 그대로다. 실행 중인 실행의 고정 입력은 바뀌지 않는다.{' '}
+            <button
+              type="button"
+              className="sh-link"
+              onClick={() => emit('hads:open-panel', { caseId: props.conv.case_id, tab: 'settings' })}
+              data-testid="open-case-settings"
+            >
+              상세 설정 열기
+            </button>
           </p>
         </div>
       )}

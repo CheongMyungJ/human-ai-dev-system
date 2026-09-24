@@ -1,5 +1,5 @@
-// 왼쪽 목록(D-68·D-69·D-82). 현재 프로젝트 · 새 대화 · 답변이 필요한 대화 · 최근 대화 · 보관된 대화,
-// 아래에 PC 연결·테마·관리 화면. 목록 행에는 제목과 **필요한 상태만** 보인다.
+// 왼쪽 목록(D-68·D-69·D-72·D-82). 현재 프로젝트 · 새 대화 · 프로젝트 설정(기본값·규칙·저장소) · 답변이 필요한
+// 대화 · 최근 대화 · 보관된 대화, 아래에 PC 연결·테마·PC 알림·관리 화면. 목록 행에는 제목과 **필요한 상태만** 보인다.
 //
 // 다른 프로젝트의 주의 상태(답변 필요·실행 상태 확인 필요)는 선택기에 수로 알리고 **자동으로
 // 옮기지 않는다.** 보관은 목록 정리이며 종료가 아니다 — 보관된 대화도 복원해 이어 간다.
@@ -14,7 +14,9 @@ import {
   type ProjectWithAttention,
   type RunnerWithConnection,
 } from '../api'
+import type { SettingsTab } from '../lib/address'
 import type { ThemeChoice } from '../lib/prefs'
+import type { PermissionState } from './notifier'
 
 const CLOSED_STATUSES = new Set(['closed', 'cancelled'])
 
@@ -22,6 +24,7 @@ function attentionText(project: ProjectWithAttention): string {
   const parts: string[] = []
   if (project.attention.needs_response) parts.push(`답변 필요 ${project.attention.needs_response}`)
   if (project.attention.request_unknown) parts.push(`확인 필요 ${project.attention.request_unknown}`)
+  if (project.attention.budget_stopped) parts.push(`예산 도달 ${project.attention.budget_stopped}`)
   return parts.length ? ` · ${parts.join(' · ')}` : ''
 }
 
@@ -35,6 +38,8 @@ function rowBadges(row: ConversationRow): { text: string; tone: string }[] {
     badges.push({ text: '처리 중', tone: 'info' })
   }
   if (row.needs_response) badges.push({ text: '답변 필요', tone: 'attention' })
+  // UI-04b 보충. 예산 hard 도달로 새 실행이 중지됨(서버 도출).
+  if (row.budget_stopped) badges.push({ text: '예산 도달', tone: 'warn' })
   // P4-05. 진행 상태(서버 도출). 확인 필요·막힘·멈춤만 보인다 — 진행 중은 "처리 중"이 이미 말한다.
   if (row.progress_state === 'waiting_human' && !row.needs_response) {
     badges.push({ text: '확인 필요', tone: 'attention' })
@@ -61,14 +66,18 @@ export function Sidebar(props: {
   rows: ConversationRow[]
   caseId: string | null
   theme: ThemeChoice
-  // UI-04a. 가운데가 프로젝트 규칙 화면인가(D-80). 프로젝트 설정 화면이 생기면 그 안으로 옮긴다.
-  rulesOpen: boolean
+  // UI-04b. 가운데가 프로젝트 설정 화면이면 그 탭(규칙 탭은 UI-04a 의 프로젝트 규칙 화면이 옮겨 온 것).
+  settingsTab: SettingsTab | null
+  // UI-04b. PC 알림(D-82) — 이 브라우저의 설정과 브라우저 권한 상태.
+  notifications: boolean
+  permission: PermissionState
   onSelectProject: (id: string) => void
   onSelectCase: (id: string) => void
   onNewConversation: () => void
-  onOpenRules: () => void
+  onOpenSettings: (tab: SettingsTab) => void
   onProjectCreated: (id: string) => void
   onTheme: (choice: ThemeChoice) => void
+  onNotifications: (on: boolean) => void
   onCollapse: () => void
 }) {
   const [showArchived, setShowArchived] = useState(false)
@@ -135,9 +144,18 @@ export function Sidebar(props: {
       </button>
       <button
         type="button"
-        className={props.rulesOpen ? 'sh-row sh-row-active sh-rules-entry' : 'sh-row sh-rules-entry'}
+        className={props.settingsTab === 'defaults' || props.settingsTab === 'repositories' ? 'sh-row sh-row-active sh-rules-entry' : 'sh-row sh-rules-entry'}
         disabled={!props.project}
-        onClick={props.onOpenRules}
+        onClick={() => props.onOpenSettings('defaults')}
+        data-testid="open-settings"
+      >
+        <span className="sh-row-title">프로젝트 설정</span>
+      </button>
+      <button
+        type="button"
+        className={props.settingsTab === 'rules' ? 'sh-row sh-row-active sh-rules-entry sh-rules-sub' : 'sh-row sh-rules-entry sh-rules-sub'}
+        disabled={!props.project}
+        onClick={() => props.onOpenSettings('rules')}
         data-testid="open-rules"
       >
         <span className="sh-row-title">프로젝트 규칙</span>
@@ -230,6 +248,28 @@ export function Sidebar(props: {
             프로젝트 추가
           </button>
         )}
+        <div className="sh-settings" data-testid="notify-settings">
+          <label title="답변·확인 필요·막힘·완료를 알린다. 일상 진행은 알리지 않고, 보고 있는 대화는 팝업을 억제한다">
+            <input
+              type="checkbox"
+              checked={props.notifications}
+              onChange={(e) => props.onNotifications(e.target.checked)}
+              data-testid="notify-toggle"
+            />{' '}
+            PC 알림
+          </label>
+          <span className="sh-muted" data-testid="notify-state" data-permission={props.permission}>
+            {!props.notifications
+              ? '꺼짐'
+              : props.permission === 'granted'
+                ? '켜짐'
+                : props.permission === 'denied'
+                  ? '브라우저가 차단함(기록만)'
+                  : props.permission === 'unsupported'
+                    ? '이 브라우저는 지원하지 않음(기록만)'
+                    : '권한 필요(기록만)'}
+          </span>
+        </div>
         <div className="sh-settings">
           <label>
             테마{' '}

@@ -38,6 +38,7 @@ from domain import progression
 from domain import run_control as runctl
 from domain import work_flow as workflow
 from domain import knowledge as knowmod
+from domain import project_settings as psettings
 from domain.progression import (
     LIGHT_UNVERIFIED_SCOPE,
     NEEDS_CONTROLLED_START,
@@ -617,30 +618,50 @@ class Repository:
                     CaseStage.WORK.value,
                 ),
             )
-            self._insert_default_policy(case_id, now)
+            self._insert_default_policy(case_id, now, project_id)
         return self.get_case(case_id)
 
-    def _insert_default_policy(self, case_id: str, now: str) -> None:
+    def _insert_default_policy(self, case_id: str, now: str, project_id: str) -> None:
         """새 Case 의 기본 Autonomy 행. **트랜잭션 안에서 부른다.**
 
         준비 단계 Case 도 같은 행을 받는다(UI-01) — 준비 단계는 Autonomy 와 별개이며
         (D-69), 논의 중 정한 Autonomy·예산·저장소가 업무화 뒤에도 그대로 이어져야 한다.
+
+        **UI-04b: 프로젝트 기본값이 있으면 그 값이 첫 행이다**(출처 `project_default`, 주체
+        `project`). 없으면 시스템 기본값 그대로다. 프로젝트 기본 예산도 여기서 Case 의 예산 행이
+        된다(`set_by = project_default`) — 적용 시점은 **이 Case 를 만든 때**이며, 그 뒤 프로젝트
+        기본값이 바뀌어도 이 Case 의 행은 바뀌지 않는다(소급 없음).
         """
+        project_autonomy = self.project_setting_value(project_id, psettings.KEY_DEFAULT_AUTONOMY)
+        if project_autonomy is not None:
+            autonomy, source, set_by = (
+                Autonomy(project_autonomy).value,
+                AutonomySource.PROJECT_DEFAULT.value,
+                "project",
+            )
+        else:
+            autonomy, source, set_by = (
+                Autonomy.ASK_ON_DECISION.value,
+                AutonomySource.SYSTEM_DEFAULT.value,
+                "system",
+            )
         self.conn.execute(
             "INSERT INTO case_policy"
             " (id, case_id, revision, autonomy, autonomy_source, policy_version,"
             "  set_by, reason_summary, state, created_at)"
-            " VALUES (?, ?, 1, ?, ?, ?, 'system', NULL, ?, ?)",
+            " VALUES (?, ?, 1, ?, ?, ?, ?, NULL, ?, ?)",
             (
                 ids.new_id("pol"),
                 case_id,
-                Autonomy.ASK_ON_DECISION.value,
-                AutonomySource.SYSTEM_DEFAULT.value,
+                autonomy,
+                source,
                 POLICY_VERSION,
+                set_by,
                 PolicyState.CURRENT.value,
                 now,
             ),
         )
+        self._insert_project_budget_defaults(case_id, project_id, now, "project_default")
 
     def list_cases(self, project_id: str, archived: str = "include") -> list[dict[str, Any]]:
         """Project 의 Case 목록.
@@ -7164,7 +7185,9 @@ class Repository:
             instruction_bytes = int(self.get_artifact_ref(*instruction)["byte_size"])
         except NotFoundError:
             instruction_bytes = 0
-        plan = ctxmod.plan_inline(instruction_bytes, sized, self.context_inline_limit)
+        # UI-04b. 인라인 한도는 프로젝트 기본값 → 제어부 설정. 이 실행에 적용한 값이 `run.context_inline_limit`
+        # 에 기록된다(P4-04) — 그 뒤 프로젝트 기본값이 바뀌어도 이 실행의 기록은 그대로다.
+        plan = ctxmod.plan_inline(instruction_bytes, sized, self.inline_limit_for(case_id))
         # P4-06. 지식 결정과 막는 충돌을 **같은 계획에** 싣는다 — 진입 검사·생성·Manifest 가 한
         # 목록을 쓴다. 제공 항목의 인라인/한도 생략은 위 계획이 정했다.
         plan.knowledge = knowledge
@@ -9007,9 +9030,10 @@ class Repository:
     def effective_policy(self, case_id: str) -> dict[str, Any]:
         """이 Case 에 **지금 적용되는** 정책과 그 출처.
 
-        우선순위는 `Case 명시 → 시스템 기본값` 이다. Task·Project 단위 조정은 아직
-        없으므로 출처 값으로도 만들지 않는다 — 조회에 "Project 기본값에서 왔다"가
-        나타나면 사람이 없는 설정 화면을 찾게 된다(autonomy-budget-policy 5절).
+        우선순위는 `Case 명시 → Project 기본값 → 시스템 기본값` 이다(UI-04b 부터 Project
+        층이 있다 — autonomy-budget-policy 5절). Task 단위 조정은 여전히 없으므로 출처 값으로도
+        만들지 않는다 — 조회에 없는 설정 화면의 출처가 나타나면 사람이 그것을 찾게 된다.
+        Project 기본값은 **새 Case 의 첫 행**이 될 뿐이며 기존 Case 의 행을 바꾸지 않는다.
 
         **`autonomy = None` 을 기본값으로 바꾸지 않는다.** R1 이전 Case 는 미기록이며
         그 상태로 표시된다.
@@ -9031,6 +9055,7 @@ class Repository:
             revision = row["revision"]
             recorded = autonomy is not None
         effective = self.effective_autonomy(case_id)
+        default_autonomy, default_source = self._default_autonomy_for(case["project_id"])
         return {
             "case_id": case_id,
             "revision": revision,
@@ -9038,7 +9063,10 @@ class Repository:
             "autonomy_source": source,
             "autonomy_recorded": recorded,
             "policy_version": policy_version,
-            "default_autonomy": Autonomy.ASK_ON_DECISION.value,
+            # UI-04b. 지금 이 프로젝트의 새 Case 가 받을 기본값과 그 출처(프로젝트 설정 또는
+            # 시스템). 이 Case 에 적용된 값이 아니라 "복귀하면 무엇이 되는가" 다.
+            "default_autonomy": default_autonomy,
+            "default_autonomy_source": default_source,
             # WorkDepth 는 별도 축이며 수준 판단이 만든다(P3-01). 여기서 복제하지
             # 않고 참조만 한다 — 두 곳에 두면 한쪽만 바뀐다.
             "work_depth": (lambda level: level.value if level else None)(
@@ -9070,8 +9098,12 @@ class Repository:
         autonomy: Autonomy,
         set_by: str,
         reason_summary: str | None = None,
+        source: AutonomySource = AutonomySource.CASE_EXPLICIT,
     ) -> dict[str, Any]:
         """Autonomy 를 명시로 설정한다. **이전 값은 지우지 않고 대체한다.**
+
+        `source` 는 UI-04b 의 기본값 복귀(`reset_autonomy`)가 쓴다 — 값은 프로젝트/시스템
+        기본값이지만 행은 새 리비전이고 주체는 사람이다.
 
         종료된 Case 는 거부한다. 종료 뒤 정책을 바꾸면 그 Case 의 종료 기록이 어떤
         규칙으로 확정됐는지 알 수 없게 된다(D-33).
@@ -9101,7 +9133,7 @@ class Repository:
                     case_id,
                     revision,
                     autonomy.value,
-                    AutonomySource.CASE_EXPLICIT.value,
+                    source.value,
                     POLICY_VERSION,
                     set_by,
                     _summary(reason_summary) if reason_summary else None,
@@ -9154,6 +9186,32 @@ class Repository:
     def _guard_policy_change(self, case_id: str) -> None:
         if self.case_is_closed(case_id):
             raise PolicyRefused([PolicyRefusal.CASE_ALREADY_CLOSED])
+
+    def _default_autonomy_for(self, project_id: str) -> tuple[str, str]:
+        """이 프로젝트의 새 Case 가 받을 Autonomy 와 출처(UI-04b)."""
+        value = self.project_setting_value(project_id, psettings.KEY_DEFAULT_AUTONOMY)
+        if value is not None:
+            return Autonomy(value).value, AutonomySource.PROJECT_DEFAULT.value
+        return Autonomy.ASK_ON_DECISION.value, AutonomySource.SYSTEM_DEFAULT.value
+
+    def reset_autonomy(
+        self, case_id: str, set_by: str, reason_summary: str | None = None
+    ) -> dict[str, Any]:
+        """Case 의 Autonomy 를 **기본값으로 되돌린다**(UI-04b, D-72 "기본값 복귀").
+
+        새 리비전이다 — 값은 프로젝트 기본값(있으면) 또는 시스템 기본값이고 출처는 그것이며
+        주체는 사람이다. 이전 행은 `superseded` 로 남는다. controlled 확인 지점 규칙은
+        `set_autonomy` 와 같다(같은 경로). 종료 Case 는 거부한다.
+        """
+        case = self.get_case(case_id)
+        value, source = self._default_autonomy_for(case["project_id"])
+        return self.set_autonomy(
+            case_id,
+            Autonomy(value),
+            set_by,
+            reason_summary or "기본값으로 복귀",
+            source=AutonomySource(source),
+        )
 
     # -------------------------------------------------------- 위임 근거
 
@@ -10115,6 +10173,83 @@ class Repository:
             )
         return self.budget_state(case_id)
 
+    def _insert_project_budget_defaults(
+        self, case_id: str, project_id: str, now: str, set_by: str
+    ) -> int:
+        """프로젝트 기본 예산을 이 Case 의 예산 행으로 넣는다(UI-04b). **트랜잭션 안에서 부른다.**
+
+        같은 지표·경계의 현재 행은 대체한다(Case 한도 설정과 같은 규칙). 검사는 저장할 때 이미
+        지났다(`project_settings.check_setting` — 강제 불가한 hard 한도는 저장되지 않는다). 넣은
+        행 수를 돌려준다.
+        """
+        defaults = self.project_budget_defaults(project_id)
+        if not defaults:
+            return 0
+        row = self.conn.execute(
+            "SELECT MAX(revision) AS r FROM budget_setting WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        revision = (row["r"] or 0) + 1
+        for item in defaults:
+            metric = BudgetMetric(item["metric"])
+            threshold_kind = BudgetThreshold(item["threshold_kind"])
+            guarantee = guarantee_for(metric, threshold_kind)
+            self.conn.execute(
+                "UPDATE budget_setting SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND metric = ? AND threshold_kind = ? AND state = ?",
+                (
+                    PolicyState.SUPERSEDED.value,
+                    now,
+                    case_id,
+                    metric.value,
+                    threshold_kind.value,
+                    PolicyState.CURRENT.value,
+                ),
+            )
+            self.conn.execute(
+                "INSERT INTO budget_setting"
+                " (id, case_id, revision, metric, threshold_kind, limit_value, unit,"
+                "  measurement, enforcement, enforced_by, policy_version, set_by,"
+                "  reason_summary, state, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("budget"),
+                    case_id,
+                    revision,
+                    metric.value,
+                    threshold_kind.value,
+                    float(item["limit_value"]),
+                    BUDGET_UNIT[metric],
+                    BUDGET_MEASUREMENT[metric].value,
+                    _ENFORCEMENT_FOR_GUARANTEE[guarantee].value,
+                    self.ENFORCEMENT["budget"]["enforced_by"],
+                    POLICY_VERSION,
+                    set_by,
+                    "프로젝트 기본 예산",
+                    PolicyState.CURRENT.value,
+                    now,
+                ),
+            )
+            revision += 1
+        return len(defaults)
+
+    def apply_project_budget_defaults(self, case_id: str, set_by: str) -> dict[str, Any]:
+        """프로젝트 기본 예산을 이 Case 에 **다시** 적용한다(UI-04b "기본값 복귀").
+
+        같은 지표·경계의 현재 행을 대체하고 다른 지표의 한도는 그대로다. 예산은 종료 뒤에도
+        바꿀 수 있다(D-87). 기본 예산이 없으면 아무 것도 넣지 않는다(무제한이 기본값, D-56) —
+        그 사실은 응답의 `applied = 0` 으로 드러난다.
+        """
+        case = self.get_case(case_id)
+        now = utc_now()
+        with transaction(self.conn):
+            applied = self._insert_project_budget_defaults(
+                case_id, case["project_id"], now, "project_default"
+            )
+        state = self.budget_state(case_id)
+        state["applied"] = applied
+        state["applied_by"] = set_by
+        return state
+
     def clear_budget_limit(
         self, case_id: str, metric: BudgetMetric, threshold_kind: BudgetThreshold
     ) -> dict[str, Any]:
@@ -11040,7 +11175,7 @@ class Repository:
                     CaseStage.DISCUSSION.value,
                 ),
             )
-            self._insert_default_policy(case_id, now)
+            self._insert_default_policy(case_id, now, project_id)
         return self.get_case(case_id)
 
     def get_work_start(self, case_id: str) -> dict[str, Any] | None:
@@ -12063,6 +12198,10 @@ class Repository:
         progress = self.progress_state(case["id"])
         case["progress_state"] = progress["state"] if progress else None
         case["progress_wait"] = [w.get("code") for w in progress["wait"]] if progress else []
+        # UI-04b 보충(사용자 결정 2026-09-24). 예산 hard 도달로 새 실행이 중지됐는가 — 알림(D-82 "예산 문제")과 목록
+        # 배지가 쓴다. `budget_stop` 은 hard 한도가 없으면 소비를 계산하지 않는다(기본 무제한이라 대부분 0 비용).
+        # 판정은 R3 그대로이며 여기서는 값을 실을 뿐이다.
+        case["budget_stopped"] = bool(self.budget_stop(case["id"])["stopped"])
         # UI-03. 목록을 **마지막 활동** 순으로 보이려고 싣는다. 메시지가 없으면 Case 의 갱신 시각.
         last = self.conn.execute(
             "SELECT MAX(created_at) AS t FROM conversation_message WHERE case_id = ?",
@@ -12596,15 +12735,210 @@ class Repository:
 
         보관된 대화도 센다 — 보관은 가시성이지 종료가 아니고, 답이 필요한 질문은 그대로다.
         """
-        counts = {"needs_response": 0, "request_unknown": 0, "processing": 0}
+        counts = {"needs_response": 0, "request_unknown": 0, "processing": 0, "budget_stopped": 0}
         for case in self.list_cases(project_id):
             if case["needs_response"]:
                 counts["needs_response"] += 1
+            if case.get("budget_stopped"):
+                counts["budget_stopped"] += 1
             if case["current_request_state"] == RequestState.UNKNOWN.value:
                 counts["request_unknown"] += 1
             elif case["current_request_state"] == RequestState.PROCESSING.value:
                 counts["processing"] += 1
         return counts
+
+    # ================================================================== UI-04b
+    #
+    # 프로젝트 기본값(D-72 · autonomy-budget-policy 5절의 Project 층). **판정은 `domain.project_settings`**
+    # 에 있고 여기서는 이력으로 저장하고 층을 합친다. 설정은 실행 허용·동의·인수가 아니다. 적용 시점은
+    # 새 Case(정책·예산 행)·새 실행(인라인 한도)이며 기존 기록은 바뀌지 않는다. 진행 상한만 조회 때
+    # 계산되는 유효값이라 Case 설정이 없는 기존 Case 에도 보인다.
+
+    def _current_project_settings(self, project_id: str) -> dict[str, dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM project_setting WHERE project_id = ? AND state = ?",
+            (project_id, PolicyState.CURRENT.value),
+        ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            item = dict(r)
+            item["value"] = json.loads(item["value_json"])
+            out[item["setting_key"]] = item
+        return out
+
+    def project_setting_value(self, project_id: str, key: str) -> Any:
+        """현재 프로젝트 설정 값 하나. 없으면 `None`(= 시스템 기본값이 유효)."""
+        row = self.conn.execute(
+            "SELECT value_json FROM project_setting WHERE project_id = ? AND setting_key = ?"
+            " AND state = ?",
+            (project_id, key, PolicyState.CURRENT.value),
+        ).fetchone()
+        return json.loads(row["value_json"]) if row is not None else None
+
+    def project_budget_defaults(self, project_id: str) -> list[dict[str, Any]]:
+        """프로젝트 기본 예산(지표·경계·값·설정 행). 없으면 빈 목록 = 무제한(D-56)."""
+        out = []
+        for key, row in sorted(self._current_project_settings(project_id).items()):
+            if not key.startswith(psettings.BUDGET_PREFIX):
+                continue
+            metric, threshold = psettings.parse_budget_key(key)
+            out.append(
+                {
+                    "key": key,
+                    "metric": metric.value,
+                    "threshold_kind": threshold.value,
+                    "limit_value": float(row["value"]),
+                    "unit": BUDGET_UNIT[metric],
+                    "guarantee": guarantee_for(metric, threshold).value,
+                    "setting": row,
+                }
+            )
+        return out
+
+    def inline_limit_for(self, case_id: str) -> int:
+        """이 Case 의 새 실행에 적용할 인라인 한도(바이트) — 프로젝트 기본값 → 제어부 설정."""
+        project_id = self.get_case(case_id)["project_id"]
+        value = self.project_setting_value(project_id, psettings.KEY_INLINE_LIMIT)
+        return int(value) if value is not None else int(self.context_inline_limit)
+
+    def project_settings_view(self, project_id: str) -> dict[str, Any]:
+        """프로젝트 설정 화면의 조회(UI-04b). 값·출처·적용 시점(설정 행)·시스템 기본값·이력."""
+        project = self.get_project(project_id)
+        current = self._current_project_settings(project_id)
+        system_default: dict[str, Any] = {
+            psettings.KEY_DEFAULT_TOOL: None,
+            psettings.KEY_DEFAULT_AUTONOMY: Autonomy.ASK_ON_DECISION.value,
+            "repair_limit": self.progress_limits.repair_limit,
+            "task_retry_limit": self.progress_limits.task_retry_limit,
+            psettings.KEY_INLINE_LIMIT: self.context_inline_limit,
+        }
+        settings: dict[str, Any] = {}
+        for key in psettings.SIMPLE_KEYS:
+            row = current.get(key)
+            if key == psettings.KEY_DEFAULT_TOOL:
+                # 도구는 `project.default_tool_id`(D-45)가 값이고 설정 행은 변경 이력이다.
+                value = project["default_tool_id"]
+                source = psettings.SOURCE_PROJECT if row is not None else "registration"
+            else:
+                value, source = psettings.resolve(None, row["value"] if row else None, system_default[key])
+            settings[key] = {
+                "value": value,
+                "source": source,
+                "setting": row,
+                "system_default": system_default[key],
+            }
+        # 이 도구를 확인한 PC(능력 보고). 확인이 없어도 막지 않는다 — 진입 검사가 실행 때 본다.
+        verified_on = []
+        for runner in self.list_runners():
+            state = next(
+                (
+                    c["state"]
+                    for c in runner["capabilities"]
+                    if c["tool_id"] == project["default_tool_id"] and c["capability"] == "coding_cli"
+                ),
+                "not_reported",
+            )
+            verified_on.append({"runner_id": runner["id"], "host": runner["host"], "state": state})
+        history = [
+            {**dict(r), "value": json.loads(r["value_json"])}
+            for r in self.conn.execute(
+                "SELECT * FROM project_setting WHERE project_id = ? ORDER BY revision",
+                (project_id,),
+            ).fetchall()
+        ]
+        return {
+            "project_id": project_id,
+            "name": project["name"],
+            "default_tool_id": project["default_tool_id"],
+            "tool_verified_on": verified_on,
+            "model": {
+                "value": None,
+                "note": "시스템에 모델 설정이 없다 — CLI 가 스스로 정한다. 프로젝트·업무 기본값을 두지 않는다",
+            },
+            "depth": {
+                "value": None,
+                "note": "깊이(WorkDepth)는 업무마다 수준 판단(AI 제안 + 사람 조정)이 정한다. 프로젝트 기본값이 없다",
+            },
+            "settings": settings,
+            "budget_defaults": self.project_budget_defaults(project_id),
+            "budget_metrics": {
+                metric.value: {
+                    "unit": BUDGET_UNIT[metric],
+                    "hard_guarantee": guarantee_for(metric, BudgetThreshold.HARD).value,
+                }
+                for metric in BudgetMetric
+            },
+            "ranges": {
+                "progress_limit": {"min": workflow.LIMIT_MIN, "max": workflow.LIMIT_MAX},
+            },
+            "history": history,
+            "applies_to": "이 뒤에 만드는 대화(Autonomy·예산 행)와 실행(인라인 한도). 기존 대화·실행은 바뀌지 않는다."
+            " 진행 상한은 조회 때 계산되므로 Case 설정이 없는 대화에 지금 값이 보인다",
+            "note": "설정은 실행 허용·동의·인수가 아니다. 진입 검사·예산 강제·확인 지점은 값을 읽을 뿐이다",
+        }
+
+    def set_project_settings(
+        self,
+        project_id: str,
+        values: dict[str, Any],
+        set_by: str,
+        reason_summary: str | None = None,
+    ) -> dict[str, Any]:
+        """프로젝트 설정을 바꾼다(UI-04b). `None` 은 **기본값 복귀**(현재 행을 닫고 새 행 없음).
+
+        키마다 검사하고 **하나라도 잘못되면 전부 거부한다**(원자). 바뀐 값은 새 행이고 이전 행은
+        `superseded` 로 남는다. 도구는 `project.default_tool_id` 도 함께 갱신한다(이력은 표에).
+        """
+        project = self.get_project(project_id)
+        if not values:
+            raise ValueError("no project setting was given")
+        checked: dict[str, Any] = {}
+        for key, value in values.items():
+            if not psettings.is_known_key(key):
+                raise ValueError(f"unknown project setting {key!r}")
+            checked[key] = None if value is None else psettings.check_setting(key, value)
+        now = utc_now()
+        reason = _summary(reason_summary) if reason_summary else None
+        with transaction(self.conn):
+            row = self.conn.execute(
+                "SELECT MAX(revision) AS r FROM project_setting WHERE project_id = ?",
+                (project_id,),
+            ).fetchone()
+            revision = (row["r"] or 0) + 1
+            for key, value in checked.items():
+                self.conn.execute(
+                    "UPDATE project_setting SET state = ?, superseded_at = ?"
+                    " WHERE project_id = ? AND setting_key = ? AND state = ?",
+                    (PolicyState.SUPERSEDED.value, now, project_id, key, PolicyState.CURRENT.value),
+                )
+                if key == psettings.KEY_DEFAULT_TOOL:
+                    # 복귀할 "시스템 기본값" 이 없는 키다 — 도구는 등록 시 값이 기본이며 `None` 은
+                    # 이력만 닫는다(컬럼은 그대로).
+                    if value is not None:
+                        self.conn.execute(
+                            "UPDATE project SET default_tool_id = ? WHERE id = ?", (value, project_id)
+                        )
+                if value is None:
+                    continue
+                self.conn.execute(
+                    "INSERT INTO project_setting (id, project_id, revision, setting_key, value_json,"
+                    " set_by, reason_summary, state, created_at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        ids.new_id("pset"),
+                        project_id,
+                        revision,
+                        key,
+                        json.dumps(value),
+                        set_by,
+                        reason,
+                        PolicyState.CURRENT.value,
+                        now,
+                    ),
+                )
+                revision += 1
+        del project
+        return self.project_settings_view(project_id)
 
 
     # ================================================================== P4-06
@@ -14454,18 +14788,41 @@ class Repository:
         return {r["limit_key"]: dict(r) for r in rows}
 
     def effective_progress_limits(self, case_id: str) -> workflow.ProgressLimits:
-        """이 Case 의 유효 상한. **Case 명시 → 시스템 기본값** 순서다. 판정에 값으로 넘긴다."""
+        """이 Case 의 유효 상한. **Case 명시 → Project 기본값 → 시스템 기본값** 순서다(UI-04b 부터
+        Project 층). 판정에 값으로 넘긴다. 저장하지 않고 조회 때 계산하므로 Case 설정이 없는 기존
+        Case 에도 지금의 프로젝트 기본값이 보인다 — 그 Case 에 저장된 상한 값은 원래 없었다."""
         settings = self._current_limit_settings(case_id)
+        project_id = self.get_case(case_id)["project_id"]
         values: dict[str, int] = {}
         sources: list[tuple[str, str]] = []
         for key in workflow.LIMIT_KEYS:
-            if key in settings:
-                values[key] = int(settings[key]["limit_value"])
-                sources.append((key, "case_setting"))
-            else:
-                values[key] = int(getattr(self.progress_limits, key))
-                sources.append((key, "system_default"))
+            value, source = psettings.resolve(
+                int(settings[key]["limit_value"]) if key in settings else None,
+                self.project_setting_value(project_id, key),
+                int(getattr(self.progress_limits, key)),
+            )
+            values[key] = int(value)
+            sources.append((key, source))
         return workflow.ProgressLimits(**values, sources=tuple(sources))
+
+    def clear_progress_limit(self, case_id: str, key: str) -> dict[str, Any]:
+        """Case 별 상한 설정을 **닫는다**(UI-04b "기본값 복귀") — 상위 층(프로젝트·시스템)이 유효해진다.
+
+        이력은 남는다(현재 행이 `superseded`). 종료 Case 는 거부한다. 현재 행이 없으면 아무 것도
+        하지 않는다(이미 상위 층이다).
+        """
+        self.get_case(case_id)
+        self._guard_policy_change(case_id)
+        if key not in workflow.LIMIT_KEYS:
+            raise ConflictError(f"unknown progress limit {key!r}")
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE progress_limit_setting SET state = ?, superseded_at = ?"
+                " WHERE case_id = ? AND limit_key = ? AND state = ?",
+                (PolicyState.SUPERSEDED.value, now, case_id, key, PolicyState.CURRENT.value),
+            )
+        return self.progress_limits_view(case_id)
 
     def progress_limits_view(self, case_id: str) -> dict[str, Any]:
         """조회용: 두 한도의 값·출처·현재 설정 행, 시스템 기본값, 변경 이력(오래된 순)."""
@@ -14489,6 +14846,11 @@ class Repository:
         }
         out["system_default"] = {
             key: getattr(self.progress_limits, key) for key in workflow.LIMIT_KEYS
+        }
+        # UI-04b. 프로젝트 기본값(없으면 None). Case 설정이 없을 때 유효한 층이다.
+        project_id = self.get_case(case_id)["project_id"]
+        out["project_default"] = {
+            key: self.project_setting_value(project_id, key) for key in workflow.LIMIT_KEYS
         }
         out["range"] = {"min": workflow.LIMIT_MIN, "max": workflow.LIMIT_MAX}
         out["history"] = history

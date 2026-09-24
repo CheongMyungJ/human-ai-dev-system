@@ -3024,6 +3024,22 @@ def set_autonomy(request: Request, case_id: str, payload: AutonomyIn) -> dict[st
         raise _handle(exc)
 
 
+class AutonomyResetIn(BaseModel):
+    set_by: str = Field(default="owner", min_length=1, max_length=100)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/api/cases/{case_id}/autonomy/reset")
+def reset_autonomy(request: Request, case_id: str, payload: AutonomyResetIn) -> dict[str, Any]:
+    """UI-04b. Autonomy 를 **기본값으로 되돌린다**(D-72 "기본값 복귀") — 프로젝트 기본값이 있으면
+    그것, 없으면 시스템 기본값. 새 리비전이며 출처는 그 기본값이고 주체는 사람이다. 종료 Case 는
+    거부한다(다른 정책 변경과 같다)."""
+    try:
+        return _repo(request).reset_autonomy(case_id, payload.set_by, payload.reason_summary)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
 @router.get("/api/cases/{case_id}/policy-revisions")
 def list_policy_revisions(request: Request, case_id: str) -> list[dict[str, Any]]:
     try:
@@ -3266,6 +3282,62 @@ def clear_budget(
         raise _handle(exc)
     _after_human_input(request, repo, case_id, f"budget_clear:{metric.value}")
     return state
+
+
+class BudgetDefaultsIn(BaseModel):
+    set_by: str = Field(default="owner", min_length=1, max_length=100)
+
+
+@router.post("/api/cases/{case_id}/budget/project-defaults")
+def apply_budget_defaults(
+    request: Request, case_id: str, payload: BudgetDefaultsIn
+) -> dict[str, Any]:
+    """UI-04b. 프로젝트 기본 예산을 이 Case 에 **다시** 적용한다(D-72 "기본값 복귀"). 같은 지표·경계의
+    현재 행을 대체하고, 기본 예산이 없으면 아무 것도 넣지 않는다(`applied = 0`). 종료 뒤에도 받는다(D-87)."""
+    repo = _repo(request)
+    try:
+        state = repo.apply_project_budget_defaults(case_id, payload.set_by)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_human_input(request, repo, case_id, "budget_defaults")
+    return state
+
+
+class ProjectSettingsIn(BaseModel):
+    """UI-04b. 프로젝트 기본값 변경. `values` 의 키는 `domain.project_settings` 가 아는 것뿐이고
+    값 `None` 은 **기본값 복귀**(현재 행을 닫는다)다. 하나라도 잘못되면 전부 거부한다(422)."""
+
+    values: dict[str, Any]
+    set_by: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str | None = Field(default=None, max_length=200)
+
+
+@router.get("/api/projects/{project_id}/settings")
+def get_project_settings(request: Request, project_id: str) -> dict[str, Any]:
+    """UI-04b. 프로젝트 기본값 — 값·출처·적용 시점(설정 행)·시스템 기본값·이력(D-72)."""
+    try:
+        return _repo(request).project_settings_view(project_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.put("/api/projects/{project_id}/settings")
+def put_project_settings(
+    request: Request, project_id: str, payload: ProjectSettingsIn
+) -> dict[str, Any]:
+    """UI-04b. 프로젝트 기본값을 바꾼다. **설정은 실행 허용·동의·인수가 아니다.** 적용 시점은 이
+    뒤에 만드는 대화·실행이며 기존 기록은 바뀌지 않는다(소급 없음)."""
+    repo = _repo(request)
+    try:
+        return repo.set_project_settings(
+            project_id, payload.values, payload.set_by, payload.reason_summary
+        )
+    except NotFoundError as exc:
+        raise _handle(exc)
+    except ValueError as exc:
+        # 모르는 키·잘못된 값(0 이하 한도·강제 불가한 hard 예산·모르는 Autonomy). 아무 것도 저장되지
+        # 않았다 — 사유를 그대로 돌려준다.
+        raise HTTPException(status_code=422, detail=str(exc))
 
 
 @router.get("/api/projects/{project_id}/repositories")
@@ -3736,6 +3808,19 @@ def set_progress_limits(
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
     _after_human_input(request, repo, case_id, "progress_limits")
+    return {"limits": repo.progress_limits_view(case_id), "progress": repo.progress_view(case_id)}
+
+
+@router.delete("/api/cases/{case_id}/progress/limits/{key}")
+def clear_progress_limit(request: Request, case_id: str, key: str) -> dict[str, Any]:
+    """UI-04b. Case 별 상한 설정을 닫는다(D-72 "기본값 복귀") — 프로젝트 기본값·시스템 기본값이 유효해진다.
+    이력은 남는다. 기록 뒤 사람 입력으로 진행기를 부른다(`PUT` 과 같다)."""
+    repo = _repo(request)
+    try:
+        repo.clear_progress_limit(case_id, key)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_human_input(request, repo, case_id, f"progress_limit_clear:{key}")
     return {"limits": repo.progress_limits_view(case_id), "progress": repo.progress_view(case_id)}
 
 

@@ -1122,3 +1122,224 @@ def test_a_candidate_seen_by_two_runs_shows_the_ready_badge_and_a_human_activate
     assert len(new["adoption"]["auto_reference"]["evidence_runs"]) == 2
     assert item["auto_reference"] is None
     page.context.close()
+
+
+# ================================================== UI-04b 프로젝트 설정·상세 설정·알림
+
+
+def test_project_defaults_reach_new_conversations_and_the_case_settings_tab_adjusts_and_reverts(stack):
+    """UI-04b AC-1·2·4·5·6·7 — 프로젝트 설정 화면(기본값·규칙·저장소 탭)에서 기본값을 바꾸면 **그 뒤에 만든** 대화의
+    출처가 `프로젝트 기본값`이고 설정 전 대화는 그대로다. 상세 설정 탭에서 Autonomy·진행 상한을 바꾸고 기본값으로
+    되돌리며, 저장소 선택(허용 명시)·QG 설정(사유 필수)이 서버 규칙 그대로 반영된다. 규칙 화면은 설정 화면의 탭으로
+    옮겨 왔고 주소·뒤로 가기가 그대로다.
+    """
+    project = stack.project("설정 화면")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    before = _new_conversation(page)
+
+    # 프로젝트 설정 — 기본값 탭. 모델·깊이는 기본값이 없다는 사실이 보인다.
+    page.click('[data-testid="open-settings"]')
+    screen = page.locator('[data-testid="settings-screen"]')
+    expect(screen).to_be_visible()
+    expect(screen).to_have_attribute("data-tab", "defaults")
+    assert "screen=settings" in _address(page)
+    expect(page.locator('[data-testid="setting-model"]')).to_contain_text("CLI 가 스스로 정한다")
+    expect(page.locator('[data-testid="setting-depth"]')).to_contain_text("수준 판단")
+    expect(page.locator('[data-testid="setting-default_autonomy"]')).to_have_attribute("data-source", "system_default")
+    expect(page.locator('[data-testid="settings-tool-verified"]')).to_contain_text("verified")
+    expect(page.locator('[data-testid="settings-note"]')).to_contain_text("이 뒤에 만드는 대화")
+    page.fill('[data-testid="settings-reason"]', "시험 기본값")
+    page.click('[data-testid="setting-autonomy-controlled"]')
+    autonomy = page.locator('[data-testid="setting-default_autonomy"]')
+    expect(autonomy).to_have_attribute("data-source", "project_setting", timeout=15_000)
+    expect(autonomy).to_have_attribute("data-value", "controlled")
+    expect(autonomy.locator('[data-testid="setting-source-default_autonomy"]')).to_contain_text("프로젝트 설정")
+    expect(autonomy).to_contain_text("적용 시점")
+    page.fill('[data-testid="setting-input-repair_limit"]', "1")
+    page.click('[data-testid="setting-input-repair_limit-set"]')
+    expect(page.locator('[data-testid="setting-repair_limit"]')).to_have_attribute("data-value", "1", timeout=15_000)
+    expect(page.locator('[data-testid="setting-repair_limit"]')).to_have_attribute("data-source", "project_setting")
+    # 기본 예산 — 강제 불가한 hard 한도는 거부되고(문구 그대로) 저장되지 않는다.
+    page.select_option('[data-testid="setting-budget-metric"]', "input_tokens")
+    page.select_option('[data-testid="setting-budget-threshold"]', "hard")
+    page.fill('[data-testid="setting-budget-value"]', "5")
+    page.click('[data-testid="setting-budget-set"]')
+    expect(page.locator('[data-testid="settings-error"]')).to_contain_text("cannot be enforced", timeout=15_000)
+    page.select_option('[data-testid="setting-budget-metric"]', "run_count")
+    page.fill('[data-testid="setting-budget-value"]', "3")
+    page.click('[data-testid="setting-budget-set"]')
+    expect(page.locator('[data-testid="setting-budget-run_count-hard"]')).to_contain_text("절대 상한", timeout=15_000)
+    page.click('[data-testid="settings-history-toggle"]')
+    expect(page.locator('[data-testid="settings-history-1"]')).to_contain_text("controlled")
+    expect(page.locator('[data-testid="settings-history-1"]')).to_contain_text("시험 기본값")
+    view = stack.http.get(f"/api/projects/{project['id']}/settings").json()
+    assert [(r["setting_key"], r["value"], r["state"]) for r in view["history"]] == [
+        ("default_autonomy", "controlled", "current"), ("repair_limit", 1, "current"), ("budget:run_count:hard", 3.0, "current"),
+    ]
+
+    # 저장소 탭·규칙 탭(UI-04a 화면이 옮겨 왔다 — 주소 `screen=rules`·`rules-back` 그대로).
+    page.click('[data-testid="settings-tab-repositories"]')
+    expect(page.locator('[data-testid="settings-repositories"]')).to_contain_text("primary")
+    expect(page.locator('[data-testid="settings-repositories"]')).to_contain_text("등록은 선택도 허용도 아니다")
+    assert "screen=repositories" in _address(page)
+    page.click('[data-testid="settings-tab-rules"]')
+    expect(page.locator('[data-testid="rules-screen"]')).to_be_visible()
+    expect(page.locator('[data-testid="rules-required"]')).to_contain_text("활성 필수 규칙이 없다")
+    assert "screen=rules" in _address(page)
+    page.click('[data-testid="open-rules"]')  # 왼쪽 목록의 진입도 규칙 탭이다
+    expect(page.locator('[data-testid="settings-screen"]')).to_have_attribute("data-tab", "rules")
+    page.click('[data-testid="rules-back"]')
+    page.wait_for_selector('[data-testid="composer-input"]')
+    assert "screen=" not in _address(page)
+
+    # 설정 뒤 만든 대화 — 적용 요약과 상세 설정 탭이 프로젝트 기본값을 출처로 보인다.
+    after = _new_conversation(page)
+    summary = page.locator('[data-testid="settings-summary"]')
+    expect(summary).to_contain_text("controlled", timeout=15_000)
+    page.click('[data-testid="settings-summary-line"]')
+    expect(page.locator('[data-testid="settings-summary-sources"]')).to_contain_text("프로젝트 기본값")
+    page.click('[data-testid="open-case-settings"]')
+    settings = page.locator('[data-testid="case-settings"]')
+    expect(settings).to_be_visible()
+    expect(page.locator('[data-testid="case-setting-autonomy"]')).to_have_attribute("data-source", "project_default")
+    expect(page.locator('[data-testid="case-limit-repair_limit"]')).to_have_attribute("data-source", "project_setting")
+    expect(page.locator('[data-testid="case-limit-repair_limit"]')).to_contain_text("1")
+    expect(page.locator('[data-testid="case-budget-run_count-hard"]')).to_have_attribute("data-set-by", "project_default")
+    expect(page.locator('[data-testid="case-level-none"]')).to_contain_text("수준 판단 없음")
+    policy = stack.http.get(f"/api/cases/{after}/policy").json()
+    assert (policy["autonomy"], policy["autonomy_source"]) == ("controlled", "project_default")
+
+    # 이 업무에서 바꾸면 출처가 바뀌고, 복귀하면 프로젝트 기본값으로 돌아온다(새 리비전).
+    page.fill('[data-testid="case-autonomy-reason"]', "이 업무는 자율로")
+    page.click('[data-testid="case-autonomy-ask"]')
+    expect(page.locator('[data-testid="case-setting-autonomy"]')).to_have_attribute("data-source", "case_explicit", timeout=15_000)
+    page.click('[data-testid="case-autonomy-reset"]')
+    expect(page.locator('[data-testid="case-setting-autonomy"]')).to_have_attribute("data-source", "project_default", timeout=15_000)
+    revisions = stack.http.get(f"/api/cases/{after}/policy-revisions").json()
+    assert [(r["autonomy"], r["autonomy_source"], r["state"]) for r in revisions] == [
+        ("controlled", "project_default", "superseded"), ("ask_on_decision", "case_explicit", "superseded"),
+        ("controlled", "project_default", "current"),
+    ]
+    page.fill('[data-testid="case-limit-input-repair_limit"]', "4")
+    page.click('[data-testid="case-limit-set"]')
+    expect(page.locator('[data-testid="case-limit-repair_limit"]')).to_have_attribute("data-source", "case_setting", timeout=15_000)
+    page.click('[data-testid="case-limit-reset-repair_limit"]')
+    expect(page.locator('[data-testid="case-limit-repair_limit"]')).to_have_attribute("data-source", "project_setting", timeout=15_000)
+    limits = stack.http.get(f"/api/cases/{after}/progress").json()["limits"]
+    assert (limits["repair_limit"]["value"], limits["repair_limit"]["source"]) == (1, "project_setting")
+    assert [(r["limit_value"], r["state"]) for r in limits["history"]] == [(4, "superseded")]
+
+    # 저장소 선택 — 쓰기·게시 허용은 명시다. QG-02 설정 — 사유가 필수다.
+    repo_id = stack.http.get(f"/api/projects/{project['id']}/repositories").json()["repositories"][0]["id"]
+    page.select_option('[data-testid="case-repo-select"]', repo_id)
+    page.check('[data-testid="case-repo-write"]')
+    page.click('[data-testid="case-repo-submit"]')
+    row = page.locator(f'[data-testid="case-repo-{repo_id}"]')
+    expect(row).to_have_attribute("data-selected", "1", timeout=15_000)
+    expect(row).to_contain_text("코드 쓰기 허용")
+    expect(row).to_contain_text("게시 불허")
+    page.click('[data-testid="case-gate-edit-QG-02"]')
+    expect(page.locator('[data-testid="case-gate-submit-QG-02"]')).to_be_disabled()
+    page.fill('[data-testid="case-gate-reason-QG-02"]', "설계 검토를 켠다")
+    page.click('[data-testid="case-gate-submit-QG-02"]')
+    expect(page.locator('[data-testid="case-gate-QG-02"]')).to_have_attribute("data-setting", "on", timeout=15_000)
+    gates = stack.http.get(f"/api/cases/{after}/quality-gates").json()["gates"]
+    qg02 = next(g for g in gates if g["gate"] == "QG-02")
+    assert (qg02["setting"], qg02["source"]) == ("on", "case_explicit")
+
+    # 설정 전 대화는 그대로다 — 시스템 기본값, 예산 행 없음(소급 없음).
+    page.click(f'[data-testid="conversation-row-{before}"]')
+    page.wait_for_selector('[data-testid="composer-input"]')
+    page.click('[data-testid="settings-summary-line"]')
+    page.click('[data-testid="open-case-settings"]')
+    expect(page.locator('[data-testid="case-setting-autonomy"]')).to_have_attribute("data-source", "system_default")
+    assert page.locator('[data-testid^="case-budget-run_count"]').count() == 0
+    policy = stack.http.get(f"/api/cases/{before}/policy").json()
+    assert (policy["autonomy"], policy["autonomy_source"], policy["budget"]["unlimited"]) == ("ask_on_decision", "system_default", True)
+    page.context.close()
+
+
+def test_pc_notifications_record_transitions_and_suppress_the_conversation_being_viewed(stack):
+    """UI-04b AC-8 — 알림을 켜면(권한 허용) **보고 있지 않은** 대화의 답변 필요가 기록·팝업이 되고, 보고 있는 대화의
+    같은 사건은 억제로 기록된다. 다른 프로젝트의 주의 증가는 수로 알리고 자동으로 옮기지 않는다. 첫 조회·빈 새 대화는
+    알리지 않는다. 기록의 `열기`는 사람이 그 대화를 여는 것이다.
+    """
+    project = stack.project("알림")
+    context = stack.browser.new_context(viewport={"width": 1360, "height": 860}, permissions=["notifications"])
+    page = stack.page(context)
+    _open(stack, page, project["id"])
+    log = page.locator('[data-testid="notice-log"]')
+    expect(log).to_have_attribute("data-count", "0")
+    page.check('[data-testid="notify-toggle"]')
+    expect(page.locator('[data-testid="notify-state"]')).to_contain_text("켜짐")
+    expect(page.locator('[data-testid="notify-state"]')).to_have_attribute("data-permission", "granted")
+
+    viewing = _new_conversation(page)
+    page.wait_for_timeout(6_000)  # 목록 조회 한 바퀴 — 빈 새 대화는 알림이 아니다
+    expect(log).to_have_attribute("data-count", "0")
+
+    # 보고 있지 않은 대화 — API 로 만들어 업무 요청(질문 하나가 남는다) → 답변 필요 → 기록·팝업.
+    other = stack.http.post(f"/api/projects/{project['id']}/conversations", json={"title": "다른 대화"}).json()["case_id"]
+    sent = stack.http.post(
+        f"/api/cases/{other}/messages",
+        json={"client_message_id": "notify-1", "content": "HADS_FAKE_WORK=research 서버 로그를 분석해서 개선안을 정리해줘",
+              "summary": "요청", "target_runner_id": RunnerProcessId.get(stack)},
+    )
+    assert sent.status_code == 202, sent.text
+    entry = page.locator(f'[data-testid="notice-log"] [data-case="{other}"][data-kind="needs_response"]')
+    _wait(lambda: int(log.get_attribute("data-count") or "0") >= 1, 90, "알림 기록")
+    page.click('[data-testid="notice-log-toggle"]')
+    expect(entry).to_have_count(1, timeout=30_000)
+    expect(entry).to_have_attribute("data-suppressed", "0")
+    expect(entry).to_have_attribute("data-popped", "1")
+    expect(entry).to_contain_text("답변 필요")
+    expect(entry).to_contain_text("다른 대화")
+    assert _case_in_url(page) == viewing  # 자동으로 옮기지 않았다
+
+    # 보고 있는 대화의 같은 사건은 억제된다(기록에는 남는다).
+    _send(page, "HADS_FAKE_WORK=research 이 로그도 분석해서 정리해줘")
+    expect(page.locator('[data-testid="question-cards"]')).to_have_count(1, timeout=90_000)
+    mine = page.locator(f'[data-testid="notice-log"] [data-case="{viewing}"][data-kind="needs_response"]')
+    expect(mine).to_have_count(1, timeout=30_000)
+    expect(mine).to_have_attribute("data-suppressed", "1")
+    expect(mine).to_have_attribute("data-popped", "0")
+    expect(mine).to_contain_text("보고 있는 대화라 팝업 없음")
+
+    # 다른 프로젝트의 주의 수가 늘면 한 건으로 알리고 자동으로 옮기지 않는다.
+    elsewhere = stack.project("알림 다른 프로젝트")
+    far = stack.http.post(f"/api/projects/{elsewhere['id']}/conversations", json={"title": "먼 대화"}).json()["case_id"]
+    stack.http.post(
+        f"/api/cases/{far}/messages",
+        json={"client_message_id": "notify-2", "content": "HADS_FAKE_WORK=research 여기도 분석해줘",
+              "summary": "요청", "target_runner_id": RunnerProcessId.get(stack)},
+    )
+    attention = page.locator(f'[data-testid="notice-log"] [data-project="{elsewhere["id"]}"][data-kind="project_attention"]')
+    expect(attention).to_have_count(1, timeout=90_000)
+    expect(attention).to_contain_text("답변 필요 1")
+    expect(attention).to_contain_text("자동으로 옮기지 않는다")
+    assert page.input_value('[data-testid="project-select"]') == project["id"]
+
+    # 예산 도달(UI-04b 보충, 사용자 결정) — 보고 있지 않은 대화에 프로젝트 기본 예산(run_count hard 1)을 적용하면 이미 실행 둘을
+    # 쓴 그 대화는 hard 도달 → 기록·팝업·목록 배지. 한도를 올리면 풀린다(도출).
+    assert stack.http.put(
+        f"/api/projects/{project['id']}/settings",
+        json={"values": {"budget:run_count:hard": 1}, "set_by": "owner"},
+    ).status_code == 200
+    applied = stack.http.post(f"/api/cases/{other}/budget/project-defaults", json={"set_by": "owner"})
+    assert applied.status_code == 200 and applied.json()["applied"] == 1 and applied.json()["stop"]["stopped"]
+    budget_entry = page.locator(f'[data-testid="notice-log"] [data-case="{other}"][data-kind="budget_stop"]')
+    expect(budget_entry).to_have_count(1, timeout=30_000)
+    expect(budget_entry).to_have_attribute("data-suppressed", "0")
+    expect(budget_entry).to_have_attribute("data-popped", "1")
+    expect(budget_entry).to_contain_text("예산 도달")
+    # 답변이 필요한 대화 절과 대화 절에 같은 행이 있다 — 첫 것으로 본다.
+    expect(page.locator(f'[data-testid="conversation-row-{other}"]').first).to_contain_text("예산 도달")
+    assert page.locator(f'[data-testid="conversation-row-{viewing}"]').get_by_text("예산 도달").count() == 0
+
+    # 기록의 `열기` — 사람이 그 대화를 연다.
+    n = entry.get_attribute("data-testid").split("-")[-1]
+    page.click(f'[data-testid="notice-open-{n}"]')
+    _wait(lambda: _case_in_url(page) == other, 15, "알림에서 연 대화")
+    expect(page.locator('[data-testid="conversation-title"]')).to_contain_text("다른 대화")
+    context.close()

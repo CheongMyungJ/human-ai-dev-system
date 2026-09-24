@@ -560,7 +560,10 @@ function LimitWaitCard(props: {
   const limit = Number(props.wait.limit ?? 0)
   const used = Number(props.wait.used ?? 0)
   const max = props.progress.limits?.range.max ?? 10
-  const source = props.wait.limit_source === 'case_setting' ? 'case_setting' : 'system_default'
+  const source =
+    props.wait.limit_source === 'case_setting' || props.wait.limit_source === 'project_setting'
+      ? props.wait.limit_source
+      : 'system_default'
   const label = PROGRESS_LIMIT_LABEL[props.limitKey]
   const target = [props.wait.task_key, props.wait.stage].filter(Boolean).join(' · ')
   // 올리면 서버가 기록 뒤 진행기를 부른다 — 그 자리에서 한 번 더 가고, 다시 실패하면 새 한도에서 멈춘다.

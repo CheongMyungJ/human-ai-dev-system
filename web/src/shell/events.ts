@@ -10,7 +10,8 @@ export interface ShellEvents {
   'hads:correct': { caseId: string; messageId: string; seq: number; text: string }
   'hads:open-ref': { caseId: string; ref: VersionRef }
   // P4-05. 확인 카드가 결과물·결정 패널을 연다.
-  'hads:open-panel': { caseId: string; tab: 'results' | 'decisions' }
+  // UI-04b. 입력창의 적용 요약이 상세 설정 탭을 연다.
+  'hads:open-panel': { caseId: string; tab: 'results' | 'decisions' | 'settings' }
   // UI-04a. 결정 사항 패널의 `메시지 #n` 이 대화의 그 메시지로 스크롤·강조한다(D-80 "원래 대화·근거로 이동").
   'hads:focus-message': { caseId: string; seq: number }
 }

@@ -10,6 +10,8 @@
 
 **S-029(P4-07b 완료) 정리 때 이어서 옮긴 것(사용자 지시):** 당시 머리 문단(3행)·7행의 커밋·push 이력·1절 표의 "구현 기준"·"남은 상세" 행·1.2~1.10 절과 1.12 절(완료 표시)·2절 5단계는 이 파일 1절 끝에, 3절 plan 표의 P4-PLAN-01~06b·UI-PLAN-01~03 행은 5절에, 1.12 절의 P4-07b 시작점은 2절에, S-027 인계는 6절에. 같은 규칙으로 글자 그대로 옮겼다.
 
+**S-030(UI-04b 완료) 정리 때 이어서 옮긴 것:** S-028 인계(6절). 같은 규칙으로 글자 그대로 옮겼다.
+
 ## 1. 완료 작업의 설명 문단 (당시 1절)
 
 P3-R4 구현은 R1이 기록만 하던 **Autonomy를 진입과 완료의 판단**으로 바꿨다. `controlled`는 시작 확인 전에 설계·계획·구현·검증·실험을 배정하지 않고 결과 후보 확인 전에 종료하지 않는다(D-65). 기본 `ask-on-decision`은 반대로 **연다** — 명확한 요청을 그 범위의 실행 위임으로 인정해 설계·계획의 사람 검토 없이 진행하고, 조건을 충족하면 **사람 인수 기록 없이** 자동 완료한다(D-31). Fast Lane이면 준비가 설계+계획 두 건에서 **결합 기록 한 건**으로 줄고(D-60), 요청 정합성 확인은 명확·저위험에 **가벼운 확인**을 쓰되 그것을 독립 의미 검토로 표시하지 않는다(D-25). 누적 material delta는 **마지막 유효 위임과** 비교되어 AI 출처의 변경이 의존 작업을 막고, 조사 Profile의 Case는 로컬 실험을 수행하되 제품 수정으로 목적을 확대하지 않는다(D-66).
@@ -317,6 +319,24 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 ## 6. 이전 인계 (당시 10절)
 
 S-027 은 S-029 에, S-026 은 S-028 에, S-025 는 S-027 에, S-024 는 S-026 에 옮겼다.
+
+### 이전 개발 인계 — S-028 / 2026-09-24 / UI-04a 결정 사항 패널·프로젝트 규칙 화면 (**완료**, S-030 에 옮김)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan 검증 인계 절차를 지켜줘." 다음 단계는 1.11절의 **UI-04**(시작 시 하위 plan 으로 나눈다)였고, 첫 하위 plan 의 범위는 S-027 인계의 제안(결정 사항 패널·프로젝트 규칙 화면)을 그대로 잡았다(사용자 답은 없었다 — 자율 실행).
+- **수행:** 시작 상태(`main`/`edcdfff`, clean, `git fetch` 뒤 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → 웹 빌드·웹 단위 18, pytest **688 통과·2 건너뜀**, P1 계약 18, 10분 17초)을 직접 확인한 뒤 [UI-PLAN-04a](plans/UI-PLAN-04a.md)를 **구현 전에 기록**하고 구현·검증했다. 결과 [UI-04a](ui/evidence/UI-04a-results.md).
+- **제품 판단:** 이 세션의 구현에서는 새로 내리지 않았다(자동 활성화 없음 그대로). 작업 보고 뒤 논의에서 **사용자가 참고 후보의 자동 활성화를 반자동(4번)으로 정했다**(아래 (1), 1.12절 P4-07b). 프로젝트 규칙 화면의 자리(왼쪽 목록에서 열고 설정 화면이 생기면 옮김)와 수동 등록의 출처 대화 선택은 상세 설계 선택이다(plan 0·9절).
+- **서버:** `_knowledge_version_row` 의 `source_case_title`·`source_message_seq`(+ `_case_title`), 근거 행의 `source_case_title`, `knowledge_registrations_view` 의 `source_message_seq`·`reply_seq`, `case_knowledge_use_view` → `GET /api/cases/{id}/knowledge-use`(이 Case 실행들의 Manifest 를 버전별로 집계, 제공 당시 `state` 와 지금 `state_now`, `runs_unrecorded`). 스키마·정책·진입 검사·권위 코드는 바꾸지 않았다.
+- **화면:** `web/src/lib/address.ts`(주소 규칙 `screen`·`item`·`seq`, 단위 시험 3)·`lib/knowledgeBody.ts`(공용 본문 읽기), `shell/ProjectRules.tsx`(새 화면), `shell/ReviewPanel.tsx` 의 `Decisions` 재구성(업무·목표·기준·결정·이 대화에서 정한 규칙·후보·적용된 규칙·질문·해석·이력), `Shell.tsx`(`screen`·`rulesItem`·`focusSeq`)·`Sidebar.tsx`(`프로젝트 규칙`)·`ConversationView.tsx`(`focusSeq`·강조·`hads:focus-message`)·`events.ts`·`ProgressCards.tsx`(카드 링크 → 규칙 화면)·`api.ts`·`shell.css`. 관리 화면 지식 패널은 그대로다.
+- **기존 시험의 의미 검토:** 기존 시험은 바꾸지 않았다(전부 통과). 새 브라우저 시험은 가짜 codex 의 특성(첫 메시지의 규칙 → 지시문 머리) 때문에 두 번째 메시지에서 규칙을 말한다(9절).
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **21**(+3), pytest **693 통과·2 건너뜀·0 실패**(10분 37초, +5 = `test_decisions_view.py` 3 + 브라우저 2), P1 계약 **18**. 새 브라우저 시험 하나가 처음 두 번 실패했다 — 가짜 codex 의 첫 메시지 규칙 옮김(시험 도구)·응답 뒤 빈 입력창의 버튼 상태(시험 결함) — 둘 다 시험을 고쳤고 제품은 바꾸지 않았다.
+- **실제 CLI·실제 브라우저:** `ui/live/ui04a_rules.py`(제품 코드 import 없음, 실제 `codex-cli 0.156.1`·설치된 Edge) 회차 `092723318` **통과 26/26, 관찰 7, 남은 프로세스 0**(화면 6장). 실제 codex 가 규칙을 12초 만에 옮겨 등록했고(저장소 범위로 좁혀 적음 — P4-06 라이브와 같다) 정리 응답에 제안 둘(K-002·K-003, 활동 `verification`)을 붙였다. 규칙 화면에서 채택 확인·활성화(K-002 v2), 다른 대화의 업무(실행 5)에 K-001 제공 4(논의 응답 비적용), K-002·K-003 은 검증 실행이 없어 "넣지 않음 5" 로 보였다. 첫 시도 `092249006` 은 하네스 결함으로 시작 전에 끝났다(제품 무관).
+- **경계:** 강제 축은 넷 그대로. 패널·규칙 화면은 보고·이동·사람의 변경 자리이며 등록·활성화·개정·무효·집계는 권한·동의·인수·준수가 아니다. AI 제안은 어떤 경로로도 활성 필수가 되지 않는다(DB CHECK). 원문 경계 그대로(새 조회는 제목·순번·수뿐). 자동 활성화·독립 검토·검색·설정·알림은 넣지 않았다.
+- **다음 행동:** **P4-07b**(1.12절, 작은 작업)를 다른 세션에서 새 plan 으로 먼저 하고, 그 뒤 **UI-04b**(1.11절, 사용자 동의). 순서는 이 세션의 판단(규칙 화면이 막 생겨 문맥이 살아 있고 작업이 작다)이며 사용자가 바꿔도 된다. 완료된 plan 을 다시 열지 않는다.
+- **사람에게 물어야 할 것:** (1) 참고 후보의 **자동 활성화 조건** — 네 선택지(없음 유지 / S-027 조건 그대로 완전 자동 / 조건 수정 / 반자동)를 설명했고 **사용자의 답(2026-09-24): 4번 반자동** — 시스템이 S-027 조건(효력 `reference`·종류 `operation`/`known_problem`·서로 다른 실행 둘 이상의 근거 중 하나는 종료 코드 0 명령이 있는 검증·분석 실행·관측한 저장소 범위·반증/충돌 없음·채택 확인 막음 없음) 충족을 계산해 프로젝트 규칙 화면에 "자동 활성 조건 충족"으로 표시하고 사람이 한 번에 활성화한다. 사람의 클릭 없이 활성화하지 않고 필수로는 올리지 않는다. 후보가 실제로 쌓이면 완전 자동으로 넓힐지 그때 다시 묻는다. → 작은 후속 작업 **P4-07b**(1.12절). (2) UI-04b 의 범위 제안(프로젝트 설정·상세 설정 + 알림)에 동의하는지 — **사용자의 답(2026-09-24): 제안에 동의.** UI-04b = 프로젝트 설정·상세 설정 화면 + 알림으로 확정. (3) 이 세션 작업의 커밋·push 여부 — **사용자의 답(2026-09-24): "그래 4번으로 가자. 다른세션에서 이어서 작업할 수 있게 정리하고 커밋 푸시해줘."** → 커밋·push 지시.
+- **사용자 지시로 한 일:** 작업 보고 뒤 논의에서 사용자가 (1) 참고 후보의 자동 활성화를 **반자동**으로, (2) UI-04b 의 범위를 제안대로 정하고 커밋·push 를 지시했다. 두 판단을 이 문서(1절·1.11절·1.12절·6절·9절·이 인계)·README·decisions·project-knowledge·UI-04a 결과에 기록하고, 이 세션 작업을 **`4c347a0`** 으로 커밋한 뒤 이 인계 기록을 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 fetch 해 원격이 `edcdfff` 그대로임을 확인). 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다.
+- **작업공간:** 시작 `main`/`edcdfff` clean. 이 세션의 변경은 `4c347a0`(UI-04a)와 인계 기록 커밋으로 `origin/main` 에 push됐다 — 새 파일 `plans/UI-PLAN-04a.md`, `tests/test_decisions_view.py`, `ui/live/ui04a_rules.py`, `ui/evidence/UI-04a-results.md`·`UI-04a-live.log`·`UI-04a-live-results.json`·`UI-04a-live-{A-panel,A-rules,A-focus,B-check,B-activated,C-applied}.png`, `web/src/lib/{address,address.test,knowledgeBody}.ts`, `web/src/shell/ProjectRules.tsx`. 수정 파일 `controller/{api,repository}.py`, `tests/test_web_shell.py`, `web/src/{api.ts,KnowledgePanel.tsx}`, `web/src/shell/{ConversationView,ProgressCards,ReviewPanel,Shell,Sidebar}.tsx`·`{events.ts,shell.css}`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`(S-026 인계 옮김)·`README.md`·`decisions.md`(D-80 구현 기록)·`ui-conversation-design.md`(11절)·`project-knowledge.md`(2절)·`review-acceptance-matrix.md`(AC-46). `web/dist` 는 빌드 산출물(`.gitignore`). 편집이 남긴 CRLF 는 LF 로 되돌렸다(`git ls-files --eol`). `git status --short` 로 재확인한다.
+- **남은 자원:** 라이브 제어부·Runner·codex·Edge 는 스크립트가 내렸다(남은 프로세스 0). 라이브 데이터는 `%LOCALAPPDATA%\Temp\hads-ui-04a-live\{092249006, 092723318}` 에 있고 저장소 `var\` 는 건드리지 않았다. 새 의존성 없음. 세션 시작 시 이 PC 에 사용자의 codex 프로세스(00:54 기동)와 Edge 가 있었고 건드리지 않았다.
+- **다음 세션이 이어서 할 때:** 결정 사항 패널은 `ReviewPanel.tsx` 의 `Decisions`(절마다 `data-testid` `decisions-*`), 규칙 화면은 `ProjectRules.tsx`(`rule-{key}`·`rule-*-{key}`·`rules-*`), 주소는 `lib/address.ts` 의 `parseAddress`/`formatAddress`/`rulesLink`/`messageLink`, 서버 집계는 `case_knowledge_use_view`. 브라우저 시험 둘은 `test_web_shell.py` 끝의 UI-04a 절. 라이브는 `ui/live/ui04a_rules.py`(p407 의 `Probe`·`drive_work`·`start_work` 재사용). 분리 실행은 `-k` 표현식을 쪼개는 `Start-Process` 대신 `.cmd` 스크립트로 띄운다.
 
 ### 이전 개발 인계 — S-027 / 2026-09-24 / P4-07 선택적 지식 추출 (**완료**, S-029 에 옮김)
 

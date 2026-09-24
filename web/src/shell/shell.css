@@ -911,3 +911,46 @@ textarea {
   font-size: 12px;
   margin: 2px 0;
 }
+
+/* ---------------------------------------------------------- UI-04b 설정·알림 */
+
+.sh-rules-sub {
+  padding-left: 22px;
+  font-size: 12px;
+}
+
+.sh-header-embedded {
+  padding-left: 0;
+  padding-right: 0;
+  border-bottom: none;
+}
+
+.sh-header-embedded h2 {
+  font-size: 14px;
+  margin: 0;
+}
+
+.sh-settings-screen .sh-rules-body section {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sh-line);
+}
+
+.sh-case-settings section {
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--sh-line);
+}
+
+.sh-case-settings .sh-rule-line,
+.sh-settings-screen .sh-rule-line {
+  margin-left: 0;
+}
+
+.sh-notice-log {
+  padding: 4px 24px 0 40px;
+  font-size: 12px;
+}
+
+.sh-notice-log .sh-result-list {
+  max-height: 160px;
+  overflow-y: auto;
+}

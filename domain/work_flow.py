@@ -91,7 +91,7 @@ class ProgressLimits:
 
     repair_limit: int = DEFAULT_REPAIR_LIMIT
     task_retry_limit: int = DEFAULT_TASK_RETRY_LIMIT
-    #: 어디서 온 값인가(키 → `case_setting`·`system_default`). 대기 사유에 싣는다.
+    #: 어디서 온 값인가(키 → `case_setting`·`project_setting`(UI-04b)·`system_default`). 대기 사유에 싣는다.
     sources: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:

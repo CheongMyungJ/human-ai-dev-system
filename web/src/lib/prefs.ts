@@ -15,6 +15,9 @@ export interface Prefs {
   lastCaseByProject: Record<string, string>
   // 대화마다 읽던 위치(스크롤, px).
   scrollByCase: Record<string, number>
+  // UI-04b. PC 알림을 켰는가(D-82). 브라우저 설정이며 업무 정책이 아니다. 실제 팝업은 브라우저 권한이 있을
+  // 때만 뜬다 — 권한은 사람이 켤 때 청한다.
+  notifications: boolean
 }
 
 export const PREFS_KEY = 'hads.prefs.v1'
@@ -27,6 +30,7 @@ export const DEFAULT_PREFS: Prefs = {
   lastProjectId: null,
   lastCaseByProject: {},
   scrollByCase: {},
+  notifications: false,
 }
 
 export const WIDTH_LIMITS = {
@@ -66,6 +70,7 @@ export function readPrefs(store: KeyValueStore | null): Prefs {
           : {},
       scrollByCase:
         parsed.scrollByCase && typeof parsed.scrollByCase === 'object' ? { ...parsed.scrollByCase } : {},
+      notifications: parsed.notifications === true,
     }
   } catch {
     return { ...DEFAULT_PREFS }

@@ -1371,8 +1371,9 @@ class Autonomy(str, Enum):
 class AutonomySource(str, Enum):
     """적용된 Autonomy 값의 출처(autonomy-budget-policy.md 5절 우선순위).
 
-    Task·Project 단위 조정은 아직 없어서 값도 두지 않는다. 조회 결과에 "Project
-    기본값에서 왔다"가 나타나는 순간 사람이 없는 설정 화면을 찾게 된다.
+    **UI-04b 부터 Project 기본값 층이 있다**(`PROJECT_DEFAULT` — 프로젝트 설정 화면에서 정한
+    기본값이 새 Case 의 첫 행이 된 경우). Task 층은 여전히 없어서 값도 두지 않는다 — 조회
+    결과에 없는 설정 화면의 출처가 나타나게 하지 않는다.
 
     `MIGRATED_UNKNOWN` 이 핵심이다. R1 이전 Case 는 Autonomy 가 **기록되지 않았고**
     기본값으로 읽으면 v0.6에서 사람이 검토·인수하기로 한 업무가 조용히 자동 진행
@@ -1383,6 +1384,7 @@ class AutonomySource(str, Enum):
     SYSTEM_DEFAULT = "system_default"
     CASE_EXPLICIT = "case_explicit"
     MIGRATED_UNKNOWN = "migrated_unknown"
+    PROJECT_DEFAULT = "project_default"
 
 
 class EffectiveAutonomySource(str, Enum):

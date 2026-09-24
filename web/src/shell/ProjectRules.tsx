@@ -101,6 +101,8 @@ export function ProjectRules(props: {
   focusItem: string | null
   lastCaseId: string | null
   onBack: () => void
+  // UI-04b. 프로젝트 설정 화면의 탭으로 들어갈 때 — 머리를 줄인다(설정 화면이 제목·탭을 가진다).
+  embedded?: boolean
 }) {
   const { project } = props
   const [view, setView] = useState<KnowledgeView | null>(null)
@@ -192,9 +194,9 @@ export function ProjectRules(props: {
 
   return (
     <div className="sh-rules" data-testid="rules-screen">
-      <header className="sh-header">
+      <header className={props.embedded ? 'sh-header sh-header-embedded' : 'sh-header'}>
         <div className="sh-header-title">
-          <h1>프로젝트 규칙 · {project.name}</h1>
+          {props.embedded ? <h2>프로젝트 규칙</h2> : <h1>프로젝트 규칙 · {project.name}</h1>}
           <span className="sh-muted">
             공통 규칙·참고 지식·AI 후보. 등록·활성화·개정·무효는 실행 권한·동의·인수가 아니고, 주입은 준수의 증거가
             아니다. AI 제안은 후보로만 들어가며 활성화는 사람의 결정이다 — 참고 후보의 자동 활성 조건 충족은 표시일

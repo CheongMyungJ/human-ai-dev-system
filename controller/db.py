@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 
 def utc_now() -> str:
@@ -502,6 +502,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         conn, "knowledge_intake", "evidence_id", "TEXT REFERENCES knowledge_evidence(id)"
     )
     _migrate_v24_knowledge_intake(conn)
+
+    # v25: 프로젝트 기본값(UI-04b, D-72). 표 하나(`project_setting`)는 schema.sql 이 만든다. **기존 표를
+    #      바꾸지 않고 데이터 이행도 없다** — 옛 DB 의 프로젝트는 설정 행이 없고 그것은 "설정 없음 =
+    #      시스템 기본값" 이다. 기존 Case 의 정책·예산 행에 프로젝트 기본값을 지어 넣지 않는다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
