@@ -1,7 +1,8 @@
 # P4-PLAN-08 — 여섯 Profile 대표 흐름의 진행기 경유 재현(defect-fix·refactoring·maintenance) + 혼합 목적의 완료
 
-상태: **READY — 기록만, 착수하지 않음**(S-033, 2026-09-24). [P4 수용 확인](../p4/evidence/P4-ACCEPT-results.md) 1.1·1.2·4절이 "빠진 것" 으로
-가른 묶음이다. 착수 여부는 사용자의 결정이다(P4 수용 결과 7절). 기준: 설계 v0.8 2차 / D-47·62·66·86 / [case-profiles](../case-profiles.md)
+상태: **완료**(S-034, 2026-09-24 — 사용자 지시 "P4-PLAN-08 먼저 하고 닫아줘" 로 S-033 과 같은 대화에서 이어서). 기록은 S-033.
+[P4 수용 확인](../p4/evidence/P4-ACCEPT-results.md) 1.1·1.2·4절이 "빠진 것" 으로 가른 묶음이며, 결과는 [P4-08 결과](../p4/evidence/P4-08-results.md)
+(새 시험 13건·제품 코드 무변경·제품 결함 없음). 기준: 설계 v0.8 2차 / D-47·62·66·86 / [case-profiles](../case-profiles.md)
 4·5·6절 / [DEVELOPMENT](../DEVELOPMENT.md) 6절 "P4 완료 조건". 선행: P4-03(완료 계약), P4-05(진행기), UI-04c(개정), 시험 도구
 `tests/conftest.py`(`processing_harness`·`FakeCliExecutor`·`met_satisfaction_for`).
 

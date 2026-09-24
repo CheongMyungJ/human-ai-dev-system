@@ -1,0 +1,66 @@
+{
+  "tag": "183717",
+  "codex_version": "codex-cli 0.156.1",
+  "results": [
+    {
+      "key": "A",
+      "label": "workspace-write (제품 기본)",
+      "args": [
+        "--sandbox",
+        "workspace-write"
+      ],
+      "command": "python -m unittest -v",
+      "codex_exit": 0,
+      "elapsed_s": 39.8,
+      "commands": [
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'python -m unittest -v'",
+          "exit_code": 0,
+          "output_tail": "test_only_error_lines (tests.test_app.ErrorLines.test_only_error_lines) ... ok\r\n\r\n----------------------------------------------------------------------\r\nRan 1 test in 0.000s\r\n\r\nOK\r\n"
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'where py'",
+          "exit_code": 0,
+          "output_tail": ""
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'where python'",
+          "exit_code": 0,
+          "output_tail": ""
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'python --version'",
+          "exit_code": 0,
+          "output_tail": "Python 3.12.10\r\n"
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'where.exe py'",
+          "exit_code": 1,
+          "output_tail": "INFO: Could not find files for the given pattern(s).\r\n"
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'where.exe python'",
+          "exit_code": 1,
+          "output_tail": "INFO: Could not find files for the given pattern(s).\r\n"
+        },
+        {
+          "command": "\"C:\\\\Program Files\\\\PowerShell\\\\7\\\\pwsh.exe\" -Command 'Get-Command python,py -ErrorAction Continue | Select-Object Name,CommandType,Definition | Format-List'",
+          "exit_code": 1,
+          "output_tail": "\r\nLine |\r\n   2 |  Get-Command python,py -ErrorAction Continue | Select-Object Name,Comm …\r\n     |  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~에서\r\n     | 'py' 용어는 cmdlet, 함수, 스크립트 파일 또는 실행 프로그램의 이름으로 인식되지 않습니다.\r\n이름의 철자를 확인하거나 경로가 포함되어 있으면 경로가 올바른지 확인하고 다시 시도합니다.\r\n\r\nName        : python.exe\r\nCommandType : Application\r\nDefinition  : C:\\Users\\USER\\AppData\\Local\\Programs\\Python\\Python312\\python.exe\r\n\r\n"
+        }
+      ],
+      "unittest_ran_ok_observed": true,
+      "final_report": {
+        "command": "python -m unittest -v",
+        "exit_code": 0,
+        "ran": true,
+        "python_resolved": "where python: 출력 없음; where py: 출력 없음 (PowerShell에서 where는 Where-Object 별칭). python --version: Python 3.12.10. Get-Command: python은 C:\\Users\\USER\\AppData\\Local\\Programs\\Python\\Python312\\python.exe로 해석됨; py는 해석되지 않음.",
+        "error": "",
+        "stdout_tail": "\r\n----------------------------------------------------------------------\r\nRan 1 test in 0.000s\r\n\r\nOK\r\n"
+      },
+      "final_message_head": "{\"command\":\"python -m unittest -v\",\"exit_code\":0,\"ran\":true,\"python_resolved\":\"where python: 출력 없음; where py: 출력 없음 (PowerShell에서 where는 Where-Object 별칭). python --version: Python 3.12.10. Get-Command: python은 C:\\\\Users\\\\USER\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python.exe로 해석됨; py는 해석되지 않음.\",\"error\":\"\",\"stdout_tail\":\"\\r\\n----------------------------------------------------------------------\\r\\nRan 1 test in 0.000s\\r\\n\\r\\nOK\\r\\n\"}",
+      "stderr_tail": "",
+      "app_py_unchanged": true
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+회차 183717 · codex-cli 0.156.1 · python312=True · 실험 루트 C:\Users\USER\AppData\Local\Temp\hads-p4-env-live\183717
+[A] workspace-write (제품 기본): exec --json --skip-git-repo-check -C C:\Users\USER\AppData\Local\Temp\hads-p4-env-live\183717\repo-A --sandbox workspace-write -o C:\Users\USER\AppData\Local\Temp\hads-p4-env-live\183717\repo-A\last-message.txt -
+[A] codex exit=0 · 39.8s · 명령 7건 · unittest 통과 관측=True
+[A]   exit=0 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'python -m unittest -v'
+[A]   exit=0 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'where py'
+[A]   exit=0 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'where python'
+[A]   exit=0 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'python --version'
+[A]   exit=1 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'where.exe py'
+[A]   exit=1 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'where.exe python'
+[A]   exit=1 · "C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command 'Get-Command python,py -ErrorAction Continue | Select-Object Name,CommandType,Definiti
+[A] 마지막 메시지: {"command":"python -m unittest -v","exit_code":0,"ran":true,"python_resolved":"where python: 출력 없음; where py: 출력 없음 (PowerShell에서 where는 Where-Object 별칭). python --version: Python 3.12.10. Get-Command: python은 C:\\Users\\USER\\AppData\\Local\\Programs\\Python\\Python312\\python.exe로 해석됨; py는 해석되지 않음
+요약(unittest 통과 관측) {'A': True}
