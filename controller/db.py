@@ -16,10 +16,11 @@ from pathlib import Path
 from typing import Any, Iterable, Iterator
 
 from domain import ids
+from domain.knowledge import Decision as KnowledgeDecision
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 27
+SCHEMA_VERSION = 28
 
 
 def utc_now() -> str:
@@ -555,6 +556,51 @@ def migrate(conn: sqlite3.Connection) -> None:
     ):
         _add_column_if_missing(conn, "case_workspace", column, ddl)
 
+    # v28: P4-09 — P5 전 정리 묶음. **새 표 없음, 데이터 이행 없음.** 옛 행의 새 컬럼은 NULL/빈 값 = 기록 없음.
+    #      `closure_record`  취소(이슈 #4)를 적을 수 있게 `candidate_id` 를 취소일 때만 NULL 로(표 재구성, 행 보존).
+    #                        새 컬럼 셋은 재구성 **전에** 더한다 — `SELECT *` 로 옮기려면 컬럼 순서가 같아야 한다.
+    #      `case_workspace`  후속 Case 의 이전 결과 기준(D-77): 이전 Case·브랜치·끝 커밋.
+    #      `knowledge_version` AI 후보의 읽지 못한 범위(D-92): AI 가 적은 원래 값. 옛 버전은 NULL.
+    #      `case`            제목의 출처·이력(D-93). 옛 행의 출처는 NULL — "새 대화" 가 사람의 제목인지 기본값인지
+    #                        모르므로 지어 적지 않는다(자동 제목 규칙이 기본 문구일 때만 NULL 을 기본값처럼 본다).
+    #      `conversation_interpretation` 응답이 낸 제목(D-93).
+    _add_column_if_missing(conn, "closure_record", "cancelled_by", "TEXT")
+    _add_column_if_missing(
+        conn,
+        "closure_record",
+        "cancel_reason",
+        "TEXT CHECK (cancel_reason IS NULL OR length(cancel_reason) <= 200)",
+    )
+    _add_column_if_missing(conn, "closure_record", "decision_id", "TEXT REFERENCES decision(id)")
+    _migrate_v28_closure_record(conn)
+    for column, ddl in (
+        ("previous_case_id", 'TEXT REFERENCES "case"(id)'),
+        ("previous_branch", "TEXT NOT NULL DEFAULT ''"),
+        ("previous_commit", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        _add_column_if_missing(conn, "case_workspace", column, ddl)
+    _add_column_if_missing(
+        conn,
+        "knowledge_version",
+        "reported_scope_json",
+        "TEXT CHECK (reported_scope_json IS NULL OR length(reported_scope_json) <= 1000)",
+    )
+    # Manifest 결정에 `scope_unreadable` 을 더한다(표 재구성, 행 보존 — 같은 목록이면 아무 것도 하지 않는다).
+    _widen_check(conn, "run_knowledge", "decision", [d.value for d in KnowledgeDecision])
+    for column, ddl in (
+        ("title_source", "TEXT CHECK (title_source IS NULL OR title_source IN ('default', 'ai', 'user'))"),
+        ("title_set_by", "TEXT"),
+        ("title_set_at", "TEXT"),
+        ("title_previous", "TEXT"),
+    ):
+        _add_column_if_missing(conn, "case", column, ddl)
+    _add_column_if_missing(
+        conn,
+        "conversation_interpretation",
+        "title",
+        "TEXT CHECK (title IS NULL OR length(title) <= 80)",
+    )
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -619,6 +665,39 @@ CREATE TABLE IF NOT EXISTS conversation_interpretation (
                            AND profile IS NOT NULL AND evaluated_at IS NOT NULL))
 )
 """
+
+
+#: v28 의 `closure_record`. `candidate_id` 가 취소일 때만 NULL 이고 취소의 행위자·사유·결정이 뒤에 붙는다(맨 뒤 —
+#: 옛 행을 `SELECT *` 로 옮기려면 컬럼 순서가 같아야 한다: v20 의 `snapshot_json` 뒤에 v28 셋). schema.sql 과 같다.
+CLOSURE_RECORD_V28_DDL = """
+CREATE TABLE IF NOT EXISTS closure_record (
+    id                  TEXT PRIMARY KEY,
+    case_id             TEXT NOT NULL REFERENCES "case"(id),
+    candidate_id        TEXT REFERENCES completion_candidate(id),
+    final_acceptance_id TEXT REFERENCES final_acceptance(id),
+    closure_kind        TEXT NOT NULL,
+    exception_count     INTEGER NOT NULL,
+    confirmed_at        TEXT NOT NULL,
+    snapshot_json       TEXT CHECK (snapshot_json IS NULL OR length(snapshot_json) <= 4000),
+    cancelled_by        TEXT,
+    cancel_reason       TEXT CHECK (cancel_reason IS NULL OR length(cancel_reason) <= 200),
+    decision_id         TEXT REFERENCES decision(id),
+    UNIQUE (case_id),
+    CHECK (candidate_id IS NOT NULL OR closure_kind = 'cancelled'),
+    CHECK ((closure_kind = 'cancelled') = (cancelled_by IS NOT NULL))
+)
+"""
+
+
+def _migrate_v28_closure_record(conn: sqlite3.Connection) -> None:
+    """P4-09(e). `closure_record.candidate_id` 를 취소일 때만 NULL 로(표 재구성, 행 보존). 이미 그 CHECK 가 있으면
+    아무 것도 하지 않는다(멱등). 옛 행은 전부 후보가 있는 종료라 새 CHECK 를 그대로 만족한다."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'closure_record'"
+    ).fetchone()
+    if row is None or "closure_kind = 'cancelled'" in (row["sql"] or ""):
+        return
+    _rebuild_table(conn, "closure_record", CLOSURE_RECORD_V28_DDL.strip(), "v28")
 
 
 def _migrate_v26_interpretation(conn: sqlite3.Connection) -> None:

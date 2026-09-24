@@ -390,6 +390,11 @@ DISCUSSION_INTERPRETATION_RULE = """이 대화는 아직 **준비 단계**다(�
 
 예: {"kind": "work_request", "profile": "research"}
 
+블록에 "title" 을 함께 적는다 — 이 대화의 **제목**(40자 이하, 무엇에 관한 대화인지 한 구절; 예:
+{"kind": "discussion", "title": "저장 뒤 목록이 옛 값을 보이는 문제"}). 제목은 서버에 짧은 값으로
+저장되므로 비밀값(토큰·비밀번호·키·개인정보)을 넣지 마라. 사람이 이미 제목을 정했으면 시스템이
+무시한다. 업무 요청("work_request")이면 그 업무를 말하는 제목으로 한 번 더 낸다.
+
 해석 규칙:
 - 선택지에 동의하기, 생각 나누기, 질문, "아직 ~하지 마" 같은 제한 표명은 모두
   "discussion" 이다. 동의는 그 선택에만 적용된다 — 작업을 맡긴 것이 아니다.
@@ -533,6 +538,9 @@ def build_context_block(items: list[dict[str, Any]]) -> str:
         head = f"[{label}] {item['artifact_id']}@{item['revision']}"
         if item.get("knowledge"):
             head += " " + knowledge_head(item["knowledge"])
+        if item.get("question"):
+            # P4-09(a). 무엇에 대한 답인지 — 질문 키·요약. 계획서의 "사람이 정한다" 가 이 답으로 정해졌다.
+            head += question_head(item["question"])
         if item.get("status") == "omitted":
             # P4-04. 읽지 못한 것과 **넣지 않은 것**은 다른 사실이다.
             parts.append(f"{head}\n{OMITTED_NOTE}\n")
@@ -949,6 +957,19 @@ _RELATION_LABEL = {
 }
 
 
+def question_head(meta: dict[str, Any]) -> str:
+    """P4-09(a). 질문 답 참조의 머리 — 어느 질문(키·요약)에 대한 답인가. 제어부가 준 메타데이터뿐이다.
+
+    계획서에 "사람이 정한다" 로 남은 항목이 이 답으로 정해졌다는 것을 작업 실행이 알아야 한다 — 이 머리가
+    없으면 AI 는 답을 받고도 무엇에 대한 결정인지 모른다(이슈 #2).
+    """
+    key = str(meta.get("key") or "?")
+    summary = " ".join(str(meta.get("summary") or "").split())
+    stage = meta.get("raised_in_stage") or meta.get("decide_at") or ""
+    where = f"{stage} 단계에서 이월한 " if stage else ""
+    return f" — {where}질문 {key}: {summary} 에 대한 답 (계획서의 '사람이 정한다' 는 이 답으로 정해졌다)"
+
+
 def knowledge_head(meta: dict[str, Any]) -> str:
     """P4-06. 지식 참조의 머리 — 키·버전·효력·종류·범위·활동. 제어부가 준 메타데이터뿐이다.
 
@@ -1007,9 +1028,11 @@ KNOWLEDGE_REGISTRATION_RULE = """**프로젝트 규칙 등록.** 사용자의 **
 - kind: "decision"(설계 결정과 이유) · "constraint"(지켜야 할 조건) · "known_problem"(반복되는
   문제와 진단법) · "operation"(빌드·시험·환경 같은 운영 사실).
 - repository: 특정 저장소에만 해당하면 아래 등록 저장소 이름 중 하나, 아니면 null. paths 는 그
-  저장소 안의 경로이며 없으면 [].
-- activities: 특정 활동에만 해당하면 intent·design·plan·implementation·verification·
-  investigation·review·discussion 중에서, 모든 작업이면 [].
+  저장소 **안**의 짧은 상대 경로·패턴(최대 20, 절대 경로·`..` 금지)이며 없거나 모르면 []. 저장소가
+  null 이면 경로도 [].
+- activities: 특정 활동에만 해당하면 **아래 코드로만** — intent(의도 작성)·design(설계)·plan(계획)·
+  implementation(구현)·verification(검증)·investigation(조사·분석·실험)·review(검토)·discussion(논의).
+  모든 작업이거나 **모르면 []**. 다른 말을 적으면 사용자의 말이라도 등록되지 않는다(범위가 분명해야 한다).
 - supersedes: 사용자가 아래 **기존 지식** 하나를 바꾸라고 했으면 그 키, 아니면 null.
 - content 와 사용자의 그 메시지는 **서버에 저장된다.** 비밀값(토큰·비밀번호·키·개인정보)이 들어
   있으면 블록을 붙이지 말고 글로 알린다.
@@ -1072,6 +1095,12 @@ KNOWLEDGE_EXTRACTION_RULE = """
 - obligation: 지켜야 한다고 제안하면 "required"(그래도 후보다), 참고 사실이면 "reference".
 - kind: decision(설계 결정과 이유) · constraint(지켜야 할 조건) · known_problem(반복되는 문제와 진단법)
   · operation(빌드·시험·환경 같은 운영 사실).
+- activities: 이 후보가 해당하는 활동을 **아래 코드로만** 적는다 — intent(의도 작성) · design(설계) ·
+  plan(계획) · implementation(구현) · verification(검증) · investigation(조사·분석·실험) · review(검토) ·
+  discussion(논의). 모든 작업에 해당하거나 **모르면 비워 둔다**(`[]` = 논의를 뺀 모든 작업). 다른 말(예:
+  "테스트 환경 조사")을 적지 마라 — 읽지 못한 값은 사람이 확인할 때까지 후보가 주입되지 않는다.
+- paths: 그 저장소 **안**의 짧은 상대 경로·패턴(최대 20, 절대 경로·`..` 금지). 저장소가 null 이면 경로도 `[]`.
+  모르면 `[]`.
 - relates_to·relation: 아래 기존 지식과 관계가 있으면 그 키와 supports(뒷받침하는 관측 — 새 항목 없이
   근거로 남는다) / supersedes(바꾸자는 제안) / contradicts(다른 관측) 중 하나. 없으면 둘 다 null.
 - content 는 서버에 저장된다. 비밀값(토큰·비밀번호·키·개인정보)이 들어 있으면 블록을 붙이지 않는다.

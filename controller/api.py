@@ -2749,7 +2749,7 @@ class WorkspaceReadyIn(BaseModel):
     user_tree_dirty: bool = False
     user_tree_entries: int = 0
     #: UI-04d(D-77). 어떤 코드에서 시작했는가. 옛 Runner 는 주지 않는다(기록 없음).
-    start_basis: str | None = Field(default=None, pattern="^(committed|include_uncommitted)$")
+    start_basis: str | None = Field(default=None, pattern="^(committed|include_uncommitted|previous_result)$")
     committed_base: str = ""
     included_entries: int = Field(default=0, ge=0)
     included_tree_digest: str = Field(default="", max_length=128)
@@ -2773,12 +2773,16 @@ class WorkspaceUncommittedIn(BaseModel):
     truncated: bool = False
     #: 사람이 골랐는데 포함 직전에 트리가 달라져 있었다 — 그 선택을 지우고 새 목록으로 다시 묻는다.
     stale: bool = False
+    #: P4-09(c). 이전 Case 브랜치의 끝 커밋이 HEAD 에 없다 — 어느 Case·브랜치·커밋인가. 없으면 빈 값.
+    previous_case_id: str | None = None
+    previous_branch: str = Field(default="", max_length=200)
+    previous_commit: str = Field(default="", max_length=64)
 
 
 class StartBasisIn(BaseModel):
     """사람의 시작 기준 선택. `seen_digest` 는 본 목록의 트리 지문이다(동시 편집 보호)."""
 
-    basis: str = Field(pattern="^(committed|include_uncommitted)$")
+    basis: str = Field(pattern="^(committed|include_uncommitted|previous_result)$")
     actor: str = Field(default="owner", min_length=1, max_length=120)
     seen_digest: str = Field(min_length=8, max_length=128)
 
@@ -2952,6 +2956,9 @@ def runner_workspace_uncommitted(
             entry_count=len(payload.entries),
             stale=payload.stale,
             repository_id=payload.repository_id,
+            previous_case_id=payload.previous_case_id,
+            previous_branch=payload.previous_branch,
+            previous_commit=payload.previous_commit,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -2995,6 +3002,8 @@ def get_uncommitted_list(request: Request, case_id: str, repository_id: str) -> 
         "entries": list(held["entries"]) if current else None,
         "truncated": bool(held["truncated"]) if current else None,
         "stale_choice": bool(held["stale"]) if current else False,
+        # P4-09(c). 이전 업무 결과의 선택지(HEAD 에 없는 이전 Case 브랜치의 끝 커밋). 행에 있으므로 목록과 무관하다.
+        **repo._previous_result_view(workspace),  # noqa: SLF001 — 같은 값을 카드·조회가 본다
         "note": (
             "목록은 작업 PC 가 올린 것을 이 서버의 메모리로만 중계한다 — 저장하지 않는다"
             if current
@@ -4062,7 +4071,8 @@ def resume_progress(request: Request, case_id: str, payload: ResumeIn) -> dict[s
     """
     repo = _repo(request)
     try:
-        repo.get_case(case_id)
+        # P4-09(e). 종료·취소된 Case 는 다시 진행하지 않는다 — 취소는 되돌리지 않는다(이어서 하려면 새 Case).
+        repo.guard_open_case(case_id)
         result = _progressor(request, repo).resume(case_id, actor=payload.actor)
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -4250,9 +4260,15 @@ def knowledge_adoption_check(
     obligation: str | None = None,
     scope_kind: str | None = None,
     repository_id: str | None = None,
+    activities: str | None = None,
 ) -> dict[str, Any]:
     """P4-07. 후보의 QG-08 채택 확인(근거·범위·상태·버전·충돌)을 활성화 없이 본다. 판정이 아니라
-    확인 결과이며, 막는 항목이 없어도 활성화는 사람의 결정이다."""
+    확인 결과이며, 막는 항목이 없어도 활성화는 사람의 결정이다.
+
+    P4-09(f). `activities`(쉼표 목록, 빈 문자열 = 모든 작업을 사람이 확인)를 주면 `scope_unreadable` 이 풀린 채로 본다."""
+    named = None
+    if activities is not None:
+        named = [a.strip() for a in activities.split(",") if a.strip()]
     try:
         return _repo(request).adoption_check_for(
             knowledge_id,
@@ -4260,6 +4276,7 @@ def knowledge_adoption_check(
             obligation=obligation,
             scope_kind=scope_kind,
             repository_id=repository_id,
+            activities=named,
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
@@ -4358,6 +4375,15 @@ def resolve_knowledge_conflict(
     return conflict
 
 
+@router.get("/api/cases/{case_id}/knowledge-intake/{run_id}/{index}")
+def get_knowledge_intake_detail(request: Request, case_id: str, run_id: str, index: int) -> dict[str, Any]:
+    """P4-09(f), D-92. 등록 보고 항목의 내용 열람 — 거부된 행도 본다(본문·AI 가 적은 범위·사유 읽을 말)."""
+    try:
+        return _repo(request).knowledge_intake_detail(case_id, run_id, index)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
 @router.get("/api/cases/{case_id}/knowledge-use")
 def get_case_knowledge_use(request: Request, case_id: str) -> dict[str, Any]:
     """UI-04a. 이 업무의 실행들에 **제공된** 프로젝트 규칙(Manifest 집계, 버전별). 결정 사항 패널이 쓴다.
@@ -4441,6 +4467,44 @@ def _after_knowledge_change(request: Request, repo: Repository, project_id: str,
     """지식 충돌이 풀리면 그것 때문에 기다리던 Case 의 진행을 다시 본다(사람 입력과 같은 경계)."""
     for row in repo.progress_waiting_for(project_id, "knowledge_conflict"):
         _after_human_input(request, repo, row["case_id"], ref)
+
+
+class CancelCaseIn(BaseModel):
+    """P4-09(e), 이슈 #4. 업무 취소 — 사람의 결정이며 사유가 필수다."""
+
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    reason: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/api/cases/{case_id}/cancel")
+def cancel_case(request: Request, case_id: str, payload: CancelCaseIn) -> dict[str, Any]:
+    """업무 취소(completion-lifecycle 2절의 취소 종료, 1단계 — 끝나지 않은 실행이 없을 때만).
+
+    성공도 예외 인수도 아니고 되돌리지 않는다. 부분 결과·변경·사용량·작업공간은 그대로 남는다. 실행이 남아 있으면
+    409 `runs_unfinished`(먼저 중단), 종료 Case 는 409 `case_already_closed`.
+    """
+    try:
+        return _repo(request).cancel_case(case_id, actor=payload.actor, reason=payload.reason)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+class CaseTitleIn(BaseModel):
+    """P4-09(g), D-93. 사람이 정하는 제목(1~200자). 제목은 판정·권한이 아니라 표시값이다."""
+
+    title: str = Field(min_length=1, max_length=200)
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+
+
+@router.put("/api/cases/{case_id}/title")
+def set_case_title(request: Request, case_id: str, payload: CaseTitleIn) -> dict[str, Any]:
+    """대화 제목 바꾸기 — 종료·보관 대화도 된다. 자동 제목은 그 뒤 이 제목을 덮지 않는다(D-93)."""
+    repo = _repo(request)
+    try:
+        repo.set_case_title(case_id, payload.title, actor=payload.actor)
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    return repo.conversation_view(case_id)
 
 
 @router.post("/api/cases/{case_id}/archive")

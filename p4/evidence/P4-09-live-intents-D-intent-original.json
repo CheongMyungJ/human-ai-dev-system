@@ -1,0 +1,152 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 6,
+  "case_id": "case-7190d5da0d55d4af",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-p4-03-D-203057259",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "root_cause_analysis",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "phenomenon",
+    "observations",
+    "cause_questions",
+    "conclusion_requirement",
+    "analysis_end_condition"
+  ],
+  "retained_fields": [],
+  "fields": {
+    "goal": {
+      "text": "저장 뒤 목록 화면에는 이전 값이 보이고 새로 고침 뒤에는 새 값이 보이는 원인을 확정한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "두 시점의 표시 차이를 일으키는 원인을 근거와 함께 설명한다. 원인을 확정하지 못하면 완료가 아니다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "저장부터 목록 화면 복귀와 새로 고침까지의 동작을 분석한다. `store.py`의 `save()`와 `list_items()`는 관련 가능성이 제기된 조사 대상이다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "constraints": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "open_questions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "phenomenon": {
+      "text": "저장 버튼을 누르고 목록 화면으로 돌아오면 이전 값이 보이지만, 새로 고침하면 새 값이 보인다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "observations": {
+      "text": "요청자가 재현율 100%를 보고했으며, `store.py`의 `save()`와 `list_items()`가 관련돼 보인다고 제시했다. 코드상의 원인은 아직 관찰되지 않았다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "cause_questions": {
+      "text": "저장 뒤 목록으로 복귀했을 때 이전 값이 표시되고, 새로 고침한 뒤에는 새 값이 표시되는 이유는 무엇인가?",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "conclusion_requirement": {
+      "text": "원인을 근거로 확정해야 한다. 가능성만 제시하거나 원인을 확정하지 못한 결론은 충족되지 않는다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "analysis_end_condition": {
+      "text": "확인한 원인이 저장 뒤 복귀와 새로 고침 뒤의 표시 차이를 모두 설명하고, 이를 뒷받침하는 근거를 제시하면 분석을 종료한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "conclusion_requirement",
+      "text": "저장 뒤 목록 복귀 시 이전 값이 보이고 새로 고침 뒤 새 값이 보이는 원인을 확정하고, 두 결과를 연결하는 근거를 제시한다.",
+      "method": "저장, 목록 복귀, 새로 고침의 데이터 흐름과 표시 값을 추적하고, 지목한 원인이 두 시점의 차이를 설명하는지 코드 또는 실행 관찰로 확인한다.",
+      "summary": "표시 차이의 원인 확정",
+      "method_summary": "데이터 흐름과 표시 값 검증",
+      "obligation": "cause",
+      "conclusion_rule": "definitive_required"
+    }
+  ],
+  "objectives": [
+    "cause"
+  ],
+  "sizing": {
+    "recommended_level": "deep",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "low",
+        "evidence": "현상, 재현율, 원인 확정 의무와 완료 조건이 요청에 명시돼 있다.",
+        "judgement": "분석 목표와 성공 기준이 명확하다.",
+        "unconfirmed": ""
+      },
+      {
+        "axis": "change_scope",
+        "weight": "insufficient_evidence",
+        "evidence": "`save()`와 `list_items()`가 관련돼 보인다는 단서만 제시됐다.",
+        "judgement": "원인 분석에 필요한 코드와 인터페이스 범위는 아직 판단할 수 없다.",
+        "unconfirmed": "저장과 목록 표시 사이에 관여하는 구성 요소"
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "insufficient_evidence",
+        "evidence": "저장 결과가 새로 고침 뒤 표시된다는 보고 외에 데이터 흐름 정보가 없다.",
+        "judgement": "저장된 데이터와 화면 상태의 관계는 아직 판단할 수 없다.",
+        "unconfirmed": "데이터 저장 위치, 읽기 경로, 화면 상태의 생명주기"
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "권한이나 민감 데이터에 관한 정보가 요청에 없다.",
+        "judgement": "권한·보안 관련성은 아직 판단할 수 없다.",
+        "unconfirmed": "조사 대상 데이터의 접근 권한과 민감성"
+      },
+      {
+        "axis": "reversibility",
+        "weight": "low",
+        "evidence": "이번 업무는 원인 분석과 설명으로 한정돼 있다.",
+        "judgement": "분석 작업 자체의 되돌림 비용은 낮다.",
+        "unconfirmed": "잘못된 결론이 후속 결정에 미칠 영향"
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "high",
+        "evidence": "재현 현상과 관련 가능성이 있는 함수만 제시됐고 원인은 확인되지 않았다.",
+        "judgement": "확정 결론이 요구되지만 원인과 관련 범위가 아직 불명확하다.",
+        "unconfirmed": "실제 원인과 제시된 함수들의 관련 여부"
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "medium",
+        "evidence": "재현율은 100%로 보고됐지만 코드나 실행 결과는 아직 확인되지 않았다.",
+        "judgement": "재현 가능성은 높으나 원인 확정에는 데이터 흐름과 표시 결과의 대조가 필요하다.",
+        "unconfirmed": "재현 환경과 관찰 가능한 실행 근거"
+      }
+    ]
+  }
+}

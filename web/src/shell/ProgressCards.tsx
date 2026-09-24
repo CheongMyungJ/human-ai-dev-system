@@ -27,6 +27,7 @@ import {
   type ProgressLimitKey,
   type CaseRelationView,
   type KnowledgeRegistration,
+  type KnowledgeIntakeDetail,
   type ConversationView,
   type MaterialDeltaRow,
   type ProgressView,
@@ -35,6 +36,7 @@ import {
   type UncommittedList,
 } from '../api'
 import { rulesLink } from '../lib/address'
+import { putRegisterPrefill, refusalText } from '../lib/knowledgeText'
 import { autoReferenceText } from './ProjectRules'
 import { peekBody } from './bodies'
 import { emit } from './events'
@@ -561,15 +563,38 @@ function StartBasisCard(props: { wait: ProgressWait; caseId: string; onChanged: 
     })
   const head = String(props.wait.head ?? list?.head ?? '')
   const count = Number(list?.entry_count ?? props.wait.entries ?? 0)
+  // P4-09(c). 이전 업무 결과 — 이전 대화 브랜치의 끝 커밋이 아직 커밋된 코드(HEAD)에 없다. 사람이 고른다(기본 선택 없음).
+  const previousCommit = String(list?.previous_commit ?? props.wait.previous_commit ?? '')
+  const previousTitle = String(list?.previous_case_title ?? props.wait.previous_case_title ?? '') || '이전 대화'
+  const previousBranch = String(list?.previous_branch ?? props.wait.previous_branch ?? '')
   return (
-    <div className="sh-card sh-card-wait" data-testid="wait-card-workspace_start_basis" data-repository={repositoryId} data-available={list ? String(list.available) : 'loading'}>
+    <div
+      className="sh-card sh-card-wait"
+      data-testid="wait-card-workspace_start_basis"
+      data-repository={repositoryId}
+      data-available={list ? String(list.available) : 'loading'}
+      data-previous={previousCommit ? 'offered' : 'none'}
+    >
       <div className="sh-card-head">
         <strong>어느 코드에서 시작할까</strong> · {String(props.wait.repository_name ?? repositoryId)}
       </div>
       <div className="sh-muted">
-        원래 폴더에 커밋하지 않은 변경 <strong data-testid="basis-count">{count}</strong>건이 있어 작업 PC 가 작업공간을 만들지
-        않고 물었다. 기준은 현재 브랜치의 마지막 커밋 <span className="sh-mono">{head.slice(0, 10) || '?'}</span> 이다.
+        {count > 0 && (
+          <>
+            원래 폴더에 커밋하지 않은 변경 <strong data-testid="basis-count">{count}</strong>건이 있어 작업 PC 가 작업공간을 만들지
+            않고 물었다.{' '}
+          </>
+        )}
+        {previousCommit && (
+          <span data-testid="basis-previous">
+            이전 업무 <strong>{previousTitle}</strong>의 결과(브랜치 {previousBranch || '?'} 의 끝 커밋{' '}
+            <span className="sh-mono">{previousCommit.slice(0, 10)}</span>)가 아직 커밋된 코드에 없다 — 그 위에서 이을지
+            고른다.{' '}
+          </span>
+        )}
+        기준은 현재 브랜치의 마지막 커밋 <span className="sh-mono">{head.slice(0, 10) || '?'}</span> 이다.
         <strong> 어느 쪽을 골라도 원래 폴더·인덱스·브랜치는 바뀌지 않는다</strong>(자동 커밋·stash·삭제 없음).
+        {previousCommit && count > 0 && ' 이전 업무 결과를 고르면 커밋하지 않은 변경은 포함하지 않는다.'}
       </div>
       {loadError && <p className="sh-warn">목록을 불러오지 못했다: {loadError}</p>}
       {list && list.stale_choice && (
@@ -577,7 +602,7 @@ function StartBasisCard(props: { wait: ProgressWait; caseId: string; onChanged: 
           고른 뒤 원래 폴더가 또 바뀌어 작업 PC 가 만들지 않았다 — 새 목록으로 다시 고른다.
         </p>
       )}
-      {list && list.available && (
+      {list && list.available && count > 0 && (
         <ul className="sh-result-list sh-basis-list" data-testid="basis-entries">
           {(list.entries ?? []).map((entry, i) => (
             <li key={`${entry.path}-${i}`} className="sh-mono sh-rule-line" data-testid={`basis-entry-${i}`}>
@@ -603,20 +628,33 @@ function StartBasisCard(props: { wait: ProgressWait; caseId: string; onChanged: 
           disabled={!list?.available || action.busy}
           onClick={() => decide('committed')}
           data-testid="basis-committed"
-          title="이 변경은 원래 폴더에만 남고 작업공간은 마지막 커밋에서 시작한다"
+          title="작업공간은 현재 브랜치의 마지막 커밋에서 시작한다 — 미커밋 변경은 원래 폴더에만, 이전 결과는 그 브랜치에만 남는다"
         >
           {START_BASIS_LABEL.committed}
         </button>
-        <button
-          type="button"
-          className="sh-primary"
-          disabled={!list?.available || action.busy}
-          onClick={() => decide('include_uncommitted')}
-          data-testid="basis-include"
-          title="별도 작업공간에 이 변경을 스냅샷 커밋으로 얹어 시작한다. 원래 폴더는 그대로다"
-        >
-          {START_BASIS_LABEL.include_uncommitted}
-        </button>
+        {previousCommit && (
+          <button
+            type="button"
+            disabled={!list?.available || action.busy}
+            onClick={() => decide('previous_result')}
+            data-testid="basis-previous-result"
+            title="이전 대화 브랜치의 끝 커밋에서 새 작업공간을 편다. 커밋하지 않은 변경은 포함하지 않는다. 원래 폴더는 그대로다"
+          >
+            {START_BASIS_LABEL.previous_result}
+          </button>
+        )}
+        {count > 0 && (
+          <button
+            type="button"
+            className="sh-primary"
+            disabled={!list?.available || action.busy}
+            onClick={() => decide('include_uncommitted')}
+            data-testid="basis-include"
+            title="별도 작업공간에 이 변경을 스냅샷 커밋으로 얹어 시작한다. 원래 폴더는 그대로다"
+          >
+            {START_BASIS_LABEL.include_uncommitted}
+          </button>
+        )}
       </div>
     </div>
   )
@@ -716,22 +754,78 @@ function LimitWaitCard(props: {
 
 // ------------------------------------------------------------------ 지식 자동 등록 (P4-06)
 
-//: 등록하지 않은 이유(서버 사유 코드 → 읽을 말).
-const KNOWLEDGE_REFUSAL_LABEL: Record<string, string> = {
-  unknown_repository: '그런 저장소가 이 프로젝트에 없다',
-  unknown_supersedes_key: '바꾸라는 기존 규칙을 찾지 못했다',
-  invalid_kind_or_obligation: '종류·효력을 알아볼 수 없다',
-  format_error: '형식이 맞지 않는다',
-  reply_not_completed: '응답이 완료되지 않았다',
-  summary_missing: '제목이 없다',
-  content_not_stored: '내용이 저장되지 않았다',
-  invalid_scope: '범위를 알아볼 수 없다',
-  too_many_items: '한 번에 너무 많다',
-  // P4-07.
-  run_not_completed: '실행이 완료되지 않았다',
-  unknown_related_key: '관계 대상 지식을 찾지 못했다',
-  invalid_relation: '관계를 알아볼 수 없다',
-  relation_without_target: '관계 대상이 없다',
+/**
+ * P4-09(f), D-92. 거부된(또는 어떤) 등록 보고 항목의 **내용 보기** — 본문(서버에 있으면)·AI 가 적은 범위·사유의 읽을 말.
+ * 새 저장이 없고 열람이다. "이 내용으로 수동 등록" 은 규칙 화면의 수동 등록 폼을 이 값으로 채워 연다(권위는 등록하는
+ * 사람의 선택 — AI 제안이면 후보로).
+ */
+export function IntakeDetailView(props: { caseId: string; projectId: string; registration: KnowledgeRegistration; testPrefix: string }) {
+  const r = props.registration
+  const [detail, setDetail] = useState<KnowledgeIntakeDetail | null>(null)
+  const [open, setOpen] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const load = async () => {
+    setOpen(true)
+    if (detail) return
+    try {
+      setDetail(await knowledgeApi.intakeDetail(props.caseId, r.run_id, r.report_index))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+  const prefill = () => {
+    if (!detail) return
+    putRegisterPrefill({
+      caseId: props.caseId,
+      content: detail.content ?? '',
+      summary: detail.reported.summary ?? detail.summary ?? '',
+      kind: detail.reported.kind ?? 'operation',
+      obligation: detail.reported.obligation ?? 'reference',
+      repositoryId: null,
+      repositoryName: detail.reported.repository,
+      activities: detail.reported.activities,
+      candidate: detail.reported.proposal || r.origin === 'extraction',
+      note: `${r.run_id} #${r.report_index} 의 내용으로 채움 — 범위(활동·경로)는 등록 전에 확인한다`,
+    })
+    window.location.assign(rulesLink(props.projectId))
+  }
+  return (
+    <span data-testid={`${props.testPrefix}-detail-${r.report_index}`}>
+      {!open && (
+        <button type="button" className="sh-link" onClick={() => void load()} data-testid={`${props.testPrefix}-open-${r.report_index}`}>
+          내용 보기
+        </button>
+      )}
+      {open && error && <span className="sh-warn"> 열람 실패: {error}</span>}
+      {open && detail && (
+        <div className="sh-intake-detail" data-testid={`${props.testPrefix}-body-${r.report_index}`}>
+          <div className="sh-muted">
+            사유: {detail.refusal_text || '(없음)'} · AI 가 적은 종류 {detail.reported.kind ?? '?'} · 효력 {detail.reported.obligation ?? '?'} ·
+            저장소 {detail.reported.repository ?? '프로젝트 전체'} · 경로 {detail.reported.paths.join(', ') || '없음'} · 활동{' '}
+            <span data-testid={`${props.testPrefix}-activities-${r.report_index}`}>{detail.reported.activities.join(', ') || '(비어 있음 = 모든 작업)'}</span>
+            {detail.reported.basis ? ` · 근거 ${detail.reported.basis}` : ''}
+          </div>
+          {detail.content !== null ? (
+            <pre className="sh-body sh-intake-content" data-testid={`${props.testPrefix}-content-${r.report_index}`}>{detail.content}</pre>
+          ) : (
+            <div className="sh-muted">{detail.content_note}</div>
+          )}
+          <div className="sh-composer-bar">
+            <span className="sh-muted">{detail.note}</span>
+            <span className="sh-spacer" />
+            {detail.content !== null && (
+              <button type="button" className="sh-link" onClick={prefill} data-testid={`${props.testPrefix}-register-${r.report_index}`}>
+                이 내용으로 수동 등록
+              </button>
+            )}
+            <button type="button" className="sh-link" onClick={() => setOpen(false)}>
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
+  )
 }
 
 /**
@@ -807,7 +901,8 @@ export function KnowledgeCandidateCards(props: {
             )}
             {r.intake_state === 'refused' && (
               <>
-                등록하지 않음 · {r.reported_summary ?? ''} · {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''}
+                등록하지 않음 · {r.reported_summary ?? ''} · {refusalText(r.refusal, r.refusal_text)}{' '}
+                <IntakeDetailView caseId={props.caseId} projectId={props.projectId} registration={r} testPrefix="knowledge-candidate" />
               </>
             )}
             {r.basis && <div className="sh-muted">{r.basis}</div>}
@@ -843,11 +938,11 @@ function KnowledgeCard(props: { registration: KnowledgeRegistration; projectId: 
       <div className="sh-card sh-card-event" data-testid="knowledge-refused-card">
         <strong>프로젝트 규칙으로 등록하지 않음</strong> · {r.reported_summary ?? ''}
         <div className="sh-muted">
-          {KNOWLEDGE_REFUSAL_LABEL[r.refusal ?? ''] ?? r.refusal ?? ''} — 필요하면 범위·내용을 분명히 해서 다시 말하거나{' '}
+          {refusalText(r.refusal, r.refusal_text)} — 필요하면 범위·내용을 분명히 해서 다시 말하거나{' '}
           <a className="sh-link" href={rulesLink(props.projectId)}>
             프로젝트 규칙
           </a>
-          에서 등록한다
+          에서 등록한다. <IntakeDetailView caseId={props.caseId} projectId={props.projectId} registration={r} testPrefix="knowledge-refused" />
         </div>
       </div>
     )

@@ -411,3 +411,190 @@ def test_a_v26_database_gets_the_basis_columns_and_old_rows_stay_unrecorded(tmp_
     assert {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")} == tables_after
     assert not any("search" in t for t in tables_after)
     conn.close()
+
+
+# ================================================== P4-09(c) — 후속 Case 의 이전 업무 결과 기준(D-77 마지막 문장)
+#
+# 종료 Case 의 수정 요청으로 생긴 후속 Case 는 지금까지 HEAD 에서 시작했다 — 이전 Case 의 아직 push·병합되지
+# 않은 결과가 후속 작업에 없었다. 이제 이전 Case 브랜치의 끝 커밋이 HEAD 에 없으면 작업 PC 가 **만들지 않고
+# 묻고** 사람이 `이전 업무 결과에서 시작 / 커밋된 코드에서 시작` 을 고른다(기본 선택·자동 없음). AC-9~14.
+
+
+def _previous_case_with_result(harness, name: str = "prev", dirty_after: bool = False):
+    """준비된 작업공간의 브랜치에 커밋 하나를 더한(= HEAD 에 없는 결과) 이전 Case 와 그 후속 Case.
+
+    반환: (이전 case, 후속 case, 저장소 경로, 이전 브랜치 끝 커밋)
+    """
+    from domain.models import CaseStatus
+    from tests.test_work_progressor import _repo
+    from tests.test_workspace import _agreed_git_case
+
+    previous, repo = _agreed_git_case(harness, name=name)
+    workspace = harness.prepare_workspace(previous["id"])
+    assert workspace["state"] == "ready"
+    worktree = Path(workspace["worktree_path"])
+    (worktree / "result.py").write_text("RESULT = 1\n", encoding="utf-8")
+    _git(worktree, "add", "-A")
+    _git(worktree, "commit", "-m", "이전 업무의 결과")
+    tip = _git(worktree, "rev-parse", "HEAD").strip()
+    assert tip != _git(repo, "rev-parse", "HEAD").strip()
+    _repo(harness).set_case_status(previous["id"], CaseStatus.CLOSED)
+    created = harness.client.post(
+        f"/api/cases/{previous['id']}/successor",
+        json={"title": "후속", "profile": "feature", "reason_summary": "수정 요청"},
+    )
+    assert created.status_code == 201, created.text
+    successor = created.json()
+    if dirty_after:
+        (repo / "scratch.txt").write_text("사용자의 미추적 메모\n", encoding="utf-8")
+    return previous, successor, repo, tip
+
+
+def test_a_follow_up_case_is_asked_when_the_previous_result_is_not_in_head(harness):
+    """AC-9·AC-10·AC-14 — 깨끗한 트리여도 묻고, 이전 결과를 고르면 그 커밋에서 열리며 원래 폴더는 그대로다."""
+    previous, successor, repo, tip = _previous_case_with_result(harness)
+    before = _tree(repo)
+    workspace = harness.prepare_workspace(successor["id"], basis=None)
+    assert workspace["state"] == "awaiting_basis"
+    assert workspace["previous_case_id"] == previous["id"]
+    assert workspace["previous_commit"] == tip and workspace["previous_branch"] == f"hads/{previous['id']}"
+    listing = _uncommitted(harness, successor["id"], workspace["repository_id"])
+    assert listing["entry_count"] == 0 and listing["entries"] == []
+    assert listing["previous_commit"] == tip and listing["previous_case_title"] == previous["title"]
+    assert not _db_has(harness, "result.py")  # 경로는 서버에 없다(이전 결과의 파일 이름도)
+
+    # 사람이 이전 업무 결과를 고른다 — 기본 선택·자동 없음이므로 여기까지는 아무 것도 만들어지지 않았다.
+    decided = harness.decide_start_basis(successor["id"], workspace["repository_id"], "previous_result")
+    assert decided["state"] == "requested" and decided["start_basis"] == "previous_result"
+    assert decided["base_ref"] == tip
+    harness.agent.prepare_workspaces()
+    ready = harness.workspace(successor["id"])
+    assert ready["state"] == "ready" and ready["start_basis"] == "previous_result"
+    assert ready["base_commit"] == tip
+    assert ready["committed_base"] == _git(repo, "rev-parse", "HEAD").strip()
+    assert ready["previous_case_id"] == previous["id"] and ready["previous_commit"] == tip
+    assert ready["basis_decided_by"] == "owner"
+    assert (Path(ready["worktree_path"]) / "result.py").read_text(encoding="utf-8") == "RESULT = 1\n"
+    assert _tree(repo) == before  # 원래 폴더·HEAD·브랜치 무변경
+
+
+def test_a_follow_up_case_is_not_asked_when_head_already_has_the_result_or_there_is_no_branch(harness):
+    """AC-11 — HEAD 가 그 커밋을 포함하거나 이전 브랜치가 없으면 묻지 않고 바로 만든다."""
+    previous, successor, repo, tip = _previous_case_with_result(harness, name="merged")
+    _git(repo, "merge", "--ff-only", f"hads/{previous['id']}")
+    assert _git(repo, "rev-parse", "HEAD").strip() == tip
+    workspace = harness.prepare_workspace(successor["id"], basis=None)
+    assert workspace["state"] == "ready" and workspace["start_basis"] == "committed"
+    assert workspace["previous_commit"] == "" and workspace["base_commit"] == tip
+
+    previous2, successor2, repo2, _tip2 = _previous_case_with_result(harness, name="deleted")
+    _git(repo2, "worktree", "remove", "--force", harness.workspace(previous2["id"])["worktree_path"])
+    _git(repo2, "branch", "-D", f"hads/{previous2['id']}")
+    workspace2 = harness.prepare_workspace(successor2["id"], basis=None)
+    assert workspace2["state"] == "ready" and workspace2["start_basis"] == "committed"
+    assert workspace2["previous_commit"] == ""
+
+
+def test_a_dirty_tree_and_a_previous_result_offer_three_choices_and_previous_excludes_the_changes(harness):
+    """AC-12 — 더러운 트리 + 이전 결과: 셋 중 고른다. 이전 결과를 고르면 미커밋 변경은 포함되지 않는다."""
+    previous, successor, repo, tip = _previous_case_with_result(harness, name="both", dirty_after=True)
+    before = _tree(repo)
+    workspace = harness.prepare_workspace(successor["id"], basis=None)
+    assert workspace["state"] == "awaiting_basis"
+    listing = _uncommitted(harness, successor["id"], workspace["repository_id"])
+    assert listing["entry_count"] == 1 and listing["previous_commit"] == tip
+    harness.decide_start_basis(successor["id"], workspace["repository_id"], "previous_result")
+    harness.agent.prepare_workspaces()
+    ready = harness.workspace(successor["id"])
+    assert ready["state"] == "ready" and ready["base_commit"] == tip
+    assert ready["included_entries"] == 0 and not (Path(ready["worktree_path"]) / "scratch.txt").exists()
+    assert (Path(ready["worktree_path"]) / "result.py").exists()
+    assert _tree(repo) == before
+    assert previous["id"] == ready["previous_case_id"]
+
+
+def test_choosing_committed_code_starts_at_head_and_an_unreported_previous_result_is_refused(harness):
+    """AC-12 — `커밋된 코드에서 시작` 은 HEAD 에서(이전 결과는 그 브랜치에만). 기록 없는 이전 결과 선택은 409."""
+    from tests.test_workspace import _agreed_git_case
+
+    previous, successor, repo, tip = _previous_case_with_result(harness, name="committed")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    workspace = harness.prepare_workspace(successor["id"], basis=None)
+    assert workspace["state"] == "awaiting_basis" and workspace["previous_commit"] == tip
+    harness.decide_start_basis(successor["id"], workspace["repository_id"], "committed")
+    harness.agent.prepare_workspaces()
+    ready = harness.workspace(successor["id"])
+    assert ready["state"] == "ready" and ready["start_basis"] == "committed" and ready["base_commit"] == head
+    assert not (Path(ready["worktree_path"]) / "result.py").exists()
+    assert ready["previous_commit"] == tip  # 관측은 남는다 — 고르지 않았다는 사실과 함께
+
+    # 이전 결과가 보고되지 않은(더러운 트리뿐인) 대기에서 이전 결과를 고르면 거부한다.
+    plain, _repo_path = _agreed_git_case(harness, dirty=True, name="plain")
+    waiting = harness.prepare_workspace(plain["id"], basis=None)
+    assert waiting["state"] == "awaiting_basis" and waiting["previous_commit"] == ""
+    digest = _uncommitted(harness, plain["id"], waiting["repository_id"])["digest"]
+    refused = harness.client.post(
+        f"/api/cases/{plain['id']}/workspaces/{waiting['repository_id']}/start-basis",
+        json={"basis": "previous_result", "actor": "owner", "seen_digest": digest},
+    )
+    assert refused.status_code == 409 and "previous_result_unavailable" in refused.text
+
+
+def test_the_runner_only_reports_the_true_previous_case(harness):
+    """이전 Case 가 아닌 Case 를 이전 결과로 올리면 받지 않는다 — 관계는 제어부의 기록이다."""
+    previous, successor, repo, tip = _previous_case_with_result(harness, name="guard")
+    assert harness.request_workspace(successor["id"]).status_code == 201
+    repository_id = harness.workspace(successor["id"])["repository_id"]
+    response = harness.client.post(
+        f"/api/runner/workspaces/{successor['id']}/uncommitted",
+        json={
+            "runner_id": harness.agent.config.runner_id,
+            "repository_id": repository_id,
+            "head": _git(repo, "rev-parse", "HEAD").strip(),
+            "user_tree_digest": "0" * 16,
+            "entries": [],
+            "previous_case_id": successor["id"],  # 자기 자신 — 이전 Case 가 아니다
+            "previous_branch": "hads/other",
+            "previous_commit": tip,
+        },
+    )
+    assert response.status_code == 409 and "previous_result_unknown" in response.text
+
+
+def test_a_v27_workspace_row_stays_unrecorded_for_the_previous_result(tmp_path):
+    """AC-13 — v27 행의 `previous_*` 는 NULL/빈 값이다. 지어 채우지 않는다."""
+    path = tmp_path / "controller.sqlite3"
+    conn = db.connect(path)
+    db.migrate(conn)
+    now = utc_now()
+    conn.execute("PRAGMA foreign_keys = OFF")
+    conn.execute("INSERT INTO owner VALUES ('own-1', 'local-owner', ?)", (now,))
+    conn.execute(
+        "INSERT INTO project (id, owner_id, name, repo_path, default_tool_id, created_at)"
+        " VALUES ('prj-1','own-1','old','C:/tmp/old','codex',?)", (now,)
+    )
+    conn.execute(
+        'INSERT INTO "case" (id, project_id, title, kind, status, created_at, updated_at)'
+        " VALUES ('case-1', 'prj-1', 'old', 'feature', 'received', ?, ?)", (now, now),
+    )
+    conn.execute(
+        "INSERT INTO project_repository (id, project_id, name, repo_path, source, registered_by, registered_at)"
+        " VALUES ('repo-1', 'prj-1', 'old', 'C:/tmp/old', 'registered', 'test', ?)", (now,)
+    )
+    conn.execute(
+        "INSERT INTO case_workspace (case_id, repository_id, project_id, state, branch, repo_path, worktree_path,"
+        " base_commit, base_ref, requested_at, ready_at, start_basis, committed_base)"
+        " VALUES ('case-1', 'repo-1', 'prj-1', 'ready', 'hads/case-1', 'C:/tmp/old', 'C:/tmp/wt',"
+        " 'abcdef1234567890', 'HEAD', ?, ?, 'committed', 'abcdef1234567890')", (now, now),
+    )
+    conn.execute("DELETE FROM schema_version WHERE version = ?", (db.SCHEMA_VERSION,))
+    conn.execute("INSERT INTO schema_version (version, applied_at) VALUES (27, ?)", (now,))
+    conn.commit()
+    conn.close()
+    conn = db.connect(path)
+    db.migrate(conn)
+    row = dict(conn.execute("SELECT * FROM case_workspace WHERE case_id = 'case-1'").fetchone())
+    assert row["previous_case_id"] is None and row["previous_branch"] == "" and row["previous_commit"] == ""
+    assert row["start_basis"] == "committed"  # 옛 사실 그대로
+    assert conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0] >= 28
+    conn.close()

@@ -48,6 +48,8 @@ PORT = 8798
 STALE_SECONDS = 5
 #: 실제 codex 실행은 분 단위다. 한 걸음의 상한(초).
 STEP_TIMEOUT = 900
+#: P4-09(d). 출력 파일 접두사(환경 변수 `HADS_LIVE_PREFIX`) — 다시 돌릴 때 P4-05 의 증거를 덮지 않는다.
+PREFIX = os.environ.get("HADS_LIVE_PREFIX", "P4-05-live")
 
 WORK_REQUEST = (
     "app.py 의 log() 가 남기는 한 줄에 수준을 더해 주세요. 형식은 `시각 [수준] 메시지` 이고 수준은"
@@ -148,7 +150,7 @@ class Probe:
         self.log(f"[관찰] {name} — {detail}")
 
     def shot(self, page: Page, name: str) -> None:
-        path = OUT / f"P4-05-live-{name}.png"
+        path = OUT / f"{PREFIX}-{name}.png"
         page.screenshot(path=str(path))
         self.shots.append(path.name)
 
@@ -398,7 +400,7 @@ def main() -> int:
     root.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
     version = subprocess.run(["codex", "--version"], capture_output=True, text=True, shell=True).stdout.strip()
-    with Log(OUT / "P4-05-live.log") as log:
+    with Log(OUT / f"{PREFIX}.log") as log:
         log(f"P4-05 라이브 {tag} · codex {version or '버전 확인 실패'} · 데이터 {root}")
         system = System(root, log)
         probe = Probe(system, log, tag)
@@ -432,7 +434,7 @@ def main() -> int:
             "product_rules": probe.product, "observations": probe.observations,
             "facts": probe.facts, "screenshots": probe.shots, "data_root": str(root),
         }
-        (OUT / "P4-05-live-results.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        (OUT / f"{PREFIX}-results.json").write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         log(f"결과: {status} · 제품 규칙 {sum(r['ok'] for r in probe.product)}/{len(probe.product)} · 관찰 {len(probe.observations)}")
     return 0 if status == "passed" else 1
 

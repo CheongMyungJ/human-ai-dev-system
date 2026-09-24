@@ -858,6 +858,8 @@ class RunnerAgent:
                     "source": "server" if served is not None else "runner",
                     # P4-06. 지식 참조의 키·버전·효력·범위(지시문 머리). 제어부가 준 메타데이터다.
                     "knowledge": ref.get("knowledge"),
+                    # P4-09(a). 질문 답 참조의 질문 키·요약(지시문 머리) — 무엇에 대한 답인지.
+                    "question": ref.get("question"),
                 }
             )
         return context
@@ -1488,6 +1490,9 @@ class RunnerAgent:
                     # UI-04d(D-77). 사람이 고른 시작 기준과 그때 본 목록의 지문. 없으면 더러운 트리에서 묻는다.
                     start_basis=request.get("start_basis") or None,
                     expected_tree_digest=request.get("basis_tree_digest") or "",
+                    # P4-09(c). 후속 Case 의 이전 Case 브랜치(제어부가 실어 준다)와 사람이 고른 뒤의 그 끝 커밋.
+                    previous_branch=str((request.get("previous_result") or {}).get("branch") or ""),
+                    previous_commit=str(request.get("previous_commit") or ""),
                 )
             except (workspace.WorkspaceError, OSError, subprocess.SubprocessError) as exc:
                 self.client.report_workspace_failed(
@@ -1524,6 +1529,10 @@ class RunnerAgent:
                         "entries": entries,
                         "truncated": len(prepared.entries) > searchrules.MAX_ENTRIES,
                         "stale": prepared.stale,
+                        # P4-09(c). 이전 업무 결과가 HEAD 에 없다 — 어느 Case·브랜치·끝 커밋인가(사람이 고른다).
+                        "previous_case_id": (request.get("previous_result") or {}).get("case_id") if prepared.previous_commit else None,
+                        "previous_branch": prepared.previous_branch,
+                        "previous_commit": prepared.previous_commit,
                     },
                 )
                 results.append(

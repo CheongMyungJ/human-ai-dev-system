@@ -206,6 +206,10 @@ export interface KnowledgeVersion {
   // 있는 옛 원문(이행 대기)이다. 권위 메시지도 같다(없으면 null).
   storage?: 'server' | 'runner'
   source_storage?: 'server' | 'runner' | null
+  // P4-09(f), D-92. AI 후보의 읽지 못한 범위(원래 값). 있으면 주입되지 않고 채택 확인이 `scope_unreadable` 로
+  // 막는다 — 활성화 폼에서 활동을 확인하면 풀린다. 사람이 활성화한 새 버전에는 없다.
+  reported_scope?: { activities: string[]; paths: string[]; problem: string } | null
+  scope_unreadable?: boolean
   // P4-07. 후보와 기존 항목의 관계(대체 제안·반증), 관측 문맥(당시 실행·저장소·기준 커밋·도구 —
   // Case 브랜치의 사실), 활성화 때의 QG-08 채택 확인. 옛 버전은 null(없음이지 값이 아니다).
   relation?: KnowledgeRelation | null
@@ -256,6 +260,8 @@ export const KNOWLEDGE_ADOPTION_LABEL: Record<string, string> = {
   obligation_raised: '참고 후보를 필수로 올린다',
   related_version_changed: '관계 대상이 그 뒤 새 버전이 됐다',
   independent_review_not_run: '독립 AI 검토는 돌리지 않았다',
+  // P4-09(f), D-92.
+  scope_unreadable: 'AI 가 적은 범위를 읽지 못했다 — 활동을 확인한다',
 }
 
 export interface KnowledgeAdoption {
@@ -432,6 +438,40 @@ export interface KnowledgeRegistration {
   reply_seq?: number | null
   // P4-07b. 지금도 후보인 등록 행의 자동 활성 조건(표시).
   auto_reference?: KnowledgeAutoReference | null
+  // P4-09(f), D-92. AI 후보의 읽지 못한 범위(원래 값) — 있으면 주입되지 않고 채택 확인이 막는다. 사유의 읽을 말.
+  reported_scope?: { activities: string[]; paths: string[]; problem: string } | null
+  refusal_text?: string | null
+}
+
+// P4-09(f), D-92. 등록 보고 항목의 내용 열람 — 거부된 행도 본다. 본문은 서버에 있을 때만(없으면 null 과 이유).
+export interface KnowledgeIntakeDetail {
+  case_id: string
+  run_id: string
+  report_index: number
+  run_purpose: string | null
+  intake_state: 'registered' | 'refused' | 'evidence' | 'unprocessed'
+  summary: string | null
+  refusal: string | null
+  refusal_text: string
+  knowledge_version_id: string | null
+  evidence_id: string | null
+  reported: {
+    kind: string | null
+    obligation: string | null
+    summary: string | null
+    repository: string | null
+    paths: string[]
+    activities: string[]
+    basis: string | null
+    relates_to: string | null
+    relation: string | null
+    supersedes: string | null
+    proposal: boolean
+    format_error: boolean
+  }
+  content: string | null
+  content_note: string
+  note: string
 }
 
 //: UI-04a. 이 업무의 실행들에 **제공된** 규칙(Manifest 집계, 버전별). 제공 기록이며 준수의 증거가 아니다.
@@ -478,6 +518,10 @@ export const DECISION_KIND_LABEL: Record<string, string> = {
 
 export const knowledgeApi = {
   list: (projectId: string) => request<KnowledgeView>(`/api/projects/${projectId}/knowledge`),
+
+  // P4-09(f). 등록 보고 항목의 내용 열람(거부된 행 포함). 새 저장이 없다 — 서버가 가진 것을 읽는다.
+  intakeDetail: (caseId: string, runId: string, index: number) =>
+    request<KnowledgeIntakeDetail>(`/api/cases/${caseId}/knowledge-intake/${runId}/${index}`),
 
   // UI-04a. 이 업무의 실행들에 제공된 규칙(버전별 집계). 결정 사항 패널이 쓴다.
   caseUse: (caseId: string) => request<CaseKnowledgeUse>(`/api/cases/${caseId}/knowledge-use`),
@@ -552,10 +596,13 @@ export const knowledgeApi = {
     intoKnowledgeId?: string | null,
     obligation?: KnowledgeObligation | null,
     scope?: { scope_kind?: 'project' | 'repository' | null; repository_id?: string | null },
+    activities?: string[] | null,
   ) => {
     const params = new URLSearchParams()
     if (intoKnowledgeId) params.set('into_knowledge_id', intoKnowledgeId)
     if (obligation) params.set('obligation', obligation)
+    // P4-09(f). 활동을 명시하면(빈 목록 포함) 읽지 못한 범위의 막음이 풀린 채로 본다.
+    if (activities) params.set('activities', activities.join(','))
     if (scope?.scope_kind) params.set('scope_kind', scope.scope_kind)
     if (scope?.repository_id) params.set('repository_id', scope.repository_id)
     const query = params.toString()
@@ -2146,11 +2193,13 @@ export const OPEN_SUPPORT_LABEL: Record<string, string> = {
 export type WorkspaceState = 'requested' | 'ready' | 'failed' | 'awaiting_basis'
 
 // UI-04d(D-77). 어떤 코드에서 시작했는가. `null` 은 기록 없음(옛 작업공간·아직 안 정함)이며 `committed` 가 아니다.
-export type StartBasis = 'committed' | 'include_uncommitted'
+// P4-09(c). `previous_result` — 후속 대화가 이전 업무 결과(그 대화 브랜치의 끝 커밋)에서 시작했다(D-77 마지막 문장).
+export type StartBasis = 'committed' | 'include_uncommitted' | 'previous_result'
 
 export const START_BASIS_LABEL: Record<StartBasis, string> = {
   committed: '커밋된 코드에서 시작',
   include_uncommitted: '커밋하지 않은 변경을 포함해 시작',
+  previous_result: '이전 업무 결과에서 시작',
 }
 
 // 미커밋 변경 목록(메모리 중계). `available` 이 거짓이면 서버에 없다(재시작·만료) — PC 에서 다시 불러온다.
@@ -2167,6 +2216,11 @@ export interface UncommittedList {
   truncated: boolean | null
   stale_choice: boolean
   note: string
+  // P4-09(c). 이전 업무 결과의 선택지 — HEAD 에 없는 이전 대화 브랜치의 끝 커밋. 없으면 빈 값.
+  previous_case_id?: string | null
+  previous_case_title?: string | null
+  previous_branch?: string
+  previous_commit?: string
 }
 
 // 저장소 **하나**의 작업공간(P3-R2·D-39).
@@ -2199,6 +2253,11 @@ export interface RepositoryWorkspace {
   open_requests?: WorkspaceOpenRequest[]
   // UI-04d(D-77). 시작 기준(서버 값 그대로). 포함이면 `base_commit` 이 스냅샷 커밋이고 `committed_base` 가 그때의 HEAD 다.
   start_basis?: StartBasis | null
+  // P4-09(c). 이전 업무 결과의 관측·선택 — 이전 대화·브랜치·끝 커밋. 없으면 빈 값.
+  previous_case_id?: string | null
+  previous_case_title?: string | null
+  previous_branch?: string
+  previous_commit?: string
   basis_decided_by?: string | null
   basis_decided_at?: string | null
   committed_base?: string
@@ -2961,6 +3020,13 @@ export interface ConversationView {
   profile_version: string | null
   profile_source: string | null
   visibility: { archived: boolean; archived_at: string | null; history: unknown[] }
+  // P4-09(e). 취소 기록(행위자·사유·시각). 취소가 아니면 null.
+  cancellation?: { by: string | null; reason: string | null; at: string | null; note?: string } | null
+  // P4-09(g). 제목의 출처(default|ai|user, 옛 행은 null)와 가벼운 이력.
+  title_source?: 'default' | 'ai' | 'user' | null
+  title_set_by?: string | null
+  title_set_at?: string | null
+  title_previous?: string | null
   work_start: { request_message_id: string; profile: string; decided_by: string } | null
   messages: ConversationMessage[]
   requests: ConversationRequest[]
@@ -3235,6 +3301,20 @@ export const conversationApi = {
     request<unknown>(`/api/cases/${caseId}/archive`, {
       method: 'POST',
       body: JSON.stringify({ actor: 'owner' }),
+    }),
+
+  // P4-09(e), 이슈 #4. 업무 취소 — 사람의 결정(사유 필수). 실행이 남아 있으면 서버가 409 `runs_unfinished` 로 거부한다.
+  cancel: (caseId: string, reason: string) =>
+    request<ConversationView>(`/api/cases/${caseId}/cancel`, {
+      method: 'POST',
+      body: JSON.stringify({ actor: 'owner', reason }),
+    }),
+
+  // P4-09(g), 이슈 #6. 사람이 제목을 바꾼다(1~200자, 종료·보관 대화도). 자동 제목은 이 제목을 덮지 않는다.
+  setTitle: (caseId: string, title: string) =>
+    request<ConversationView>(`/api/cases/${caseId}/title`, {
+      method: 'PUT',
+      body: JSON.stringify({ actor: 'owner', title }),
     }),
 
   restore: (caseId: string) =>

@@ -35,6 +35,7 @@ import {
 } from '../api'
 import { messageLink } from '../lib/address'
 import { KNOWLEDGE_STORAGE_LABEL, readKnowledgeBody } from '../lib/knowledgeBody'
+import { takeRegisterPrefill } from '../lib/knowledgeText'
 
 const RULE_ACTIVITIES = ['intent', 'design', 'plan', 'implementation', 'verification', 'investigation', 'review', 'discussion']
 
@@ -335,6 +336,15 @@ function RuleRow(props: {
             </span>
           </>
         )}
+        {current.scope_unreadable && current.reported_scope && (
+          <>
+            {' '}
+            <span className="sh-badge sh-badge-warn" data-testid={`rule-scope-unreadable-${key}`} title="AI 가 적은 활동·경로를 읽지 못해 비워 두었다 — 주입되지 않으며 활성화 폼에서 활동을 확인해야 한다">
+              범위 확인 필요 · AI 가 적은 값: 활동 {current.reported_scope.activities.join(', ') || '없음'}
+              {current.reported_scope.paths.length ? ` · 경로 ${current.reported_scope.paths.join(', ')}` : ''}
+            </span>
+          </>
+        )}
       </div>
       <div className="sh-muted sh-rule-line">
         {scopeText(current)} · 활동 {current.activities.join(', ') || '모든 작업'} · 권위{' '}
@@ -514,15 +524,26 @@ function CandidateActions(props: {
   const [reason, setReason] = useState('')
   const others = props.items.filter((i) => i.id !== item.id && i.current && i.current.state !== 'invalid')
   const scope = narrowTo ? { scope_kind: 'repository' as const, repository_id: narrowTo } : {}
+  // P4-09(f), D-92. 읽지 못한 범위의 후보는 활동을 명시(빈 칸이면 "모든 작업" 을 사람이 확인한 것)해야 막음이 풀린다.
+  const unreadable = Boolean(current.scope_unreadable)
   const runCheck = () =>
     props.guard(async () => {
-      setCheck(await knowledgeApi.adoptionCheck(item.id, into || null, obligation, scope))
+      setCheck(
+        await knowledgeApi.adoptionCheck(item.id, into || null, obligation, scope, unreadable ? splitList(activities) : null),
+      )
     })
   return (
     <div className="sh-rule-candidate" data-testid={`rule-candidate-${key}`}>
       <div className="sh-muted sh-rule-line">
         후보는 규칙이 아니다. 채택 확인(QG-08: 원문·근거·충돌·반증 대상·범위)을 본 뒤 사람이 활성화한다 — 범위·효력·활동은
         좁힐 수만 있다.
+        {unreadable && (
+          <span data-testid={`rule-unreadable-note-${key}`}>
+            {' '}
+            <strong>AI 가 적은 범위를 읽지 못했다</strong>(활동 {current.reported_scope?.activities.join(', ') || '없음'}) — 활동 칸에 확인한
+            활동을 적거나 비워 두고(모든 작업) 활성화한다. 그때까지 이 후보는 어떤 실행에도 주입되지 않는다.
+          </span>
+        )}
       </div>
       <div className="sh-composer-bar sh-rule-actions">
         <button type="button" onClick={() => void runCheck()} data-testid={`rule-check-${key}`}>
@@ -790,14 +811,18 @@ function RegisterForm(props: {
     () => [...props.rows].sort((a, b) => (b.last_activity_at ?? b.updated_at).localeCompare(a.last_activity_at ?? a.updated_at)),
     [props.rows],
   )
-  const [caseId, setCaseId] = useState(props.lastCaseId ?? '')
-  const [content, setContent] = useState('')
-  const [summary, setSummary] = useState('')
-  const [kind, setKind] = useState<KnowledgeKind>('constraint')
-  const [obligation, setObligation] = useState<KnowledgeObligation>('required')
-  const [repositoryId, setRepositoryId] = useState('')
-  const [activities, setActivities] = useState('')
-  const [candidate, setCandidate] = useState(false)
+  // P4-09(f), D-92. "이 내용으로 수동 등록" 이 남긴 채우기 값(이 브라우저의 sessionStorage, 한 번 읽고 지운다).
+  const [prefill] = useState(() => takeRegisterPrefill())
+  const [caseId, setCaseId] = useState(prefill?.caseId ?? props.lastCaseId ?? '')
+  const [content, setContent] = useState(prefill?.content ?? '')
+  const [summary, setSummary] = useState(prefill?.summary ?? '')
+  const [kind, setKind] = useState<KnowledgeKind>((prefill?.kind as KnowledgeKind | undefined) ?? 'constraint')
+  const [obligation, setObligation] = useState<KnowledgeObligation>((prefill?.obligation as KnowledgeObligation | undefined) ?? 'required')
+  const [repositoryId, setRepositoryId] = useState(
+    prefill?.repositoryName ? props.repositories.find((r) => r.name === prefill.repositoryName)?.id ?? '' : '',
+  )
+  const [activities, setActivities] = useState(prefill?.activities.join(', ') ?? '')
+  const [candidate, setCandidate] = useState(prefill?.candidate ?? false)
   const [reason, setReason] = useState('')
   const [done, setDone] = useState<string | null>(null)
   useEffect(() => {
@@ -827,8 +852,13 @@ function RegisterForm(props: {
       setReason('')
     })
   return (
-    <section data-testid="rules-register-form">
+    <section data-testid="rules-register-form" data-prefilled={prefill ? '1' : '0'}>
       <h3 className="sh-section-title">규칙·지식 등록</h3>
+      {prefill && (
+        <p className="sh-notice sh-notice-info" data-testid="rules-register-prefill">
+          {prefill.note} — 활동은 {RULE_ACTIVITIES.join('·')} 중에서만 받는다(AI 가 적은 다른 말은 등록 전에 고친다).
+        </p>
+      )}
       <p className="sh-muted sh-rule-line">
         사람이 등록한 확정 결정·규칙은 다시 승인받지 않고 바로 활성이다. AI 가 제안한 것은 후보로만 적는다. 출처 대화는 그
         내용이 속하는 대화다(등록은 그 대화의 기록·판정을 바꾸지 않는다). 등록은 실행 권한이 아니다.

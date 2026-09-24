@@ -37,10 +37,16 @@ from runner import cli_events, process_tree
 #:
 #: Codex는 sandbox 축, Claude는 도구 목록·권한 모드 축으로 권한을 표현한다.
 #: 두 축을 같은 것으로 취급하지 않고 추상 값에서 각각 매핑한다.
+#:
+#: **D-91(사용자 결정 2026-09-24, 이슈 #3): 쓰기 실행에는 CLI 샌드박스를 두지 않는다.** codex 의 Windows 제한
+#: 토큰 샌드박스가 사용자 프로필 아래의 도구(JDK·Python)를 읽지 못해 구현·검증이 빌드·시험을 돌리지 못했고
+#: (p4/evidence/P4-ENV-results.md), 폴더별 ACL 우회는 도구가 늘 때마다 같은 실패를 겪게 한다. 기능이 동작하는
+#: 것이 우선이며 읽기 전용 실행만 샌드박스를 유지한다. 받아들인 손실(사용자 수용): 쓰기 실행은 사용자 계정
+#: 권한으로 돌아 worktree 밖·자격증명에 닿고 AI 의 직접 push 를 막지 못한다 — 제품의 게시 규칙(P5)은 그대로다.
 PERMISSION_MAP: dict[str, dict[str, list[str]]] = {
     "codex": {
         Permission.READ_ONLY.value: ["--sandbox", "read-only"],
-        Permission.WORKSPACE_WRITE.value: ["--sandbox", "workspace-write"],
+        Permission.WORKSPACE_WRITE.value: ["--sandbox", "danger-full-access"],
     },
     "claude": {
         # `--tools` 제한은 내장 도구만 줄이고 MCP 서버 도구는 그대로 남는다(P1-02 #9·#10).
@@ -52,13 +58,22 @@ PERMISSION_MAP: dict[str, dict[str, list[str]]] = {
             "--strict-mcp-config",
             "--tools", "Read,Grep,Glob",
         ],
+        # D-91. 권한 확인을 건너뛴다(OS 샌드박스는 Windows 에 없다). `--strict-mcp-config` 는 남긴다 — 로컬
+        # 환경이 아니라 사용자 설정의 외부 서비스 MCP 도구를 막는 것이라 이번 문제와 무관하고, 풀면 외부
+        # 게시 경로가 하나 더 열린다(이슈 #3 "남는 제약", plan 의 상세 설계 선택).
         Permission.WORKSPACE_WRITE.value: [
-            "--permission-mode", "acceptEdits",
+            "--permission-mode", "bypassPermissions",
             "--permission-prompts", "none",
             "--strict-mcp-config",
         ],
     },
 }
+
+#: D-91. 쓰기 실행에 CLI 샌드박스가 없다는 사실의 근거 문구(능력 보고·화면이 그대로 보인다).
+WRITE_SANDBOX_NOTE = (
+    "D-91(2026-09-24, 이슈 #3): 쓰기 실행에는 CLI 샌드박스가 없다 — 사용자 계정 권한으로 돈다"
+    " (읽기 전용 실행만 샌드박스 유지; p4/evidence/P4-ENV-results.md)"
+)
 
 DEFAULT_MODE = {"codex": "exec", "claude": "print"}
 
@@ -181,7 +196,8 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
 
     for permission, state, source in (
         (Permission.READ_ONLY, CapabilityState.VERIFIED, source_p102),
-        (Permission.WORKSPACE_WRITE, CapabilityState.VERIFIED, source_p102),
+        # D-91. 쓰기 권한은 매핑돼 있지만 그 매핑은 **샌드박스가 아니다** — 근거가 그 사실을 말한다.
+        (Permission.WORKSPACE_WRITE, CapabilityState.VERIFIED, WRITE_SANDBOX_NOTE),
         (Permission.EXPLICIT_ESCALATED, CapabilityState.UNKNOWN, "확인하지 않음"),
     ):
         mapped = PERMISSION_MAP[tool_id].get(permission.value) is not None
@@ -194,6 +210,8 @@ def capabilities_for(tool_id: str) -> list[dict[str, Any]]:
         )
 
     rows += [
+        # D-91. **막지 못하는 것을 막는다고 적지 않는다.** 쓰기 실행의 CLI 샌드박스는 없다.
+        cap("write_sandbox", CapabilityState.UNSUPPORTED, WRITE_SANDBOX_NOTE),
         cap("structured_events", CapabilityState.VERIFIED, source_p102),
         cap("session_identity", CapabilityState.VERIFIED, source_p102),
         cap("tool_boundary_observed", CapabilityState.VERIFIED, source_p102),

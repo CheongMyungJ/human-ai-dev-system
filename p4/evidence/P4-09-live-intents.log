@@ -1,0 +1,123 @@
+
+========================================================================
+P4-03 라이브 203057259 — 데이터 C:\Users\USER\AppData\Local\Temp\hads-p4-03-live\203057259
+========================================================================
+제어부 health: {'status': 'ok', 'schema_version': 28, 'relay_buffered': 0}
+제어부 pid=29672 Runner pid=23492
+
+========================================================================
+D. root_cause_analysis — 저장 직후 목록이 옛 값을 보이는 원인
+========================================================================
+Case case-7190d5da0d55d4af profile=root_cause_analysis version=2
+run run-p4-03-D-203057259 outcome=completed exit=0 version=codex-cli 0.156.1
+--- D 기준 ---
+[
+  {
+    "key": "C-01",
+    "relates_to": "conclusion_requirement",
+    "obligation": "cause",
+    "obligation_source": "reported",
+    "conclusion_rule": "definitive_required",
+    "conclusion_rule_effective": "definitive_required",
+    "summary": "표시 차이의 원인 확정"
+  }
+]
+--- D 목적별 완료 의미 ---
+[
+  {
+    "obligation": "cause",
+    "required": true,
+    "required_by": [
+      "profile",
+      "declared"
+    ],
+    "criteria": [
+      "C-01"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  }
+]
+  [관찰] doc_version_5: doc_version=6
+  [OK] objectives_declared: 기대 ['cause'] ⊆ 문서 ['cause']
+  [OK] obligations_reported: 원문이 의무를 적은 기준 1/1
+  [OK] conclusion_rule_cause: cause 기준의 결론 요구 ['definitive_required'] (기대 definitive_required)
+  [OK] every_required_objective_has_a_criterion: 기준 없는 목적 []
+
+========================================================================
+E. maintenance — 저장 경로를 설정으로 옮기기
+========================================================================
+Case case-9c71be36c5009912 profile=maintenance version=2
+run run-p4-03-E-203057259 outcome=completed exit=0 version=codex-cli 0.156.1
+--- E 기준 ---
+[
+  {
+    "key": "C-01",
+    "relates_to": "target_state",
+    "obligation": "target_state",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "지정한 경로 사용"
+  },
+  {
+    "key": "C-02",
+    "relates_to": "preserved_conditions",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "기본 경로와 결과 유지"
+  },
+  {
+    "key": "C-03",
+    "relates_to": "preserved_conditions",
+    "obligation": "preservation",
+    "obligation_source": "reported",
+    "conclusion_rule": null,
+    "conclusion_rule_effective": null,
+    "summary": "공개 함수 계약 유지"
+  }
+]
+--- E 목적별 완료 의미 ---
+[
+  {
+    "obligation": "preservation",
+    "required": true,
+    "required_by": [
+      "profile_conditional"
+    ],
+    "criteria": [
+      "C-02",
+      "C-03"
+    ],
+    "total": 2,
+    "met": 0,
+    "status": "open"
+  },
+  {
+    "obligation": "target_state",
+    "required": true,
+    "required_by": [
+      "profile"
+    ],
+    "criteria": [
+      "C-01"
+    ],
+    "total": 1,
+    "met": 0,
+    "status": "open"
+  }
+]
+  [관찰] doc_version_5: doc_version=6
+  [관찰] objectives_declared: 기대 ['preservation', 'target_state'] ⊆ 문서 []
+  [OK] obligations_reported: 원문이 의무를 적은 기준 3/3
+  [OK] every_required_objective_has_a_criterion: 기준 없는 목적 []
+
+========================================================================
+요약
+========================================================================
+관찰(지시와 다름): [('D', 'doc_version_5'), ('E', 'doc_version_5'), ('E', 'objectives_declared')]
+runner 종료 (returncode=1)
+controller 종료 (returncode=1)

@@ -1,0 +1,175 @@
+{
+  "doc_type": "hads.intent-draft",
+  "doc_version": 6,
+  "case_id": "case-9c71be36c5009912",
+  "authored_by": "codex/exec",
+  "authoring_mode": "ai_drafted",
+  "author_run_id": "run-p4-03-E-203057259",
+  "authoring_note": "AI 실행이 작성해 제시한 초안이다. 사람은 열람·질문·피드백·동의를 한다.",
+  "profile": "maintenance",
+  "profile_version": "2",
+  "field_order": [
+    "goal",
+    "expected_outcome",
+    "scope",
+    "exclusions",
+    "constraints",
+    "open_questions",
+    "maintenance_target",
+    "current_state",
+    "target_state",
+    "work_reason",
+    "preserved_conditions"
+  ],
+  "retained_fields": [],
+  "fields": {
+    "goal": {
+      "text": "store.py의 저장 파일 경로를 STORE_PATH 환경 변수로 설정할 수 있게 한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "expected_outcome": {
+      "text": "STORE_PATH가 설정돼 있으면 해당 경로를 사용하고, 설정돼 있지 않으면 items.json을 사용한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "scope": {
+      "text": "store.py의 저장 파일 경로 선택과 그 경로를 사용하는 list_items()·save()의 동작.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "exclusions": {
+      "text": "",
+      "state": "undecided",
+      "origin": "none"
+    },
+    "constraints": {
+      "text": "환경 변수가 없을 때의 결과와 list_items()·save()의 공개 이름 및 반환 형식을 유지한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "open_questions": {
+      "text": "STORE_PATH가 빈 문자열로 설정된 경우 어떤 경로를 사용할지 미정이다.",
+      "state": "proposed",
+      "origin": "observation"
+    },
+    "maintenance_target": {
+      "text": "store.py의 저장 파일 경로 선택 동작과 공개 함수 계약.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "current_state": {
+      "text": "PATH가 Path(\"items.json\")으로 고정돼 있으며 list_items()와 save()가 이 경로를 사용한다. list_items()는 목록을 반환하고 save()는 값을 반환하지 않는다.",
+      "state": "proposed",
+      "origin": "observation"
+    },
+    "target_state": {
+      "text": "STORE_PATH가 있으면 지정된 경로를 사용하고, 없으면 기존 items.json 경로와 공개 함수 계약을 유지한다.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    },
+    "work_reason": {
+      "text": "현재 저장 경로가 고정돼 있어 환경 변수로 다른 경로를 지정할 수 없다.",
+      "state": "proposed",
+      "origin": "observation"
+    },
+    "preserved_conditions": {
+      "text": "STORE_PATH가 없을 때의 결과, list_items()·save()의 공개 이름과 반환 형식.",
+      "state": "proposed",
+      "origin": "user_requirement"
+    }
+  },
+  "questions": [
+    {
+      "key": "q1",
+      "text": "STORE_PATH가 설정돼 있지만 빈 문자열이면 기존 items.json을 사용할까요, 아니면 유효하지 않은 경로로 처리할까요?",
+      "summary": "빈 STORE_PATH 처리",
+      "decide_at": "design",
+      "blocks": []
+    }
+  ],
+  "criteria": [
+    {
+      "key": "C-01",
+      "relates_to": "target_state",
+      "text": "STORE_PATH에 유효한 파일 경로가 설정되면 list_items()와 save()가 해당 파일을 사용한다.",
+      "method": "임시 파일 경로를 STORE_PATH로 설정한 뒤 두 함수를 호출하고, 읽기 결과와 기록된 파일 내용을 확인한다.",
+      "summary": "지정한 경로 사용",
+      "method_summary": "환경 변수 지정 후 파일 입출력 확인",
+      "obligation": "target_state"
+    },
+    {
+      "key": "C-02",
+      "relates_to": "preserved_conditions",
+      "text": "STORE_PATH가 없으면 기존처럼 items.json을 사용하며 읽기·저장 결과가 유지된다.",
+      "method": "환경 변수를 제거한 상태에서 items.json을 대상으로 두 함수를 호출하고 읽기 결과와 저장 내용을 확인한다.",
+      "summary": "기본 경로와 결과 유지",
+      "method_summary": "환경 변수 제거 후 기존 동작 확인",
+      "obligation": "preservation"
+    },
+    {
+      "key": "C-03",
+      "relates_to": "preserved_conditions",
+      "text": "list_items()와 save()의 공개 이름이 유지되고, list_items()는 목록을 반환하며 save()는 값을 반환하지 않는다.",
+      "method": "두 함수를 기존 이름으로 호출하고 반환값의 형식을 확인한다.",
+      "summary": "공개 함수 계약 유지",
+      "method_summary": "함수 호출과 반환값 확인",
+      "obligation": "preservation"
+    }
+  ],
+  "objectives": [],
+  "sizing": {
+    "recommended_level": "simple",
+    "axes": [
+      {
+        "axis": "intent_clarity",
+        "weight": "medium",
+        "evidence": "경로 선택 규칙과 보존 조건은 명시됐지만 빈 문자열의 처리는 지정되지 않았다.",
+        "judgement": "핵심 의도는 명확하고 한 가지 경계 조건이 미정이다.",
+        "unconfirmed": "빈 STORE_PATH의 처리"
+      },
+      {
+        "axis": "change_scope",
+        "weight": "low",
+        "evidence": "관찰된 경로 상수와 이를 사용하는 함수가 store.py 안에 있다.",
+        "judgement": "국소적인 경로 선택 변경으로 보인다.",
+        "unconfirmed": "다른 모듈이 PATH를 직접 사용하는지 여부"
+      },
+      {
+        "axis": "compatibility_and_data",
+        "weight": "medium",
+        "evidence": "기본 경로의 결과와 공개 함수 이름·반환 형식을 유지하라는 요구가 있다.",
+        "judgement": "기존 데이터 파일과 함수 계약의 보존을 확인해야 한다.",
+        "unconfirmed": "외부 코드의 PATH 직접 참조 여부"
+      },
+      {
+        "axis": "permission_and_security",
+        "weight": "insufficient_evidence",
+        "evidence": "요청에는 저장 경로를 환경 변수로 받는다는 내용만 있다.",
+        "judgement": "지정 가능한 경로의 권한·보안 정책은 판단할 근거가 부족하다.",
+        "unconfirmed": "실행 환경의 파일 접근 권한과 경로 제한"
+      },
+      {
+        "axis": "reversibility",
+        "weight": "low",
+        "evidence": "관찰된 변경 대상은 저장 경로 선택이며 기존 기본 경로가 유지된다.",
+        "judgement": "코드 변경은 국소적으로 되돌릴 수 있을 것으로 보인다.",
+        "unconfirmed": "운영 환경에서 지정 경로에 저장된 데이터의 취급"
+      },
+      {
+        "axis": "uncertainty",
+        "weight": "low",
+        "evidence": "현재 PATH가 단일 상수이고 두 함수가 이를 사용한다.",
+        "judgement": "핵심 구현 경로의 불확실성은 낮다.",
+        "unconfirmed": "빈 STORE_PATH 처리"
+      },
+      {
+        "axis": "verification_difficulty",
+        "weight": "low",
+        "evidence": "설정된 경로와 기본 경로의 파일 입출력 및 반환값을 직접 확인할 수 있다.",
+        "judgement": "임시 파일을 사용한 검증이 가능하다.",
+        "unconfirmed": "기존 자동 검증 체계의 유무"
+      }
+    ]
+  }
+}

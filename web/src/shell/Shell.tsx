@@ -474,6 +474,10 @@ export function Shell() {
             onSearch={startSearch}
             onSelectProject={selectProject}
             onSelectCase={selectCase}
+            onRenamed={() => {
+              setListNonce((n) => n + 1)
+              onChanged()
+            }}
             onNewConversation={createConversation}
             onOpenSettings={openSettings}
             onProjectCreated={(id) => {

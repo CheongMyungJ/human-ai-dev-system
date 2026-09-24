@@ -86,6 +86,9 @@ class DecisionKind(str, Enum):
     #: 변경 한 건에 대한 것이다. 합치면 한 번의 확인이 누적 전체의 승인이 되어
     #: 누적을 세는 의미가 사라진다.
     MATERIAL_DELTA_CONFIRMATION = "material_delta_confirmation"
+    #: P4-09(e), 이슈 #4. **업무 취소** — 사람이 업무 수행을 중단하기로 한 결정(completion-lifecycle 2절).
+    #: 성공도 예외 인수도 아니며 되돌리지 않는다. 사유·행위자가 종료 기록(`closure_record`)에 남는다.
+    CASE_CANCELLATION = "case_cancellation"
 
 
 class RunStatus(str, Enum):
@@ -1284,6 +1287,9 @@ class StartBasis(str, Enum):
 
     COMMITTED = "committed"
     INCLUDE_UNCOMMITTED = "include_uncommitted"
+    #: P4-09(c), D-77 마지막 문장. 후속 Case 가 **이전 Case 브랜치의 끝 커밋**에서 시작했다 — 이전 업무의 아직
+    #: push·병합되지 않은 결과 위에서 잇는다. 사람이 골랐고(기본 선택·자동 없음) 미커밋 변경은 포함하지 않는다.
+    PREVIOUS_RESULT = "previous_result"
 
 
 class ClaimDeferral(str, Enum):

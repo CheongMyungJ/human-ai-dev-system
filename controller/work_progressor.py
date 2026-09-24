@@ -95,6 +95,9 @@ class WorkProgressor:
         case_id = run["case_id"]
         if self.repo.progress_state(case_id) is None:
             return None
+        if self.repo.case_is_cancelled(case_id):
+            # P4-09(e). 취소 뒤 도착한 결과 — 저장은 됐고(보고 경로) 기준 판정·재시도·다음 걸음은 없다.
+            return None
         applied = self._apply_criteria(run)
         if run.get("request_id"):
             # 요청에 묶인 실행은 처리기가 `continue_request` 로 넘긴다(요청 종료와 한 자리).
@@ -210,6 +213,9 @@ class WorkProgressor:
     ) -> dict[str, Any] | None:
         """다음 걸음을 하나 만든다. 실행 없는 걸음(기록·후보)은 이어서 본다(상한 있음)."""
         if not self.enabled or self.repo.progress_state(case_id) is None:
+            return None
+        if self.repo.case_is_cancelled(case_id):
+            # P4-09(e). 취소된 Case 에서는 아무 걸음도 만들지 않는다(늦은 결과·결정 무반응).
             return None
         outcome: dict[str, Any] = {"run_created": False, "steps": []}
         for _ in range(MAX_STEPS_PER_ADVANCE):

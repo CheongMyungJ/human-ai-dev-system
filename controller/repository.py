@@ -96,6 +96,7 @@ from domain.models import (
     CaseProfile,
     CaseRelationKind,
     CaseStage,
+    InterpretationKind,
     CaseStatus,
     CheckpointState,
     ClosureKind,
@@ -632,6 +633,11 @@ class Repository:
                 ),
             )
             self._insert_default_policy(case_id, now, project_id)
+            # P4-09(g), D-93. 사람이 입력한 제목이다 — 자동 제목이 덮지 않는다.
+            self.conn.execute(
+                'UPDATE "case" SET title_source = ?, title_set_by = ?, title_set_at = ? WHERE id = ?',
+                ("user", "owner", now, case_id),
+            )
         return self.get_case(case_id)
 
     def _insert_default_policy(self, case_id: str, now: str, project_id: str) -> None:
@@ -4544,6 +4550,7 @@ class Repository:
                 request_id,
                 (instruction_artifact_id, instruction_artifact_rev),
                 repository_id,
+                task_key=task_id,
             )
         try:
             ref = self.get_artifact_ref(instruction_artifact_id, instruction_artifact_rev)
@@ -4760,6 +4767,7 @@ class Repository:
             request_id,
             (instruction_artifact_id, instruction_artifact_rev),
             repository_id,
+            task_key=task_id,
         )
 
         # 종료된 Case 도 **진입 검사를 거쳐** 거부된다(`case_already_closed`).
@@ -5971,6 +5979,111 @@ class Repository:
         case = self.get_case(case_id)
         return case["status"] in (CaseStatus.CLOSED.value, CaseStatus.CANCELLED.value)
 
+    def case_is_cancelled(self, case_id: str) -> bool:
+        """P4-09(e). 취소된 Case 인가 — 결과 뒤 훅(진행기·후보 등록·재시도)이 아무 것도 만들지 않는 경계."""
+        return self.get_case(case_id)["status"] == CaseStatus.CANCELLED.value
+
+    # ------------------------------------------------- P4-09(e) 업무 취소(이슈 #4)
+
+    def cancel_case(self, case_id: str, *, actor: str, reason: str) -> dict[str, Any]:
+        """사람의 결정으로 업무 수행을 **중단**한다(completion-lifecycle 2절의 취소 종료 상태, 1단계).
+
+        성공도 예외 인수도 아니며 되돌리지 않는다(이어서 하려면 연결된 새 Case). **끝나지 않은 실행이 있으면
+        거부한다**(`runs_unfinished` — 먼저 중단한다; 실행 중 취소는 2단계, 이 판에는 없다). 부분 결과·변경·
+        미검증·사용량·작업공간(브랜치·worktree)은 보존한다 — 여기서 지우는 것은 없다. 한 트랜잭션에:
+        결정(`case_cancellation`) · 종료 기록(후보 없음, `cancelled`, 종료 시점 소비 snapshot) · Case 상태 ·
+        처리 중 요청 종료(`failed`, `case_cancelled` — 실행이 없으니 판정이 받는다; `unknown` 요청은 그대로 둔다:
+        확인되지 않은 것을 확인됐다고 적지 않는다) · 진행 `done` · 열린 예약 `unresolved`.
+        """
+        self.guard_open_case(case_id)
+        reason = " ".join((reason or "").split())
+        if not reason:
+            raise ConflictError("reason_required: a cancellation needs a reason")
+        unfinished = [
+            r["run_id"] for r in self.list_runs(case_id) if r["status"] != RunStatus.FINISHED.value
+        ]
+        if unfinished:
+            raise ConflictError(
+                "runs_unfinished: stop the running work first — "
+                + ", ".join(sorted(unfinished))
+            )
+        now = utc_now()
+        decision_id = ids.new_decision_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, evidence_ref, subject_content_hash)"
+                " VALUES (?, ?, ?, 'case', ?, 0, ?, ?, NULL, NULL)",
+                (decision_id, case_id, DecisionKind.CASE_CANCELLATION.value, case_id, actor, now),
+            )
+            self.conn.execute(
+                "INSERT INTO closure_record"
+                " (id, case_id, candidate_id, final_acceptance_id, closure_kind, exception_count,"
+                "  confirmed_at, snapshot_json, cancelled_by, cancel_reason, decision_id)"
+                " VALUES (?, ?, NULL, NULL, ?, 0, ?, ?, ?, ?, ?)",
+                (
+                    ids.new_id("closure"),
+                    case_id,
+                    ClosureKind.CANCELLED.value,
+                    now,
+                    self._closure_snapshot_payload(case_id, now),
+                    actor,
+                    reason[:MAX_SUMMARY],
+                    decision_id,
+                ),
+            )
+            self.conn.execute(
+                'UPDATE "case" SET status = ?, updated_at = ? WHERE id = ?',
+                (CaseStatus.CANCELLED.value, now, case_id),
+            )
+            # 열린 예약(끝나지 않은 실행이 없으므로 보통 없다)은 값을 모르는 채 닫는다 — 0 이 아니다.
+            self.conn.execute(
+                "UPDATE budget_reservation SET state = ?, settle_source = ?, settled_at = ?,"
+                " measurement = 'unavailable' WHERE case_id = ? AND state = ?",
+                (
+                    ReservationState.UNRESOLVED.value,
+                    SettleSource.CASE_CANCELLED.value,
+                    now,
+                    case_id,
+                    ReservationState.HELD.value,
+                ),
+            )
+            if self.progress_state(case_id) is not None:
+                self.conn.execute(
+                    "UPDATE case_progress SET state = ?, step = 'cancelled', step_detail = ?,"
+                    " wait_json = '[]', request_id = NULL, paused_at = NULL, paused_by = NULL,"
+                    " updated_at = ? WHERE case_id = ?",
+                    (workflow.ProgressState.DONE, _summary(f"업무 취소 · {actor}"), now, case_id),
+                )
+        if self.progress_state(case_id) is not None:
+            self.record_progress_event(case_id, "cancelled", "cancelled", detail=f"{reason[:120]} · {actor}")
+        # 처리 중 요청을 끝낸다(트랜잭션 밖 — `settle_request` 가 자기 판정·트랜잭션을 가진다). 실행이 없거나
+        # 전부 끝났으므로 판정이 받는다. `unknown` 은 처리 중이 아니라 여기 오지 않는다.
+        for request in self.conn.execute(
+            "SELECT id FROM conversation_request WHERE case_id = ? AND state = ?",
+            (case_id, RequestState.PROCESSING.value),
+        ).fetchall():
+            try:
+                self.settle_request(
+                    case_id, request["id"], RequestSettleOutcome.FAILED, actor, "case_cancelled"
+                )
+            except ConversationRefused:
+                continue  # 중단 요청 중이거나 그 사이 끝났다 — 그 기록은 그쪽이 남긴다
+        return self.conversation_view(case_id)
+
+    def cancellation_view(self, case_id: str) -> dict[str, Any] | None:
+        """취소 기록(행위자·사유·시각). 취소가 아니면 `None`."""
+        row = self.get_closure(case_id)
+        if row is None or row.get("closure_kind") != ClosureKind.CANCELLED.value:
+            return None
+        return {
+            "by": row.get("cancelled_by"),
+            "reason": row.get("cancel_reason"),
+            "at": row.get("confirmed_at"),
+            "decision_id": row.get("decision_id"),
+            "note": "취소는 성공도 예외 인수도 아니다. 부분 결과·변경·사용량·작업공간은 그대로 남았고 되돌리지 않는다",
+        }
+
     def guard_open_case(self, case_id: str) -> None:
         """종료된 Case를 바꾸려는 시도를 막는다.
 
@@ -6928,10 +7041,11 @@ class Repository:
         request_id: str | None = None,
         instruction: tuple[str, int] | None = None,
         repository_id: str | None = None,
+        task_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """이 목적의 실행에 고정할 참조 목록(P4-06 부터 적용 지식 포함). 본문은 없다."""
         refs, _decisions, _conflicts = self.compose_context(
-            case_id, purpose, request_id, instruction, repository_id
+            case_id, purpose, request_id, instruction, repository_id, task_key
         )
         return refs
 
@@ -6942,13 +7056,17 @@ class Repository:
         request_id: str | None = None,
         instruction: tuple[str, int] | None = None,
         repository_id: str | None = None,
+        task_key: str | None = None,
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
         """(참조, 지식 결정, 막는 충돌). **지식 참조는 기존 참조 뒤에 온다**(P4-06).
 
         뒤에 두는 이유는 한도 생략이 보조를 **앞에서부터** 빼기 때문이다 — 오래된 AI 발언이 참고
         지식보다 먼저 빠진다. 필수 지식은 핵심이라 빠지지 않는다.
+
+        P4-09(a). `task_key` 는 이 실행이 맡은 Task 다 — 그 Task 를 막던 답한 이월 질문의 원문이
+        작업 실행의 입력이 된다(이슈 #2).
         """
-        refs = self._compose_base_refs(case_id, purpose, request_id, instruction)
+        refs = self._compose_base_refs(case_id, purpose, request_id, instruction, task_key)
         decisions, conflicts = self._add_knowledge_refs(
             refs, case_id, RunPurpose(purpose), repository_id, instruction
         )
@@ -6960,6 +7078,7 @@ class Repository:
         purpose: RunPurpose,
         request_id: str | None = None,
         instruction: tuple[str, int] | None = None,
+        task_key: str | None = None,
     ) -> list[dict[str, Any]]:
         """이 목적의 작성 실행에 고정할 참조 목록(지식 제외).
 
@@ -7175,7 +7294,65 @@ class Repository:
                 plan = self.current_preparation(case_id, PreparationStage.COMBINED)
             if plan is not None:
                 add(ContextRefRole.CURRENT_PLAN, plan["artifact_id"], plan["artifact_rev"])
+            if latest is not None:
+                # P4-09(a), 이슈 #2. **이 Task 를 막던 이월 질문의 답 원문.** 답은 `task_question_block` 을
+                # 풀 뿐 어떤 작업 실행의 입력도 아니었고, 계획서에는 "사람이 정한다" 만 남아 있어 AI 가
+                # "결정이 없다" 로 `blocked` 를 냈다(실제 관측). 차단 해제 = 답의 내용이 그 Task 에 전달됨.
+                for question in self.answered_deferred_questions_for_task(
+                    case_id, latest["id"], task_key
+                ):
+                    add(ContextRefRole.QUESTION_ANSWER, question.get("answer_artifact_id"), 1)
+        elif purpose is RunPurpose.LIMITED_ANALYSIS and task_key and latest is not None:
+            # P4-09(a). 계획의 조사 Task 도 자기를 막던 질문의 답을 받는다(이슈 #2 "구현·검증·실험·분석").
+            # 분석 실행의 다른 입력(의도·계획)은 바꾸지 않는다 — 그 실행은 계획을 따르는 실행이 아니다.
+            for question in self.answered_deferred_questions_for_task(case_id, latest["id"], task_key):
+                add(ContextRefRole.QUESTION_ANSWER, question.get("answer_artifact_id"), 1)
         return refs
+
+    def answered_deferred_questions_for_task(
+        self, case_id: str, intent_version_id: str, task_key: str | None
+    ) -> list[dict[str, Any]]:
+        """설계·계획으로 이월했다가 **사람이 답한** 질문 중 이 Task 와 관련된 것(P4-09(a), 이슈 #2).
+
+        현재 작업 그래프의 `task_question_block` 이 그 질문을 이 Task 에 연결했거나, 연결 행이 하나도 없어
+        **전부를 막던** 질문(해석되지 않은 참조 포함 — `evaluate_task` 의 셋째 규칙과 같은 해석)이다. Task
+        키가 없는 작업 실행(직접 API)은 답한 이월 질문 전부를 받는다. 의도 단계 질문은 이미 의도 버전에
+        반영됐으므로 여기 오지 않는다. 같은 답 산출물은 한 번만 낸다. 되묻는 답도 그대로 전달된다 —
+        판정하지 않는다.
+        """
+        rows = self.conn.execute(
+            "SELECT * FROM intent_question WHERE intent_version_id = ? AND state = ?"
+            " AND decide_at IN (?, ?) AND answer_artifact_id IS NOT NULL ORDER BY created_at, question_key",
+            (
+                intent_version_id,
+                QuestionState.ANSWERED.value,
+                DecideAt.DESIGN.value,
+                DecideAt.PLAN.value,
+            ),
+        ).fetchall()
+        if not rows:
+            return []
+        graph = self.current_work_graph_row(case_id) if task_key else None
+        blocks: dict[str, set[str]] = {}
+        if graph is not None:
+            for row in self.conn.execute(
+                "SELECT question_id, task_key FROM task_question_block WHERE graph_revision_id = ?",
+                (graph["id"],),
+            ).fetchall():
+                blocks.setdefault(row["question_id"], set()).add(row["task_key"])
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            question = dict(row)
+            linked = blocks.get(question["id"])
+            if task_key and graph is not None and linked and task_key not in linked:
+                continue  # 다른 Task 만 막던 질문이다
+            artifact_id = question["answer_artifact_id"]
+            if artifact_id in seen:
+                continue
+            seen.add(artifact_id)
+            out.append(question)
+        return out
 
     def _insert_context_refs(self, run_id: str, refs: list[dict[str, Any]]) -> None:
         """고정 컨텍스트 참조를 넣는다. **호출자의 트랜잭션 안에서 돈다**(P3-R3).
@@ -7248,6 +7425,20 @@ class Repository:
             meta = knowledge_meta.get(item["seq"])
             if meta is not None:
                 item["knowledge"] = meta
+            if item["role"] == ContextRefRole.QUESTION_ANSWER.value:
+                # P4-09(a). 무엇에 대한 답인지 — 질문 키·요약(지시문 머리에 적힌다). 본문 없음.
+                question = self.conn.execute(
+                    "SELECT question_key, summary, decide_at, raised_in_stage FROM intent_question"
+                    " WHERE answer_artifact_id = ? ORDER BY created_at LIMIT 1",
+                    (item["artifact_id"],),
+                ).fetchone()
+                if question is not None:
+                    item["question"] = {
+                        "key": question["question_key"],
+                        "summary": question["summary"],
+                        "decide_at": question["decide_at"],
+                        "raised_in_stage": question["raised_in_stage"],
+                    }
             # P4-06b. 본문이 어디에 있는가 — 서버(지식 원문·권위 메시지)면 배정이 본문을 싣는다.
             item["body_source"] = (
                 "server" if self._has_server_body(item["artifact_id"], item["revision"]) else "runner"
@@ -7264,6 +7455,7 @@ class Repository:
         request_id: str | None,
         instruction: tuple[str, int],
         repository_id: str | None = None,
+        task_key: str | None = None,
     ) -> ctxmod.ContextPlan:
         """이 실행의 입력 패키지 — 무엇을 넣고 무엇을 드러내어 생략하는가(P4-04).
 
@@ -7272,7 +7464,7 @@ class Repository:
         크기는 제어부가 아는 `artifact_ref.byte_size` 다 — 본문을 읽지 않는다.
         """
         refs, knowledge, conflicts = self.compose_context(
-            case_id, purpose, request_id, instruction, repository_id
+            case_id, purpose, request_id, instruction, repository_id, task_key
         )
         sized: list[dict[str, Any]] = []
         for ref in refs:
@@ -7425,6 +7617,7 @@ class Repository:
                 request_id=run.get("request_id"),
                 instruction=(run["instruction_artifact_id"], run["instruction_artifact_rev"]),
                 repository_id=run.get("repository_id"),
+                task_key=run.get("task_id") or None,
             )
         except (NotFoundError, ValueError):
             return None
@@ -8291,8 +8484,39 @@ class Repository:
             workspace["repo_path"] = repo["repo_path"]
             workspace["repository_name"] = repo["name"]
             workspace["project_name"] = project["name"]
+            # P4-09(c). 후속 Case 면 이전 Case 의 같은 저장소 브랜치를 실어 준다 — 그 끝 커밋이 HEAD 에 있는지는
+            # 작업 PC 가 git 으로 본다(제어부는 git 을 부르지 않는다). 기준 ref 가 HEAD 일 때만 뜻이 있다.
+            workspace["previous_result"] = (
+                self.previous_result_for_workspace(row["case_id"], row["repository_id"])
+                if (workspace.get("base_ref") or "HEAD") == "HEAD" or workspace.get("start_basis") == StartBasis.PREVIOUS_RESULT.value
+                else None
+            )
             payloads.append(workspace)
         return payloads
+
+    def previous_result_for_workspace(self, case_id: str, repository_id: str) -> dict[str, Any] | None:
+        """이 Case 의 **직전 이전 Case**(가장 최근 `follow_up_change`)가 같은 저장소에 준비했던 작업공간의 브랜치
+        (P4-09(c), D-77 마지막 문장). 없으면 `None` — 제안할 것이 없다. 브랜치 이름과 Case 뿐이며 경로는 없다."""
+        rows = self.conn.execute(
+            "SELECT from_case_id FROM case_relation WHERE to_case_id = ? AND relation = ?"
+            " ORDER BY created_at DESC",
+            (case_id, CaseRelationKind.FOLLOW_UP_CHANGE.value),
+        ).fetchall()
+        for rel in rows:
+            previous = self.get_workspace(rel["from_case_id"], repository_id)
+            if previous is None or previous["state"] != WorkspaceState.READY.value or not previous.get("branch"):
+                continue
+            try:
+                origin = self.get_case(rel["from_case_id"])
+            except NotFoundError:
+                continue
+            return {
+                "case_id": rel["from_case_id"],
+                "title": origin["title"],
+                "branch": previous["branch"],
+                "base_commit": previous.get("base_commit") or "",
+            }
+        return None
 
     def report_workspace_ready(
         self,
@@ -8338,6 +8562,9 @@ class Repository:
             raise ConflictError(
                 "an included-changes workspace needs its committed base and tree digest"
             )
+        if start_basis == StartBasis.PREVIOUS_RESULT.value and not committed_base:
+            # P4-09(c). 이전 결과에서 시작했으면 그때의 HEAD(커밋 기준)도 기록돼야 "무엇이 아직 없었는가" 를 말한다.
+            raise ConflictError("a previous-result workspace needs the committed base (HEAD at the time)")
         if start_basis and not committed_base:
             committed_base = base_commit  # 커밋된 코드에서 시작 — 기준 커밋이 곧 커밋 기준이다
         with transaction(self.conn):
@@ -8381,6 +8608,9 @@ class Repository:
         entry_count: int,
         stale: bool = False,
         repository_id: str | None = None,
+        previous_case_id: str | None = None,
+        previous_branch: str = "",
+        previous_commit: str = "",
     ) -> dict[str, Any]:
         """Runner 가 **만들지 않고 물었다**(UI-04d, D-77) — 사용자의 원래 트리에 커밋하지 않은 변경이 있다.
 
@@ -8388,16 +8618,28 @@ class Repository:
         **파일 목록은 여기 오지 않는다**(API 가 제어부 메모리에만 둔다, D-43). `stale` 은 사람이 이미
         골랐는데 포함 직전에 트리가 달라져 있었다는 뜻이다 — 그 선택을 지우고 새 목록으로 다시 묻는다.
         사람이 본 목록과 다른 것을 포함하지 않는다.
+
+        P4-09(c). `previous_*` 는 이전 Case 브랜치의 끝 커밋이 HEAD 에 없다는 작업 PC 의 관측이다 — 그때는
+        목록이 비어 있어도(깨끗한 트리) 묻는다. 이전 Case 는 이 Case 의 이전 Case 여야 한다(지어 넣지 않는다).
         """
         repository_id = self._workspace_target(case_id, repository_id)
         self.get_runner(runner_id)
         if not head or not user_tree_digest:
             raise ConflictError("an uncommitted-changes report needs the HEAD and a tree digest")
+        if previous_commit:
+            expected = self.previous_result_for_workspace(case_id, repository_id)
+            if expected is None or (previous_case_id and previous_case_id != expected["case_id"]):
+                raise ConflictError("previous_result_unknown: that case is not the previous case of this one")
+            previous_case_id = expected["case_id"]
+            previous_branch = previous_branch or expected["branch"]
+        else:
+            previous_case_id, previous_branch, previous_commit = None, "", ""
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE case_workspace SET state = ?, runner_id = ?, committed_base = ?,"
-                " basis_tree_digest = ?, basis_entries = ?, user_tree_dirty = 1,"
-                " user_tree_entries = ?, failure_reason = '', ready_at = NULL"
+                " basis_tree_digest = ?, basis_entries = ?, user_tree_dirty = ?,"
+                " user_tree_entries = ?, failure_reason = '', ready_at = NULL,"
+                " previous_case_id = ?, previous_branch = ?, previous_commit = ?"
                 + (", start_basis = NULL, basis_decided_by = NULL, basis_decided_at = NULL" if stale else "")
                 + " WHERE case_id = ? AND repository_id = ?",
                 (
@@ -8406,7 +8648,11 @@ class Repository:
                     head,
                     user_tree_digest,
                     int(entry_count),
+                    1 if int(entry_count) > 0 else 0,
                     int(entry_count),
+                    previous_case_id,
+                    previous_branch,
+                    previous_commit,
                     case_id,
                     repository_id,
                 ),
@@ -8446,10 +8692,18 @@ class Repository:
                 "basis_list_stale: the uncommitted-changes list you saw is not the current one —"
                 " reload the list and choose again"
             )
+        # P4-09(c). 이전 업무 결과는 작업 PC 가 그 끝 커밋을 올렸을 때만 고를 수 있다. 고르면 기준 ref 가 그
+        # 커밋이 된다(Runner 가 거기서 연다). 다른 선택은 HEAD 기준으로 돌아간다.
+        if chosen is StartBasis.PREVIOUS_RESULT and not workspace.get("previous_commit"):
+            raise ConflictError(
+                "previous_result_unavailable: the PC did not report a previous result to start from"
+            )
+        base_ref = workspace["previous_commit"] if chosen is StartBasis.PREVIOUS_RESULT else "HEAD"
         with transaction(self.conn):
             self.conn.execute(
                 "UPDATE case_workspace SET state = ?, start_basis = ?, basis_decided_by = ?,"
-                " basis_decided_at = ?, requested_at = ?, ready_at = NULL, failure_reason = ''"
+                " basis_decided_at = ?, requested_at = ?, ready_at = NULL, failure_reason = '',"
+                " base_ref = ?"
                 " WHERE case_id = ? AND repository_id = ?",
                 (
                     WorkspaceState.REQUESTED.value,
@@ -8457,6 +8711,7 @@ class Repository:
                     actor,
                     utc_now(),
                     utc_now(),
+                    base_ref,
                     case_id,
                     repository_id,
                 ),
@@ -8552,6 +8807,24 @@ class Repository:
             "committed_base": workspace.get("committed_base") or "",
             "basis_entries": workspace.get("basis_entries"),
             "user_tree_entries": workspace.get("user_tree_entries"),
+            # P4-09(c). 이전 업무 결과(HEAD 에 없는 이전 Case 브랜치의 끝 커밋) — 카드의 선택지 하나. 없으면 빈 값.
+            **self._previous_result_view(workspace),
+        }
+
+    def _previous_result_view(self, workspace: dict[str, Any]) -> dict[str, Any]:
+        """작업공간 행의 이전 결과 값(P4-09(c)) — 이전 Case 의 id·제목·브랜치·끝 커밋. 경로 없음."""
+        previous_case_id = workspace.get("previous_case_id")
+        title = None
+        if previous_case_id:
+            try:
+                title = self.get_case(previous_case_id)["title"]
+            except NotFoundError:
+                title = None
+        return {
+            "previous_case_id": previous_case_id,
+            "previous_case_title": title,
+            "previous_branch": workspace.get("previous_branch") or "",
+            "previous_commit": workspace.get("previous_commit") or "",
         }
 
     def task_repository_state(self, case_id: str, task_key: str) -> dict[str, Any]:
@@ -11954,7 +12227,75 @@ class Repository:
                 ),
             )
             self._insert_default_policy(case_id, now, project_id)
+            # P4-09(g), D-93. 기본 제목이다 — 자동 제목이 채운다.
+            self.conn.execute('UPDATE "case" SET title_source = ? WHERE id = ?', ("default", case_id))
         return self.get_case(case_id)
+
+    # ------------------------------------------------- P4-09(g) 대화 제목(D-93, 이슈 #6)
+
+    #: 기본 제목 문구. 옛 행(출처 미기록)은 이 문구(또는 "… · 후속")일 때만 기본값으로 본다 — 지어 채우지 않는다.
+    DEFAULT_TITLE = "새 대화"
+
+    def _title_is_default(self, case: dict[str, Any]) -> bool:
+        source = case.get("title_source")
+        if source == "default":
+            return True
+        if source is None:
+            title = case.get("title") or ""
+            return title == self.DEFAULT_TITLE or title.endswith(" · 후속")
+        return False
+
+    def apply_auto_title(self, run_id: str) -> dict[str, Any] | None:
+        """응답이 낸 자동 제목을 **한 번** 적용한다(P4-09(g), D-93). 반환: 바뀐 Case 또는 `None`.
+
+        규칙: 제목 출처가 기본값이면 첫 응답의 제목을 쓰고(`ai:discussion`), 업무 요청 응답(`work_request`)이면
+        한 번 더 갱신한다(`ai:work_start`). **사람이 정한 제목(`user`)은 덮지 않는다.** 그 밖의 응답(이미 AI
+        제목이 있고 업무 요청이 아닌 것, 업무 요청 뒤의 응답)은 바꾸지 않는다. 제목은 판정·권한이 아니다.
+        """
+        row = self.get_interpretation(run_id)
+        if row is None or not row.get("title"):
+            return None
+        case = self.get_case(row["case_id"])
+        if case.get("title_source") == "user":
+            return None
+        set_by: str | None = None
+        if self._title_is_default(case):
+            set_by = "ai:discussion"
+        if row.get("kind") == InterpretationKind.WORK_REQUEST.value and case.get("title_set_by") != "ai:work_start":
+            set_by = "ai:work_start"
+        if set_by is None:
+            return None
+        return self._set_title(row["case_id"], str(row["title"]), source="ai", set_by=set_by)
+
+    def set_case_title(self, case_id: str, title: str, *, actor: str) -> dict[str, Any]:
+        """사람이 제목을 바꾼다(1~200자). 종료·보관 대화도 된다 — 제목은 판정·기록이 아니라 표시다."""
+        cleaned = " ".join((title or "").split())
+        if not cleaned or len(cleaned) > 200:
+            raise ConflictError("title_invalid: a title is 1 to 200 characters")
+        self.get_case(case_id)
+        return self._set_title(case_id, cleaned, source="user", set_by=actor)
+
+    def _set_title(self, case_id: str, title: str, *, source: str, set_by: str) -> dict[str, Any]:
+        case = self.get_case(case_id)
+        if case["title"] == title and case.get("title_source") == source:
+            return case  # 같은 값 — 이력을 만들지 않는다
+        now = utc_now()
+        with transaction(self.conn):
+            self.conn.execute(
+                'UPDATE "case" SET title = ?, title_source = ?, title_set_by = ?, title_set_at = ?,'
+                " title_previous = ?, updated_at = ? WHERE id = ?",
+                (title[:200], source, set_by, now, case["title"], now, case_id),
+            )
+        return self.get_case(case_id)
+
+    def title_view(self, case: dict[str, Any]) -> dict[str, Any]:
+        """제목의 출처·이력(짧은 값). 조회가 Case 행 옆에 싣는다."""
+        return {
+            "title_source": case.get("title_source"),
+            "title_set_by": case.get("title_set_by"),
+            "title_set_at": case.get("title_set_at"),
+            "title_previous": case.get("title_previous"),
+        }
 
     def get_work_start(self, case_id: str) -> dict[str, Any] | None:
         row = self.conn.execute(
@@ -12908,6 +13249,8 @@ class Repository:
         return {
             "case_id": case_id,
             "title": case["title"],
+            # P4-09(g), D-93. 제목의 출처(default|ai|user, 옛 행은 None)와 가벼운 이력.
+            **self.title_view(case),
             "status": case["status"],
             "stage": stage.value,
             "stage_source": source.value,
@@ -12953,6 +13296,8 @@ class Repository:
             "progress": self.progress_view(case_id),
             "relations": self.case_relations_view(case_id),
             "closure": self.get_closure(case_id),
+            # P4-09(e). 취소 기록(행위자·사유·시각). 취소가 아니면 None.
+            "cancellation": self.cancellation_view(case_id),
             # P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식. 요약·키·상태뿐이다.
             "knowledge_registrations": self.knowledge_registrations_view(case_id),
             # UI-04c(D-86). 업무 단계의 목적·유형 개정 이력(요약 — 대응 목록은 개정 조회에).
@@ -13604,8 +13949,8 @@ class Repository:
         self.conn.execute(
             "INSERT INTO conversation_interpretation"
             " (run_id, case_id, request_id, opening_message_id, report_status, kind, profile,"
-            "  applied, refusal, recorded_at, evaluated_at, objectives_json)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, ?)"
+            "  applied, refusal, recorded_at, evaluated_at, objectives_json, title)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, ?, ?)"
             " ON CONFLICT(run_id) DO NOTHING",
             (
                 run["run_id"],
@@ -13618,6 +13963,8 @@ class Repository:
                 recorded_at,
                 # UI-04c(D-86). `profile_change` 가 더하는 목적 의무(열거값). 없으면 NULL.
                 json.dumps(list(parsed.objectives)) if parsed.objectives else None,
+                # P4-09(g), D-93. 응답이 낸 자동 제목(짧은 값). 없으면 NULL.
+                parsed.title,
             ),
         )
 
@@ -13875,6 +14222,10 @@ class Repository:
         item = dict(row)
         item["paths"] = json.loads(item.pop("paths_json", None) or "[]")
         item["activities"] = json.loads(item.pop("activities_json", None) or "[]")
+        # P4-09(f), D-92. AI 후보의 읽지 못한 범위(원래 값). 옛 버전·활성화의 새 버전은 NULL.
+        reported = item.pop("reported_scope_json", None)
+        item["reported_scope"] = json.loads(reported) if reported else None
+        item["scope_unreadable"] = item["reported_scope"] is not None
         # P4-07. 후보의 관계·관측 문맥·채택 확인. 옛 버전은 NULL — "없음"이지 값이 아니다.
         observed = item.pop("observed_json", None)
         item["observed"] = json.loads(observed) if observed else None
@@ -14244,8 +14595,12 @@ class Repository:
         relation: str | None = None,
         observed: dict[str, Any] | None = None,
         adoption: dict[str, Any] | None = None,
+        reported_scope: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """지식 버전 하나를 기록한다. `knowledge_id` 가 없으면 새 항목(K-NNN)이다.
+
+        P4-09(f). `reported_scope` 는 AI 후보의 읽지 못한 범위(원래 값)다 — 후보 버전에만 있고 사람이 활성화한
+        새 버전에는 없다(사람이 범위를 정했다).
 
         **원문은 이 Case 의 지식 원문이어야 한다**(종류 `knowledge`) — 출처가 곧 그 Case 다.
         새 버전은 이전 현재 버전을 `superseded` 로 바꾸고 대체 관계를 남긴다. 무효였던 버전은 무효
@@ -14342,8 +14697,8 @@ class Repository:
                 " kind, obligation, state, summary, scope_kind, repository_id, paths_json,"
                 " activities_json, authority_kind, source_case_id, source_message_id, source_run_id,"
                 " source_report_index, created_by, reason_summary, created_at,"
-                " relates_to_knowledge_id, relation, observed_json, adoption_json)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " relates_to_knowledge_id, relation, observed_json, adoption_json, reported_scope_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     version_id,
                     knowledge_id,
@@ -14370,6 +14725,11 @@ class Repository:
                     relation,
                     observed_json,
                     adoption_json,
+                    (
+                        json.dumps(reported_scope, ensure_ascii=False)[:1000]
+                        if reported_scope
+                        else None
+                    ),
                 ),
             )
             if previous is not None:
@@ -14871,6 +15231,7 @@ class Repository:
             relates_to_knowledge_id=relates_to_id,
             relation=relation,
             observed=observed,
+            reported_scope=item.get("reported_scope"),
         )
         return version, None
 
@@ -15048,6 +15409,9 @@ class Repository:
         raw = run.get("knowledge_report_json")
         if not raw or run.get("status") != RunStatus.FINISHED.value:
             return []
+        if self.case_is_cancelled(run["case_id"]):
+            # P4-09(e). 취소 뒤 도착한 결과는 저장됐지만 후보·근거를 만들지 않는다(늦은 결과 무반응).
+            return []
         report = json.loads(raw)
         done = {
             r["report_index"]
@@ -15083,7 +15447,10 @@ class Repository:
             elif not extraction and opening_id is None:
                 refusal = "no_user_message"
             else:
-                item, refusal = knowmod.parse_report_item(raw_item)
+                # P4-09(f), D-92. AI 후보(추출·`proposal: true`)는 범위가 틀려도 받는다(원래 값 보존, 후보로만).
+                # 사용자 말의 자동 등록은 엄격 그대로다.
+                lenient = extraction or (isinstance(raw_item, dict) and raw_item.get("proposal") is True)
+                item, refusal = knowmod.parse_report_item(raw_item, lenient_scope=bool(lenient))
                 if item is not None:
                     proposal = extraction or bool(item.get("proposal"))
                     repository_id = None
@@ -15109,6 +15476,9 @@ class Repository:
                                 version, evidence = self._register_candidate(
                                     run, case, index, item, repository_id, related, observed
                                 )
+                            elif item.get("reported_scope"):
+                                # 사용자 말의 자동 등록은 범위가 분명해야 한다(D-92) — 여기 올 수 없지만 지키기 위해.
+                                raise ConflictError("invalid_scope")
                             else:
                                 version = self.register_knowledge(
                                     run["case_id"],
@@ -15192,6 +15562,67 @@ class Repository:
             self.drop_unused_authority_body(opening_id)
         return out
 
+    def knowledge_intake_detail(self, case_id: str, run_id: str, index: int) -> dict[str, Any]:
+        """P4-09(f), D-92. 등록 보고 항목 하나의 **내용 열람** — 거부된 행도 본다(조용히 버리지 않는다).
+
+        새 저장이 없다: `run.knowledge_report_json[index]`(AI 가 적은 종류·효력·저장소·경로·활동·근거·관계·제안
+        표지 — 원래 값)와 `knowledge_body`(있으면 본문·없으면 `content = None` 과 이유)를 읽는다. 사유 코드에는
+        읽을 말을 붙인다.
+        """
+        run = self.get_run(run_id)
+        if run["case_id"] != case_id:
+            raise NotFoundError(f"run not in case {case_id}: {run_id}")
+        intake = self.conn.execute(
+            "SELECT * FROM knowledge_intake WHERE run_id = ? AND report_index = ?", (run_id, index)
+        ).fetchone()
+        report = json.loads(run.get("knowledge_report_json") or "[]")
+        if intake is None and not (0 <= index < len(report)):
+            raise NotFoundError(f"knowledge report item not found: {run_id}#{index}")
+        raw = report[index] if 0 <= index < len(report) and isinstance(report[index], dict) else {}
+        reported = {
+            "kind": raw.get("kind"),
+            "obligation": raw.get("obligation"),
+            "summary": raw.get("summary"),
+            "repository": raw.get("repository"),
+            "paths": list(raw.get("paths") or []),
+            "activities": list(raw.get("activities") or []),
+            "basis": raw.get("basis"),
+            "relates_to": raw.get("relates_to"),
+            "relation": raw.get("relation"),
+            "supersedes": raw.get("supersedes"),
+            "proposal": bool(raw.get("proposal")),
+            "format_error": bool(raw.get("format_error")),
+        }
+        content: str | None = None
+        content_note = "본문이 서버에 없다 — 보고에 원문 참조가 없거나 저장되지 않았다"
+        artifact_id, revision = raw.get("artifact_id"), raw.get("revision")
+        if artifact_id and isinstance(revision, int):
+            body = self.knowledge_body_for(str(artifact_id), int(revision))
+            if body is not None:
+                blob = body.get("body")
+                content = (
+                    blob.decode("utf-8", errors="replace") if isinstance(blob, (bytes, bytearray)) else str(blob)
+                )
+                content_note = "서버에 저장된 적용 내용(P4-06b) — 비밀값 금지 원칙 그대로"
+        state = intake["state"] if intake is not None else "unprocessed"
+        refusal = intake["refusal"] if intake is not None else None
+        return {
+            "case_id": case_id,
+            "run_id": run_id,
+            "report_index": index,
+            "run_purpose": run.get("purpose"),
+            "intake_state": state,
+            "summary": (intake["summary"] if intake is not None else None) or reported["summary"],
+            "refusal": refusal,
+            "refusal_text": knowmod.refusal_text(refusal),
+            "knowledge_version_id": intake["knowledge_version_id"] if intake is not None else None,
+            "evidence_id": intake["evidence_id"] if intake is not None else None,
+            "reported": reported,
+            "content": content,
+            "content_note": content_note,
+            "note": "AI 가 적은 원래 값이다. 거부·미등록은 내용을 버린 것이 아니라 규칙으로 만들지 않은 것이다",
+        }
+
     def knowledge_registrations_view(self, case_id: str) -> list[dict[str, Any]]:
         """이 대화의 말·실행에서 등록한(또는 거부한·근거로 이은) 지식. 카드가 쓴다 — 요약·키·버전·상태뿐이다.
 
@@ -15202,7 +15633,7 @@ class Repository:
             "SELECT ki.run_id, ki.report_index, ki.state AS intake_state, ki.refusal, ki.summary"
             " AS reported_summary, ki.created_at, kv.id AS version_id, kv.knowledge_id, kv.version,"
             " kv.kind, kv.obligation, kv.state, kv.summary, kv.scope_kind, kv.paths_json,"
-            " kv.activities_json, item.knowledge_key, pr.name AS repository_name,"
+            " kv.activities_json, kv.reported_scope_json, item.knowledge_key, pr.name AS repository_name,"
             " kv.source_message_id, kv.authority_kind, kv.relation, kv.reason_summary,"
             " rel.knowledge_key AS relates_to_key, r.purpose AS run_purpose,"
             " ke.id AS evidence_id, ke.kind AS evidence_kind, ke.summary AS evidence_summary,"
@@ -15228,6 +15659,9 @@ class Repository:
             item = dict(row)
             item["paths"] = json.loads(item.pop("paths_json") or "[]")
             item["activities"] = json.loads(item.pop("activities_json") or "[]")
+            reported = item.pop("reported_scope_json", None)
+            item["reported_scope"] = json.loads(reported) if reported else None  # P4-09(f) 읽지 못한 범위
+            item["refusal_text"] = knowmod.refusal_text(item.get("refusal")) if item.get("refusal") else None
             purpose = item.pop("run_purpose", None)
             if purpose in knowmod.EXTRACTION_PURPOSES:
                 item["origin"] = "extraction"

@@ -19,6 +19,7 @@
     HADS_FAKE_PROPOSAL       (P4-07) 논의 응답이 AI 제안(`proposal: true`) 항목 하나를 등록 블록에 붙인다
     HADS_FAKE_CANDIDATE      (P4-07) 검증 실행이 후보 블록(운영 사실·참고, 근거 한 줄)을 답 뒤에 붙인다.
                              `HADS_FAKE_CANDIDATE_SUPPORTS=K-001` 이면 그 키를 뒷받침하는 관측으로 붙인다
+    HADS_FAKE_TITLE=<제목>   (P4-09) 해석 블록을 붙이는 논의 응답이 그 제목을 자동 제목으로 함께 낸다(D-93)
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -172,6 +173,9 @@ def main() -> int:
             # 표지는 **사용자의 마지막 메시지**(고정 컨텍스트 뒤의 지시 원문)에서만 읽는다 — 앞선 대화에
             # 남은 표지를 다시 읽으면 설명 질문이 업무 요청이 된다.
             last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
+            # 첫 메시지에는 고정 컨텍스트가 없다 — 지시문 꼬리("…사용자의 마지막 메시지다.") 뒤가 사용자의 말이다.
+            if "사용자의 마지막 메시지다." in last:
+                last = last.rsplit("사용자의 마지막 메시지다.", 1)[-1]
             tail = last.split("hads-interpretation")[-1]
             work = re.search(r"HADS_FAKE_WORK=([a-z_]+)", tail)
             # UI-04c(D-86). 업무 단계 규칙을 받은 응답의 목적·유형 변경 표지 — `HADS_FAKE_PROFILE_CHANGE=<profile>`
@@ -187,16 +191,30 @@ def main() -> int:
                 verdict = {"kind": "work_request", "profile": work.group(1)}
             else:
                 verdict = {"kind": "discussion"}
-            text += "\n\n```hads-interpretation\n" + json.dumps(verdict) + "\n```"
+            # P4-09(g), D-93. 표지 `HADS_FAKE_TITLE=<제목>` 이 있으면 자동 제목을 함께 낸다(표지 없으면 없음 —
+            # 기존 시험의 "새 대화" 가 그대로다). 제목은 표지 뒤의 한 줄이다.
+            titled = re.search(r"HADS_FAKE_TITLE=([^\n]+)", tail)
+            if titled:
+                verdict["title"] = titled.group(1).strip()
+            text += "\n\n```hads-interpretation\n" + json.dumps(verdict, ensure_ascii=False) + "\n```"
         if "hads-knowledge" in prompt:
             # P4-06. 등록 규칙을 받은 논의 응답. 표지는 사용자의 마지막 메시지에서만 읽는다.
             last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
+            # 첫 메시지에는 고정 컨텍스트가 없다 — 지시문 꼬리("…사용자의 마지막 메시지다.") 뒤가 사용자의 말이다.
+            if "사용자의 마지막 메시지다." in last:
+                last = last.rsplit("사용자의 마지막 메시지다.", 1)[-1]
             items = []
             if "HADS_FAKE_RULE" in last:
-                said = " ".join(last.replace("HADS_FAKE_RULE", "").replace("HADS_FAKE_PROPOSAL", "").split())[:300]
+                said = " ".join(
+                    last.replace("HADS_FAKE_RULE_BADSCOPE", "").replace("HADS_FAKE_RULE", "")
+                    .replace("HADS_FAKE_PROPOSAL", "").split()
+                )[:300]
                 items.append({
                     "kind": "constraint", "obligation": "required", "summary": "대화에서 정한 규칙",
-                    "content": said, "repository": None, "paths": [], "activities": [],
+                    "content": said, "repository": None, "paths": [],
+                    # P4-09(f). `HADS_FAKE_RULE_BADSCOPE` 면 AI 가 허용 값이 아닌 활동을 적는다(이슈 #5 의 사례) — 사용자 말의
+                    # 자동 등록은 거부되고 카드에서 내용을 본다.
+                    "activities": ["기기 확인"] if "HADS_FAKE_RULE_BADSCOPE" in last else [],
                     "supersedes": None,
                 })
             if "HADS_FAKE_PROPOSAL" in last:

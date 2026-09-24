@@ -8,6 +8,7 @@ import { useState } from 'react'
 
 import {
   api,
+  conversationApi,
   PROFILE_LABEL,
   RUNNER_CONNECTION_LABEL,
   type ConversationRow,
@@ -51,7 +52,9 @@ function rowBadges(row: ConversationRow): { text: string; tone: string }[] {
   if (row.effective_stage === 'work') {
     badges.push({ text: row.profile ? PROFILE_LABEL[row.profile] ?? row.profile : row.kind, tone: 'plain' })
   }
-  if (CLOSED_STATUSES.has(row.status)) badges.push({ text: '종료', tone: 'plain' })
+  // P4-09(e). 취소는 종료의 한 종류지만 성공·예외 인수가 아니다 — 따로 보인다.
+  if (row.status === 'cancelled') badges.push({ text: '취소됨', tone: 'plain' })
+  else if (CLOSED_STATUSES.has(row.status)) badges.push({ text: '종료', tone: 'plain' })
   return badges
 }
 
@@ -76,6 +79,8 @@ export function Sidebar(props: {
   onSearch: (query: string) => void
   onSelectProject: (id: string) => void
   onSelectCase: (id: string) => void
+  // P4-09(g). 목록에서 이름을 바꾼 뒤 목록·대화를 다시 읽는다.
+  onRenamed?: () => void
   onNewConversation: () => void
   onOpenSettings: (tab: SettingsTab) => void
   onProjectCreated: (id: string) => void
@@ -84,6 +89,9 @@ export function Sidebar(props: {
   onCollapse: () => void
 }) {
   const [showArchived, setShowArchived] = useState(false)
+  const [renaming, setRenaming] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [renameError, setRenameError] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const [adding, setAdding] = useState(false)
   const [name, setName] = useState('')
@@ -94,23 +102,83 @@ export function Sidebar(props: {
   const needs = active.filter((r) => r.needs_response)
   const archived = props.rows.filter((r) => r.archived).sort(byActivity)
 
+  // P4-09(g), D-93. 목록 행의 이름 바꾸기 — 행 위의 ✎ 로 인라인 입력을 연다(1~200자). 제목은 표시값이다.
+  const rename = async (row: ConversationRow) => {
+    const next = renameValue.trim()
+    if (!next || next === row.title) {
+      setRenaming(null)
+      return
+    }
+    try {
+      await conversationApi.setTitle(row.id, next)
+      setRenaming(null)
+      props.onRenamed?.()
+    } catch (err) {
+      setRenameError(err instanceof Error ? err.message : String(err))
+    }
+  }
   const renderRow = (row: ConversationRow) => (
-    <li key={row.id}>
-      <button
-        type="button"
-        className={row.id === props.caseId ? 'sh-row sh-row-active' : 'sh-row'}
-        onClick={() => props.onSelectCase(row.id)}
-        data-testid={`conversation-row-${row.id}`}
-      >
-        <span className="sh-row-title">{row.title}</span>
-        <span className="sh-row-badges">
-          {rowBadges(row).map((badge) => (
-            <span key={badge.text} className={`sh-badge sh-badge-${badge.tone}`}>
-              {badge.text}
+    <li key={row.id} className="sh-row-item">
+      {renaming === row.id ? (
+        <form
+          className="sh-composer-bar sh-rename-form"
+          data-testid={`rename-form-${row.id}`}
+          onSubmit={(e) => {
+            e.preventDefault()
+            void rename(row)
+          }}
+        >
+          <input
+            className="sh-input sh-rule-input"
+            value={renameValue}
+            maxLength={200}
+            autoFocus
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setRenaming(null)
+            }}
+            data-testid={`rename-input-${row.id}`}
+          />
+          <button type="submit" className="sh-primary" data-testid={`rename-save-${row.id}`}>
+            저장
+          </button>
+          <button type="button" onClick={() => setRenaming(null)}>
+            취소
+          </button>
+          {renameError && <span className="sh-notice sh-notice-warn">{renameError}</span>}
+        </form>
+      ) : (
+        <>
+          <button
+            type="button"
+            className={row.id === props.caseId ? 'sh-row sh-row-active' : 'sh-row'}
+            onClick={() => props.onSelectCase(row.id)}
+            data-testid={`conversation-row-${row.id}`}
+          >
+            <span className="sh-row-title">{row.title}</span>
+            <span className="sh-row-badges">
+              {rowBadges(row).map((badge) => (
+                <span key={badge.text} className={`sh-badge sh-badge-${badge.tone}`}>
+                  {badge.text}
+                </span>
+              ))}
             </span>
-          ))}
-        </span>
-      </button>
+          </button>
+          <button
+            type="button"
+            className="sh-icon-button sh-row-rename"
+            title="이름 바꾸기"
+            data-testid={`rename-${row.id}`}
+            onClick={() => {
+              setRenameValue(row.title)
+              setRenameError(null)
+              setRenaming(row.id)
+            }}
+          >
+            ✎
+          </button>
+        </>
+      )}
     </li>
   )
 

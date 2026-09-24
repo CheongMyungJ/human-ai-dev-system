@@ -240,16 +240,25 @@ export function ConversationView(props: {
     <div className="sh-conversation" data-testid="conversation">
       <header className="sh-header">
         <div className="sh-header-title">
-          <h1 data-testid="conversation-title">{conv.title}</h1>
+          <TitleEditor caseId={caseId} title={conv.title} source={conv.title_source ?? null} onChanged={props.onChanged} />
           <span className="sh-muted" data-testid="stage-label">
             {conv.stage === 'discussion'
               ? '논의 중 · 목표·업무 유형 미정'
               : `업무 · ${conv.profile ? PROFILE_LABEL[conv.profile] ?? conv.profile : conv.kind}`}
             {conv.visibility.archived && ' · 보관됨(종료 아님)'}
-            {['closed', 'cancelled'].includes(conv.status) && ` · 종료(${conv.status})`}
+            {conv.status === 'closed' && ' · 종료(closed)'}
+            {conv.status === 'cancelled' && (
+              <span data-testid="cancelled-label">
+                {' '}· 취소됨{conv.cancellation?.reason ? ` — ${conv.cancellation.reason}` : ''}
+                {conv.cancellation?.by ? ` (${conv.cancellation.by})` : ''}
+              </span>
+            )}
           </span>
         </div>
         <div className="sh-header-actions">
+          {!['closed', 'cancelled'].includes(conv.status) && (
+            <CancelButton caseId={caseId} onChanged={props.onChanged} />
+          )}
           <button
             type="button"
             className={props.panel === 'results' ? 'sh-tab sh-tab-on' : 'sh-tab'}
@@ -430,6 +439,140 @@ export function stageSummary(detail: ShellCaseDetail | null): string {
     `QG-01 ${GATE_VERDICT_LABEL[detail.gate.verdict] ?? detail.gate.verdict}`,
     `상태 ${CASE_STATUS_LABEL[detail.status] ?? detail.status}`,
   ].join(' · ')
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+/**
+ * P4-09(g), 이슈 #6. 대화 머리의 제목 — 눌러서 바꾼다(1~200자, 종료·보관 대화도). 사람이 정한 제목은 자동 제목이
+ * 덮지 않는다(D-93). 제목은 판정·권한이 아니라 표시값이다.
+ */
+function TitleEditor(props: { caseId: string; title: string; source: 'default' | 'ai' | 'user' | null; onChanged: () => void }) {
+  const [editing, setEditing] = useState(false)
+  const [value, setValue] = useState(props.title)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    if (!editing) setValue(props.title)
+  }, [props.title, editing])
+  const save = async () => {
+    const next = value.trim()
+    if (!next) {
+      setError('제목은 비울 수 없다')
+      return
+    }
+    if (next === props.title) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      await conversationApi.setTitle(props.caseId, next)
+      setEditing(false)
+      props.onChanged()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!editing) {
+    return (
+      <h1
+        data-testid="conversation-title"
+        data-title-source={props.source ?? ''}
+        title="눌러서 이름을 바꾼다"
+        onClick={() => setEditing(true)}
+        className="sh-title-editable"
+      >
+        {props.title}
+      </h1>
+    )
+  }
+  return (
+    <form
+      className="sh-composer-bar sh-title-form"
+      data-testid="title-form"
+      onSubmit={(e) => {
+        e.preventDefault()
+        void save()
+      }}
+    >
+      <input
+        className="sh-input sh-rule-input"
+        value={value}
+        maxLength={200}
+        autoFocus
+        disabled={busy}
+        onChange={(e) => setValue(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setEditing(false)
+        }}
+        data-testid="title-input"
+      />
+      <button type="submit" className="sh-primary" disabled={busy} data-testid="title-save">
+        저장
+      </button>
+      <button type="button" disabled={busy} onClick={() => setEditing(false)} data-testid="title-cancel">
+        취소
+      </button>
+      {error && <span className="sh-notice sh-notice-warn">{error}</span>}
+    </form>
+  )
+}
+
+/**
+ * P4-09(e), 이슈 #4. 업무 취소 — 사유를 적고 확인한다. 실행이 남아 있으면 서버가 거부한다(먼저 중단). 취소는
+ * 되돌리지 않으며 부분 결과·변경·사용량·작업공간은 그대로 남는다(성공·예외 인수가 아니다).
+ */
+function CancelButton(props: { caseId: string; onChanged: () => void }) {
+  const [asking, setAsking] = useState(false)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const cancel = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      await conversationApi.cancel(props.caseId, reason.trim())
+      setAsking(false)
+      props.onChanged()
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+  if (!asking) {
+    return (
+      <button type="button" className="sh-tab" onClick={() => setAsking(true)} data-testid="cancel-case" title="이 업무를 취소한다(되돌리지 않는다)">
+        업무 취소
+      </button>
+    )
+  }
+  return (
+    <span className="sh-cancel-form" data-testid="cancel-form">
+      <input
+        className="sh-input sh-rule-input"
+        placeholder="취소 사유(필수)"
+        value={reason}
+        maxLength={200}
+        disabled={busy}
+        onChange={(e) => setReason(e.target.value)}
+        data-testid="cancel-reason"
+      />
+      <button type="button" className="sh-primary" disabled={busy || !reason.trim()} onClick={() => void cancel()} data-testid="cancel-confirm">
+        취소 확정
+      </button>
+      <button type="button" disabled={busy} onClick={() => setAsking(false)} data-testid="cancel-abort">
+        닫기
+      </button>
+      {error && <span className="sh-notice sh-notice-warn" data-testid="cancel-error">{error}</span>}
+    </span>
+  )
 }
 
 function WorkStartCard(props: { conv: ConversationData; basisSeq: number }) {

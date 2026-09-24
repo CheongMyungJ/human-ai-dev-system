@@ -614,6 +614,8 @@ def test_the_interpretation_record_keeps_no_body(processing_harness):
             "profile", "applied", "refusal", "recorded_at", "evaluated_at",
             # UI-04c(D-86). 목적 변경이 더하는 의무의 열거값 목록 — 본문이 아니다.
             "objectives_json",
+            # P4-09(g)(D-93). 응답이 낸 대화 제목 — 40자 이하의 표시값이며 본문이 아니다.
+            "title",
         }
     finally:
         conn.close()

@@ -164,8 +164,8 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.TASKS_BLOCKED: "배정 가능한 작업이 없다(막는 사유 참조)",
     WaitReason.REPOSITORY_SELECTION: "코드를 바꿀 저장소를 골라 쓰기를 허용해야 한다(관리 화면)",
     WaitReason.WORKSPACE_START_BASIS: (
-        "저장소에 커밋하지 않은 변경이 있다. 포함해서 시작할지 커밋된 코드에서 시작할지 고른다"
-        " — 어느 쪽도 원래 폴더를 바꾸지 않는다"
+        "어느 코드에서 시작할지 고른다 — 저장소에 커밋하지 않은 변경이 있거나(포함/커밋된 코드) 이전 업무의 결과가"
+        " 아직 커밋된 코드에 없다(이전 업무 결과/커밋된 코드). 어느 쪽도 원래 폴더를 바꾸지 않는다"
     ),
     WaitReason.TASK_FAILED: "작업 실행이 거듭 실패했다. 사유를 보고 다시 시도하거나 요청을 고친다",
     WaitReason.UNRESOLVED_FEEDBACK: "미해결 피드백이 남아 있다. 반영됨·미반영을 판단한다",
@@ -819,6 +819,11 @@ def _graph_phase(state: FlowState) -> Step | None:
                 entries=space.get("basis_entries"),
                 head=space.get("committed_base"),
                 task_key=key,
+                # P4-09(c). 이전 업무 결과의 선택지 — 있으면 카드가 `이전 업무 결과에서 시작` 을 함께 보인다.
+                previous_case_id=space.get("previous_case_id"),
+                previous_case_title=space.get("previous_case_title"),
+                previous_branch=space.get("previous_branch") or "",
+                previous_commit=space.get("previous_commit") or "",
             )
         if not space.get("ready"):
             return Step("busy", "workspace_pending", "작업공간 준비를 기다린다")

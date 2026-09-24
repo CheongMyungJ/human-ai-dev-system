@@ -43,6 +43,8 @@ import {
   type RunnerWithConnection,
 } from '../api'
 import { rulesLink } from '../lib/address'
+import { refusalText } from '../lib/knowledgeText'
+import { IntakeDetailView } from './ProgressCards'
 import { splitRunOutput } from '../lib/runOutput'
 import { diffLines } from '../lib/textDiff'
 import {
@@ -406,6 +408,10 @@ function WorkspaceRow(props: { caseId: string; ws: RepositoryWorkspace; runners:
       return `${START_BASIS_LABEL.include_uncommitted} — ${ws.included_entries ?? '?'}건, 스냅샷 ${ws.base_commit.slice(0, 10)} (커밋 기준 ${(ws.committed_base ?? '').slice(0, 10) || '?'})`
     }
     if (ws.start_basis === 'committed') return `${START_BASIS_LABEL.committed} ${ws.base_commit.slice(0, 10)}`
+    if (ws.start_basis === 'previous_result') {
+      // P4-09(c). 이전 대화의 브랜치 끝 커밋에서 이었다 — 그때의 커밋된 코드(HEAD)는 따로 적힌다.
+      return `${START_BASIS_LABEL.previous_result} ${ws.base_commit.slice(0, 10)}${ws.previous_branch ? ` (${ws.previous_branch})` : ''} · 그때의 커밋된 코드 ${(ws.committed_base ?? '').slice(0, 10) || '?'}`
+    }
     return ws.base_commit ? `기준 커밋 ${ws.base_commit.slice(0, 10)} · 시작 기준 기록 없음(옛 작업공간)` : '아직 만들어지지 않음'
   })()
   return (
@@ -951,7 +957,12 @@ function Decisions(props: { conv: ConversationView | null; detail: ShellCaseDeta
                       {r.evidence.kind === 'supports' ? '뒷받침하는 관측' : '같은 내용'} · {r.reported_summary ?? ''}
                     </>
                   )}
-                  {r.intake_state === 'refused' && <>등록하지 않음 · {r.reported_summary ?? ''} · {r.refusal ?? ''}</>}
+                  {r.intake_state === 'refused' && (
+                    <>
+                      등록하지 않음 · {r.reported_summary ?? ''} · {refusalText(r.refusal, r.refusal_text)}{' '}
+                      <IntakeDetailView caseId={props.caseId} projectId={props.projectId} registration={r} testPrefix="decisions-refused" />
+                    </>
+                  )}
                   <div className="sh-muted">
                     {seq !== null && (
                       <>

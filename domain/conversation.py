@@ -326,6 +326,8 @@ class Interpretation:
     detail: str = ""
     #: UI-04c(D-86). `profile_change` 가 더하는 목적 의무(열거값). 없으면 빈 튜플이다.
     objectives: tuple[str, ...] = ()
+    #: P4-09(g), D-93. 응답이 함께 낸 대화 제목(공백 정리 뒤 40자 초과는 잘린 짧은 값). 본문이 아니다. 없으면 None.
+    title: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"status": self.status.value}
@@ -335,9 +337,25 @@ class Interpretation:
             out["profile"] = self.profile.value
         if self.objectives:
             out["objectives"] = list(self.objectives)
+        if self.title:
+            out["title"] = self.title
         if self.detail:
             out["detail"] = self.detail[:200]
         return out
+
+
+#: P4-09(g), D-93. 자동 제목의 상한(문자). 더 길면 자른다 — 형식 오류로 만들지 않는다(제목은 표시값이다).
+TITLE_MAX_CHARS = 40
+
+
+def normalize_title(value: Any) -> str | None:
+    """해석 블록의 `title` 을 짧은 표시값으로 만든다. 비어 있거나 문자열이 아니면 None."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join(value.split())
+    if not text:
+        return None
+    return text[:TITLE_MAX_CHARS]
 
 
 def parse_interpretation(value: Any) -> Interpretation:
@@ -352,8 +370,9 @@ def parse_interpretation(value: Any) -> Interpretation:
         kind = InterpretationKind(value.get("kind"))
     except ValueError:
         return Interpretation(InterpretationStatus.INVALID, detail="unknown kind")
+    title = normalize_title(value.get("title"))
     if kind is InterpretationKind.DISCUSSION:
-        return Interpretation(InterpretationStatus.REPORTED, kind)
+        return Interpretation(InterpretationStatus.REPORTED, kind, title=title)
     try:
         profile = CaseProfile(value.get("profile"))
     except ValueError:
@@ -378,7 +397,9 @@ def parse_interpretation(value: Any) -> Interpretation:
                 )
             if name not in objectives:
                 objectives.append(name)
-    return Interpretation(InterpretationStatus.REPORTED, kind, profile, objectives=tuple(objectives))
+    return Interpretation(
+        InterpretationStatus.REPORTED, kind, profile, objectives=tuple(objectives), title=title
+    )
 
 
 def interpretation_from_report(report: Any) -> Interpretation:

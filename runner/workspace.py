@@ -231,6 +231,30 @@ class NeedsBasis:
     entries: tuple[str, ...]
     digest: str
     stale: bool = False
+    #: P4-09(c), D-77 마지막 문장. 후속 Case 의 **이전 Case 브랜치 끝 커밋이 HEAD 에 없다** — 그 결과 위에서 시작할지
+    #: 사람이 고른다. 이 값이 있으면 트리가 깨끗해도 묻는다. 없으면 빈 값이다.
+    previous_branch: str = ""
+    previous_commit: str = ""
+
+
+def previous_result_tip(repo: Path, branch: str, head: str) -> str:
+    """이전 Case 브랜치의 끝 커밋이 **HEAD 에 아직 없으면** 그 SHA, 아니면 빈 값(P4-09(c)).
+
+    브랜치가 없거나(이미 지웠다) 그 끝 커밋이 HEAD 의 조상이면(병합·fast-forward 됐다) 제안할 것이 없다 — 묻지
+    않는다. 판단은 여기(작업 PC 의 git)서만 한다: 제어부는 git 을 부르지 않는다(D-43).
+    """
+    if not branch:
+        return ""
+    tip = git(repo, "rev-parse", "--verify", "--quiet", f"{branch}^{{commit}}", check=False).strip()
+    if not tip:
+        return ""
+    proc = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", tip, head],
+        cwd=str(repo),
+        capture_output=True,
+        timeout=GIT_TIMEOUT,
+    )
+    return "" if proc.returncode == 0 else tip
 
 
 #: 미커밋 포함 시작의 스냅샷 커밋 작성자. 사용자의 이름·설정을 쓰지 않는다 — 시스템이 만든 커밋이다.
@@ -286,8 +310,14 @@ def prepare(
     known_base_commit: str = "",
     start_basis: str | None = None,
     expected_tree_digest: str = "",
+    previous_branch: str = "",
+    previous_commit: str = "",
 ) -> PreparedWorkspace | NeedsBasis:
     """Case 전용 브랜치와 worktree 를 만든다.
+
+    P4-09(c). `previous_branch` 는 후속 Case 의 **이전 Case 브랜치**(제어부가 요청에 실어 준다). 새로 만들 때 그
+    브랜치의 끝 커밋이 HEAD 에 없으면 트리가 깨끗해도 **만들지 않고 묻는다**(`NeedsBasis.previous_*`). 사람이
+    `previous_result` 를 고르면 제어부가 기록한 `previous_commit` 에서 연다 — 미커밋 변경은 포함하지 않는다.
 
     순서가 중요하다.
 
@@ -339,15 +369,31 @@ def prepare(
         )
 
     # UI-04d(D-77). **더러운 트리는 사람이 고른 뒤에만 만든다.** 깨끗하면 묻지 않는다(HEAD 기본).
-    if user_tree.dirty and not start_basis:
-        return NeedsBasis(head=user_tree.head, entries=user_tree.entries, digest=user_tree.digest)
+    # P4-09(c). 이전 Case 의 결과가 HEAD 에 아직 없으면 깨끗해도 묻는다 — 그 위에서 이을지는 사람의 선택이다.
+    if not start_basis:
+        offer = previous_result_tip(repo_path, previous_branch, user_tree.head) if base_ref == "HEAD" else ""
+        if user_tree.dirty or offer:
+            return NeedsBasis(
+                head=user_tree.head,
+                entries=user_tree.entries,
+                digest=user_tree.digest,
+                previous_branch=previous_branch if offer else "",
+                previous_commit=offer,
+            )
 
     included = 0
     included_digest = ""
     committed_base = base_commit
     start_commit = base_commit
     chosen = start_basis or "committed"
-    if chosen == "include_uncommitted":
+    if chosen == "previous_result":
+        # P4-09(c). 이전 업무 결과(그 브랜치의 끝 커밋)에서 시작한다. 제어부가 기록한 커밋이어야 한다 — 없으면
+        # 조용히 HEAD 로 바꾸지 않는다. 미커밋 변경은 포함하지 않는다(포함은 HEAD 기준에서만 뜻이 있다).
+        if not previous_commit:
+            raise WorkspaceError("이전 업무 결과에서 시작하려면 그 끝 커밋이 기록돼 있어야 한다")
+        start_commit = git(repo_path, "rev-parse", f"{previous_commit}^{{commit}}").strip()
+        committed_base = user_tree.head
+    elif chosen == "include_uncommitted":
         if base_commit != user_tree.head:
             # 사용자 트리는 HEAD 위의 변경이다 — 다른 기준과 합칠 수 없다. 조용히 다른 것을 만들지 않는다.
             raise WorkspaceError(
@@ -369,6 +415,9 @@ def prepare(
             chosen = "committed"
     elif chosen != "committed":
         raise WorkspaceError(f"모르는 시작 기준: {start_basis}")
+    elif previous_commit and base_ref != "HEAD":
+        # 제어부가 `previous_result` 선택 뒤 base_ref 를 그 커밋으로 둔다 — `committed` 로 다시 고른 경우는 HEAD 다.
+        pass
 
     worktree_path.parent.mkdir(parents=True, exist_ok=True)
     git(repo_path, "worktree", "add", "-b", branch, str(worktree_path), start_commit)

@@ -61,7 +61,13 @@ CREATE TABLE IF NOT EXISTS "case" (
     kind        TEXT NOT NULL,                -- feature | bug | analysis | research
     status      TEXT NOT NULL,
     created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    updated_at  TEXT NOT NULL,
+    -- v28(P4-09(g), D-93). 제목의 출처와 가벼운 이력. `title_source` default | ai | user, 옛 행은 NULL(기록 없음).
+    -- 자동 제목(`ai`)은 `user` 를 덮지 않는다. `title_set_by` 는 `ai:discussion` / `ai:work_start` / 사람 이름.
+    title_source   TEXT CHECK (title_source IS NULL OR title_source IN ('default', 'ai', 'user')),
+    title_set_by   TEXT,
+    title_set_at   TEXT,
+    title_previous TEXT
 );
 
 -- 원문 참조. 본문 컬럼 없음.
@@ -496,12 +502,21 @@ CREATE TABLE IF NOT EXISTS exception_decision (
 CREATE TABLE IF NOT EXISTS closure_record (
     id                  TEXT PRIMARY KEY,
     case_id             TEXT NOT NULL REFERENCES "case"(id),
-    candidate_id        TEXT NOT NULL REFERENCES completion_candidate(id),
+    -- v28(P4-09(e), 이슈 #4): **취소일 때만 NULL** — 취소는 결과 후보 없이 업무 수행을 중단하는 결정이다.
+    candidate_id        TEXT REFERENCES completion_candidate(id),
     final_acceptance_id TEXT REFERENCES final_acceptance(id),
     closure_kind        TEXT NOT NULL,  -- completed | closed_with_exceptions | cancelled
     exception_count     INTEGER NOT NULL,
     confirmed_at        TEXT NOT NULL,
-    UNIQUE (case_id)
+    -- v20(P4-05): 종료 시점의 소비·한도 snapshot(D-87). 옛 종료는 NULL.
+    snapshot_json       TEXT CHECK (snapshot_json IS NULL OR length(snapshot_json) <= 4000),
+    -- v28: 취소의 행위자·사유·결정. 취소가 아니면 NULL.
+    cancelled_by        TEXT,
+    cancel_reason       TEXT CHECK (cancel_reason IS NULL OR length(cancel_reason) <= 200),
+    decision_id         TEXT REFERENCES decision(id),
+    UNIQUE (case_id),
+    CHECK (candidate_id IS NOT NULL OR closure_kind = 'cancelled'),
+    CHECK ((closure_kind = 'cancelled') = (cancelled_by IS NOT NULL))
 );
 
 -- Case 사이의 연결. 완료 후 수정은 기존 Case 재개가 아니라 연결된 새 Case 다(D-33).
@@ -884,6 +899,12 @@ CREATE TABLE IF NOT EXISTS case_workspace (
     included_tree_digest TEXT NOT NULL DEFAULT '',
     basis_tree_digest    TEXT NOT NULL DEFAULT '',
     basis_entries        INTEGER,
+    -- v28(P4-09(c), D-77 마지막 문장). **이전 업무 결과에서 시작** — 후속 Case 의 작업 PC 가 이전 Case 브랜치의
+    -- 끝 커밋이 HEAD 에 없음을 보고 물었을 때의 값(사람이 고르기 전에도 적힌다). `start_basis =
+    -- previous_result` 면 `base_commit` = `previous_commit`, `committed_base` = 그때의 HEAD. 옛 행은 NULL/빈 값.
+    previous_case_id     TEXT REFERENCES "case"(id),
+    previous_branch      TEXT NOT NULL DEFAULT '',
+    previous_commit      TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (case_id, repository_id),
     CHECK (length(failure_reason) <= 200)
 );
@@ -1743,6 +1764,8 @@ CREATE TABLE IF NOT EXISTS conversation_interpretation (
     evaluated_at       TEXT,
     -- v26: `profile_change` 가 더하는 목적 의무(열거값 목록). 본문이 아니다.
     objectives_json    TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200),
+    -- v28(P4-09(g), D-93): 응답이 함께 낸 대화 제목(40자 이하로 잘린 짧은 값). 본문이 아니다. 없으면 NULL.
+    title              TEXT CHECK (title IS NULL OR length(title) <= 80),
     CHECK (applied = 0 OR (report_status = 'reported' AND kind IN ('work_request', 'profile_change')
                            AND profile IS NOT NULL AND evaluated_at IS NOT NULL))
 );
@@ -1918,6 +1941,11 @@ CREATE TABLE IF NOT EXISTS knowledge_version (
     CHECK (NOT (state = 'active' AND obligation = 'required' AND authority_kind = 'ai_proposal'))
 );
 
+-- v28(P4-09(f), D-92). AI 후보의 **읽지 못한 범위** — AI 가 적은 원래 활동·경로 값과 문제. 활동·경로는 비워 두고
+-- 후보로만 등록됐으며 주입되지 않는다. 채택 확인이 `scope_unreadable` 로 막고 사람이 활동을 명시하면 풀린다.
+-- 옛 버전·활성화의 새 버전은 NULL.
+-- (컬럼은 db.py 의 v28 이행이 더한다 — 기존 표의 컬럼 순서를 지키기 위해 여기 DDL 에는 넣지 않는다.)
+
 CREATE INDEX IF NOT EXISTS idx_knowledge_version_item ON knowledge_version(knowledge_id, version);
 CREATE INDEX IF NOT EXISTS idx_knowledge_version_state ON knowledge_version(state);
 
@@ -1966,10 +1994,11 @@ CREATE TABLE IF NOT EXISTS run_knowledge (
     activity          TEXT NOT NULL,
     obligation        TEXT NOT NULL,
     state             TEXT NOT NULL,
+    -- v28(P4-09(f), D-92): `scope_unreadable` — AI 가 적은 범위를 읽지 못한 후보는 주입하지 않는다. 옛 DB 는 CHECK 를 넓힌다.
     decision          TEXT NOT NULL
                       CHECK (decision IN ('provided', 'omitted_size_limit',
                                           'not_applicable_activity', 'not_applicable_repository',
-                                          'scope_undetermined')),
+                                          'scope_undetermined', 'scope_unreadable')),
     scope_resolution  TEXT,
     -- 고정 문맥의 순번(`run_context_ref.seq`). 제공·한도 생략만 있다.
     context_seq       INTEGER,
@@ -2151,3 +2180,16 @@ CREATE INDEX IF NOT EXISTS idx_workspace_open_request_runner
     ON workspace_open_request(runner_id, state, requested_at);
 CREATE INDEX IF NOT EXISTS idx_workspace_open_request_case
     ON workspace_open_request(case_id, repository_id, requested_at);
+
+-- ===================================================================
+-- 스키마 v28 (P4-09 — P5 전 정리 묶음)
+--
+-- 새 표는 없다. 기존 표에 더한 것:
+--   `closure_record`               `candidate_id` 가 취소일 때만 NULL, `cancelled_by`·`cancel_reason`·`decision_id`
+--                                  (이슈 #4 — 업무 취소 1단계). 옛 DB 는 표를 다시 만든다(행 보존)
+--   `case_workspace`               `previous_case_id`·`previous_branch`·`previous_commit`(D-77 후속 Case 의 이전 결과 기준)
+--   `knowledge_version`            `reported_scope_json`(D-92 — AI 후보의 읽지 못한 범위, 원래 값 보존)
+--   `run_knowledge`                `decision` CHECK 에 `scope_unreadable`(옛 DB 는 표 재구성, 행 보존)
+--   `case`                         `title_source`·`title_set_by`·`title_set_at`·`title_previous`(D-93 대화 제목)
+--   `conversation_interpretation`  `title`(D-93 — 응답이 낸 자동 제목)
+-- 데이터 이행 없음 — 옛 행의 새 컬럼은 NULL/빈 값이며 "기록 없음" 이다. 지어 채우지 않는다.

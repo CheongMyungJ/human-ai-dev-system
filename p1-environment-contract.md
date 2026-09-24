@@ -98,7 +98,7 @@ CLI별 인자 형태가 아니라 **제어부가 표현해야 할 의미**를 �
 | `mode` | 실행 모드 식별자(예: Codex `exec`, Claude `print`) | 필수 | 모드마다 능력표가 다르다 |
 | `model` | 프로젝트 기본의 Case·역할별 override | 선택 | 미지정이면 CLI 설정을 따른다 |
 | `workspace` | `repo_path`, `worktree_path`, `branch`, `base_commit` | 필수 | 서버 프로젝트 ID와 Runner 실제 경로를 구분 |
-| `permission` | 추상 권한: `read_only` / `workspace_write` / `explicit_escalated` | 필수 | CLI별 매핑은 7절. 매핑 불가는 실행 거부 |
+| `permission` | 추상 권한: `read_only` / `workspace_write` / `explicit_escalated` | 필수 | CLI별 매핑은 `runner/cli_adapter.py` `PERMISSION_MAP`. 매핑 불가는 실행 거부. **D-91(2026-09-24, P4-09):** `read_only` 만 CLI 샌드박스(codex `--sandbox read-only`, claude `manual` + `--tools Read,Grep,Glob`)를 유지하고 `workspace_write` 는 **CLI 권한 제약이 없다**(codex `--sandbox danger-full-access`, claude `bypassPermissions`; `--strict-mcp-config` 는 남긴다) — 쓰기 실행은 사용자 계정 권한으로 돌아 worktree 밖·자격증명에 닿을 수 있고 AI 의 직접 push 를 막지 못한다(사용자가 받아들인 손실). 게시 규칙(P5)은 그대로다 |
 | `writable_paths` | 추가 쓰기 허용 경로 | 선택 | 워크스페이스 밖 경로는 기본 불허 |
 | `instruction_ref` | 입력 원문의 영속 참조(ID·버전·해시) | 필수 | 원문 자체는 PC 보관. 서버에는 참조만 |
 | `context_refs` | 함께 전달한 자료의 ID·버전 목록 | 필수(빈 목록 허용) | NFR-09의 출처 추적 |
@@ -149,6 +149,7 @@ CLI가 어떤 종류를 제공하지 않으면 **비어 있는 것으로 두고 
 | 도구 경계 관찰 | `verified` — `item.started/completed` + `command_execution` | `verified` — `assistant(tool_use)` ↔ `user(tool_use_result)` | `doc_only`(부분) — `shell.started`/`shell.ended` 만 이름 확인 | P1-02 4절, OpenCode 계약 4절 |
 | 실제 코드 변경 | `verified` — git diff로 확인 | `verified` — git diff로 확인 | `unknown` — 실행한 적 없음 | P1-02 #5·#6·#11 |
 | 쓰기 범위 제한(실강제) | `verified` — read-only sandbox가 OS 수준에서 차단 | `verified` — `--tools` 제한이 하위 에이전트까지 강제 | `doc_only` — `permissions` 의 action×resource 규칙 | P1-02 3절, OpenCode 계약 3절 |
+| 쓰기 실행의 샌드박스 | `unsupported` — **D-91(2026-09-24)** 로 `danger-full-access`. 능력 보고 `write_sandbox = unsupported` | `unsupported` — `bypassPermissions`(Windows 에 OS 샌드박스 없음) | `unknown` | 이슈 #3 · [P4-ENV 결과](p4/evidence/P4-ENV-results.md) · decisions.md D-91 |
 | 도구 제한의 MCP 포함 여부 | 해당 없음(sandbox 축) | `verified` — **`--tools`는 MCP 도구를 줄이지 않는다.** `--strict-mcp-config` 필요 | `unknown` | P1-02 #9·#10 |
 | 권한 거절 이벤트 | `unknown` — 이번 경로에서는 명령 실패로만 드러남 | `verified` — `system/permission_denied` | `unknown` | P1-02 3~4절 |
 | 세션 식별 | `verified` — `thread.started.thread_id` | `verified` — `system/init.session_id` | `doc_only` — 세션 생성 응답의 `id` | P1-02 6절, OpenCode 계약 3절 |

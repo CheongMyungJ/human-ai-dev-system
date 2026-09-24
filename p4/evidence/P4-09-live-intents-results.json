@@ -1,0 +1,166 @@
+{
+  "tag": "203057259",
+  "data_root": "C:\\Users\\USER\\AppData\\Local\\Temp\\hads-p4-03-live\\203057259",
+  "observations": [
+    {
+      "letter": "D",
+      "profile": "root_cause_analysis",
+      "case_id": "case-7190d5da0d55d4af",
+      "run_id": "run-p4-03-D-203057259",
+      "observed_tool_version": "codex-cli 0.156.1",
+      "doc_version": 6,
+      "doc_objectives": [
+        "cause"
+      ],
+      "declared_objectives": [
+        "cause"
+      ],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relates_to": "conclusion_requirement",
+          "obligation": "cause",
+          "obligation_source": "reported",
+          "conclusion_rule": "definitive_required",
+          "conclusion_rule_effective": "definitive_required",
+          "summary": "표시 차이의 원인 확정"
+        }
+      ],
+      "objectives": [
+        {
+          "obligation": "cause",
+          "required": true,
+          "required_by": [
+            "profile",
+            "declared"
+          ],
+          "criteria": [
+            "C-01"
+          ],
+          "total": 1,
+          "met": 0,
+          "status": "open"
+        }
+      ],
+      "missing": [],
+      "checks": [
+        {
+          "check": "doc_version_5",
+          "ok": false,
+          "detail": "doc_version=6"
+        },
+        {
+          "check": "objectives_declared",
+          "ok": true,
+          "detail": "기대 ['cause'] ⊆ 문서 ['cause']"
+        },
+        {
+          "check": "obligations_reported",
+          "ok": true,
+          "detail": "원문이 의무를 적은 기준 1/1"
+        },
+        {
+          "check": "conclusion_rule_cause",
+          "ok": true,
+          "detail": "cause 기준의 결론 요구 ['definitive_required'] (기대 definitive_required)"
+        },
+        {
+          "check": "every_required_objective_has_a_criterion",
+          "ok": true,
+          "detail": "기준 없는 목적 []"
+        }
+      ]
+    },
+    {
+      "letter": "E",
+      "profile": "maintenance",
+      "case_id": "case-9c71be36c5009912",
+      "run_id": "run-p4-03-E-203057259",
+      "observed_tool_version": "codex-cli 0.156.1",
+      "doc_version": 6,
+      "doc_objectives": [],
+      "declared_objectives": [],
+      "criteria": [
+        {
+          "key": "C-01",
+          "relates_to": "target_state",
+          "obligation": "target_state",
+          "obligation_source": "reported",
+          "conclusion_rule": null,
+          "conclusion_rule_effective": null,
+          "summary": "지정한 경로 사용"
+        },
+        {
+          "key": "C-02",
+          "relates_to": "preserved_conditions",
+          "obligation": "preservation",
+          "obligation_source": "reported",
+          "conclusion_rule": null,
+          "conclusion_rule_effective": null,
+          "summary": "기본 경로와 결과 유지"
+        },
+        {
+          "key": "C-03",
+          "relates_to": "preserved_conditions",
+          "obligation": "preservation",
+          "obligation_source": "reported",
+          "conclusion_rule": null,
+          "conclusion_rule_effective": null,
+          "summary": "공개 함수 계약 유지"
+        }
+      ],
+      "objectives": [
+        {
+          "obligation": "preservation",
+          "required": true,
+          "required_by": [
+            "profile_conditional"
+          ],
+          "criteria": [
+            "C-02",
+            "C-03"
+          ],
+          "total": 2,
+          "met": 0,
+          "status": "open"
+        },
+        {
+          "obligation": "target_state",
+          "required": true,
+          "required_by": [
+            "profile"
+          ],
+          "criteria": [
+            "C-01"
+          ],
+          "total": 1,
+          "met": 0,
+          "status": "open"
+        }
+      ],
+      "missing": [],
+      "checks": [
+        {
+          "check": "doc_version_5",
+          "ok": false,
+          "detail": "doc_version=6"
+        },
+        {
+          "check": "objectives_declared",
+          "ok": false,
+          "detail": "기대 ['preservation', 'target_state'] ⊆ 문서 []"
+        },
+        {
+          "check": "obligations_reported",
+          "ok": true,
+          "detail": "원문이 의무를 적은 기준 3/3"
+        },
+        {
+          "check": "every_required_objective_has_a_criterion",
+          "ok": true,
+          "detail": "기준 없는 목적 []"
+        }
+      ]
+    }
+  ]
+}

@@ -86,7 +86,38 @@ CASES: list[dict[str, Any]] = [
         "expect_objectives": set(),
         "expect_rules": {},
     },
+    # P4-09(d), S-035. 실제 codex 가 한 번도 써 본 적 없는 두 Profile 의 의도 작성 표본(관찰 — 제품 규칙 통과가 아니다).
+    {
+        "letter": "D",
+        "profile": "root_cause_analysis",
+        "title": "저장 직후 목록이 옛 값을 보이는 원인",
+        "request": (
+            "저장 버튼을 누른 뒤 목록 화면으로 돌아오면 이전 값이 보이고 새로 고침하면 새 값이 보입니다."
+            " 재현율은 100% 이고 `store.py` 의 `save()`·`list_items()` 가 관련돼 보입니다.\n\n"
+            "**왜 그런지 원인을 확정해 주세요.** 이번에는 고치지 않습니다 — 원인을 근거와 함께 설명하는 것이"
+            " 목표이고, 원인을 확정하지 못하면 완료가 아닙니다."
+        ),
+        "expect_objectives": {"cause"},
+        "expect_rules": {"cause": "definitive_required"},
+    },
+    {
+        "letter": "E",
+        "profile": "maintenance",
+        "title": "저장 경로를 설정으로 옮기기",
+        "request": (
+            "`store.py` 의 저장 파일 경로가 `items.json` 으로 고정돼 있습니다. 환경 변수 `STORE_PATH` 가 있으면"
+            " 그 경로를, 없으면 지금처럼 `items.json` 을 쓰게 바꿔 주세요.\n\n"
+            "**기존 동작은 그대로여야 합니다** — 환경 변수가 없을 때의 결과와 `list_items()`·`save()` 의"
+            " 공개 이름·반환 형식은 바뀌면 안 됩니다."
+        ),
+        "expect_objectives": {"target_state", "preservation"},
+        "expect_rules": {},
+    },
 ]
+
+#: P4-09(d). 출력 파일 접두사와 고를 표본. `--prefix P4-09-live-intents --only D,E` 처럼 준다 — P4-03 의 증거를 덮지 않는다.
+PREFIX = "P4-03-live"
+ONLY: set[str] | None = None
 
 STORE_PY = '''"""작은 저장소 — 라이브 시험용."""
 import json
@@ -231,7 +262,7 @@ class Probe:
 
         intent = self.api.get(f"/api/cases/{case_id}/intent-state")["latest_intent_version"]
         body = self.original(intent)
-        (OUT / f"P4-03-live-{letter}-intent-original.json").write_text(body, encoding="utf-8")
+        (OUT / f"{PREFIX}-{letter}-intent-original.json").write_text(body, encoding="utf-8")
         doc = json.loads(body)
         result = self.api.get(f"/api/cases/{case_id}/result")
         meaning = result["completion_meaning"]
@@ -282,7 +313,8 @@ class Probe:
             results.append({"check": name, "ok": ok, "detail": detail})
             self.log(f"  [{'OK' if ok else '관찰'}] {name}: {detail}")
 
-        note("doc_version_5", doc.get("doc_version") == 5, f"doc_version={doc.get('doc_version')}")
+        # P4-09: 의도 문서는 UI-04c 부터 v6(유지 항목) 이다 — 5 는 P4-03 당시의 판.
+        note("doc_version_known", doc.get("doc_version") in (5, 6), f"doc_version={doc.get('doc_version')}")
         declared = set(doc.get("objectives") or [])
         note(
             "objectives_declared",
@@ -311,11 +343,21 @@ class Probe:
 
 
 def main() -> int:
+    global PREFIX, ONLY
+    args = sys.argv[1:]
+    while args:
+        flag = args.pop(0)
+        if flag == "--prefix" and args:
+            PREFIX = args.pop(0)
+        elif flag == "--only" and args:
+            ONLY = {s.strip().upper() for s in args.pop(0).split(",") if s.strip()}
+        else:
+            raise SystemExit(f"모르는 인자: {flag} (--prefix <이름> --only D,E)")
     tag = stamp()
     root = LIVE_ROOT / tag
     root.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
-    with Log(OUT / "P4-03-live.log") as log:
+    with Log(OUT / f"{PREFIX}.log") as log:
         log.head(f"P4-03 라이브 {tag} — 데이터 {root}")
         repo = make_repo(root)
         procs = Processes(data_root=root, log=log, port=8793, runner_id=RUNNER_ID)
@@ -331,13 +373,15 @@ def main() -> int:
             probe = Probe(api, log, repo, tag)
             probe.setup()
             for spec in CASES:
+                if ONLY is not None and spec["letter"] not in ONLY:
+                    continue
                 probe.draft(spec)
             summary = {
                 "tag": tag,
                 "data_root": str(root),
                 "observations": probe.observations,
             }
-            (OUT / "P4-03-live-results.json").write_text(
+            (OUT / f"{PREFIX}-results.json").write_text(
                 json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
             )
             failed = [

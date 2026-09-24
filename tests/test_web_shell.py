@@ -1623,3 +1623,118 @@ def test_a_dirty_repository_asks_for_the_start_basis_and_including_keeps_the_ori
     expect(basis).to_contain_text("2건")
     expect(basis).to_contain_text(ws["base_commit"][:10])
     page.context.close()
+
+
+# ================================================== P4-09 — P5 전 정리 묶음(취소 · 거부 후보 열람 · 제목)
+
+
+def test_a_conversation_gets_a_title_from_the_reply_and_a_person_renames_it_in_the_header_and_the_list(stack):
+    """P4-09(g) AC-33 — 첫 응답이 낸 제목이 머리·목록에 보이고, 머리에서 바꾼 제목은 다음 응답이 덮지 않으며, 목록의
+    ✎ 로도 바꾼다(D-93). 제목은 표시값이다."""
+    project = stack.project("제목")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    expect(page.locator('[data-testid="conversation-title"]')).to_have_text("새 대화")
+    _send(page, "HADS_FAKE_TITLE=저장 뒤 목록 문제\n저장하면 목록이 옛 값을 보여요")
+    title = page.locator('[data-testid="conversation-title"]')
+    expect(title).to_have_text("저장 뒤 목록 문제", timeout=60_000)
+    expect(title).to_have_attribute("data-title-source", "ai")
+    row = page.locator(f'[data-testid="conversation-row-{case_id}"]')
+    expect(row).to_contain_text("저장 뒤 목록 문제", timeout=15_000)
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert (conv["title"], conv["title_source"], conv["title_set_by"]) == ("저장 뒤 목록 문제", "ai", "ai:discussion")
+
+    # 머리에서 바꾼다 — 그 뒤 응답의 제목은 덮지 않는다.
+    title.click()
+    page.fill('[data-testid="title-input"]', "내가 정한 제목")
+    page.click('[data-testid="title-save"]')
+    expect(page.locator('[data-testid="conversation-title"]')).to_have_text("내가 정한 제목", timeout=15_000)
+    expect(page.locator('[data-testid="conversation-title"]')).to_have_attribute("data-title-source", "user")
+    expect(row).to_contain_text("내가 정한 제목", timeout=15_000)
+    expect(page.locator('[data-testid="send-refusal"]')).to_have_count(0, timeout=30_000)
+    _send(page, "HADS_FAKE_TITLE=AI 가 다시 붙인 제목\n왜 그럴까요?")
+    expect(page.locator('article[data-author="assistant"]')).to_have_count(2, timeout=60_000)
+    expect(page.locator('[data-testid="conversation-title"]')).to_have_text("내가 정한 제목")
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert conv["title_source"] == "user" and conv["title_previous"] == "저장 뒤 목록 문제"
+
+    # 목록의 ✎ 로도 바꾼다.
+    page.click(f'[data-testid="rename-{case_id}"]')
+    page.fill(f'[data-testid="rename-input-{case_id}"]', "목록에서 바꾼 제목")
+    page.click(f'[data-testid="rename-save-{case_id}"]')
+    expect(page.locator(f'[data-testid="conversation-row-{case_id}"]')).to_contain_text("목록에서 바꾼 제목", timeout=15_000)
+    expect(page.locator('[data-testid="conversation-title"]')).to_have_text("목록에서 바꾼 제목", timeout=15_000)
+    page.context.close()
+
+
+def test_a_waiting_case_is_cancelled_from_the_header_with_a_reason(stack):
+    """P4-09(e) AC-20 — 동의 카드(실행 없음)에서 '업무 취소' → 사유 → 확정 → 머리·목록이 취소됨을 보이고 버튼이 사라진다.
+    취소는 종료지만 성공·예외 인수가 아니다(D-33 그대로 되돌리지 않는다)."""
+    project = stack.project("취소")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert conv["progress"]["state"] == "waiting_human"
+
+    page.click('[data-testid="cancel-case"]')
+    expect(page.locator('[data-testid="cancel-confirm"]')).to_be_disabled()  # 사유 없이는 확정할 수 없다
+    page.fill('[data-testid="cancel-reason"]', "방향이 바뀌어 이 업무는 버린다")
+    page.click('[data-testid="cancel-confirm"]')
+    expect(page.locator('[data-testid="cancelled-label"]')).to_contain_text("취소됨", timeout=15_000)
+    expect(page.locator('[data-testid="cancelled-label"]')).to_contain_text("방향이 바뀌어")
+    expect(page.locator('[data-testid="cancel-case"]')).to_have_count(0)
+    expect(page.locator(f'[data-testid="conversation-row-{case_id}"]')).to_contain_text("취소됨", timeout=15_000)
+    expect(page.locator('[data-testid="agreement-card"]')).to_have_count(0)
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    assert case["status"] == "cancelled"
+    closure = case["result"]["closure"]
+    assert (closure["closure_kind"], closure["candidate_id"], closure["cancelled_by"]) == ("cancelled", None, "owner")
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert conv["cancellation"]["reason"] == "방향이 바뀌어 이 업무는 버린다"
+    assert conv["progress"]["state"] == "done" and conv["progress"]["step"] == "cancelled"
+    page.context.close()
+
+
+def test_a_refused_candidate_shows_its_content_and_fills_the_manual_registration_form(stack):
+    """P4-09(f) AC-26 — 사용자 말의 자동 등록이 범위 때문에 거부되면 카드가 읽을 말로 사유를 보이고, '내용 보기' 가
+    본문·AI 가 적은 활동을 보이며, '이 내용으로 수동 등록' 이 규칙 화면의 폼을 그 내용으로 채운다(D-92)."""
+    project = stack.project("거부 열람")
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_RULE_BADSCOPE 이 프로젝트에서는 앞으로 읽기 전용 실행에서 adb 조회를 하지 마")
+    card = page.locator('[data-testid="knowledge-refused-card"]')
+    expect(card).to_be_visible(timeout=60_000)
+    expect(card).to_contain_text("범위(활동·경로)를 알아볼 수 없다")
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    [row] = conv["knowledge_registrations"]
+    assert (row["intake_state"], row["refusal"]) == ("refused", "invalid_scope")
+
+    card.locator('[data-testid="knowledge-refused-open-0"]').click()
+    body = card.locator('[data-testid="knowledge-refused-body-0"]')
+    expect(body).to_be_visible(timeout=15_000)
+    expect(body.locator('[data-testid="knowledge-refused-activities-0"]')).to_have_text("기기 확인")
+    expect(body.locator('[data-testid="knowledge-refused-content-0"]')).to_contain_text("adb 조회를 하지 마")
+    card.locator('[data-testid="knowledge-refused-register-0"]').click()
+    form = page.locator('[data-testid="rules-register-form"]')
+    expect(form).to_be_visible(timeout=30_000)
+    expect(form).to_have_attribute("data-prefilled", "1")
+    expect(form.locator('[data-testid="rules-register-content"]')).to_have_value(
+        "이 프로젝트에서는 앞으로 읽기 전용 실행에서 adb 조회를 하지 마"
+    )
+    expect(form.locator('[data-testid="rules-register-summary"]')).to_have_value("대화에서 정한 규칙")
+    expect(form.locator('[data-testid="rules-register-activities"]')).to_have_value("기기 확인")
+    expect(form.locator('[data-testid="rules-register-case"]')).to_have_value(case_id)
+    # 사람이 활동을 고쳐 등록한다 — 권위는 등록하는 사람이다.
+    form.locator('[data-testid="rules-register-activities"]').fill("investigation")
+    form.locator('[data-testid="rules-register"]').click()
+    expect(form.locator('[data-testid="rules-register-done"]')).to_contain_text("K-001 v1", timeout=15_000)
+    view = stack.http.get(f"/api/projects/{project['id']}/knowledge").json()
+    current = view["items"][0]["current"]
+    assert (current["authority_kind"], current["state"], current["activities"]) == ("user_registration", "active", ["investigation"])
+    page.context.close()

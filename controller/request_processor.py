@@ -193,6 +193,8 @@ class RequestProcessor:
         replies = [r for r in runs if r.get("purpose") == RunPurpose.DISCUSSION_REPLY.value]
         work_started = False
         for reply in replies:
+            # P4-09(g), D-93. 응답이 낸 자동 제목을 적용한다(사람이 정한 제목은 덮지 않는다; 표시값이다).
+            self.repo.apply_auto_title(reply["run_id"])
             # P4-06. 응답이 옮긴 프로젝트 규칙을 **먼저** 등록한다 — 같은 요청에서 업무화되면 그
             # 업무의 첫 실행부터 규칙이 주입된다. 등록은 응답이 완료됐을 때만이고 한 번뿐이다.
             self.repo.apply_knowledge_report(reply["run_id"])

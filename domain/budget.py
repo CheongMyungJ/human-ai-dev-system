@@ -109,6 +109,9 @@ class SettleSource(str, Enum):
     #: P4-04. Runner 가 CLI 를 부르기 **전에** 멈췄다. 호출이 없었으므로 0 이 확정이다 —
     #: 예약값을 그대로 확정하면 없던 호출이 소비로 남는다.
     NOT_STARTED = "not_started"
+    #: P4-09(e), 이슈 #4. 업무 취소 시점에 아직 열려 있던 예약(끝나지 않은 실행이 없으므로 보통 없다). 값을
+    #: 모르는 채 닫는다 — `unresolved` 이며 0 이 아니다.
+    CASE_CANCELLED = "case_cancelled"
     #: P4-04. Runner 가 재시작 뒤 **자기 원시 출력에서** 되찾은 사용량이다. 어댑터가
     #: 결과로 보고한 값과 출처가 같지만(같은 CLI 출력) 경로가 다르므로 구분해 둔다.
     RECOVERED_FROM_RUNNER_LOG = "recovered_from_runner_log"

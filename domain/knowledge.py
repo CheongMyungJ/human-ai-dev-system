@@ -197,6 +197,9 @@ class Decision(str, Enum):
     NOT_APPLICABLE_ACTIVITY = "not_applicable_activity"
     NOT_APPLICABLE_REPOSITORY = "not_applicable_repository"
     SCOPE_UNDETERMINED = "scope_undetermined"
+    #: P4-09(f), D-92. AI 후보가 적은 범위(활동·경로)를 읽지 못했다 — 범위를 모르는 후보를 모든 실행에 넣지 않는다.
+    #: 사람이 활성화 폼에서 범위를 확인하면 새 버전에는 이 표지가 없다.
+    SCOPE_UNREADABLE = "scope_unreadable"
 
 
 class ScopeResolution(str, Enum):
@@ -270,6 +273,8 @@ ADOPTION_OPEN_CONFLICT = "open_conflict"
 ADOPTION_CONTRADICTS_ACTIVE = "contradicts_active"
 ADOPTION_TARGET_NOT_ACTIVE = "target_not_active"
 ADOPTION_SCOPE_WIDENED = "scope_widened"
+#: P4-09(f), D-92. AI 가 적은 범위를 읽지 못한 후보 — 활성화 요청이 활동을 **명시**(빈 목록 포함)하면 풀린다.
+ADOPTION_SCOPE_UNREADABLE = "scope_unreadable"
 ADOPTION_NO_EVIDENCE = "no_evidence"
 ADOPTION_SCOPE_WIDER_THAN_OBSERVED = "scope_wider_than_observed"
 ADOPTION_OBLIGATION_RAISED = "obligation_raised"
@@ -344,6 +349,18 @@ def adoption_check(
             widened.append("모든 활동으로")
     if widened:
         out.append(AdoptionFinding(ADOPTION_SCOPE_WIDENED, True, "범위를 넓힐 수 없다: " + ", ".join(widened)))
+    if candidate.get("reported_scope") and requested.get("activities") is None:
+        # P4-09(f), D-92. AI 가 적은 활동·경로를 읽지 못해 비워 둔 후보다 — 사람이 활동을 확인해야 활성이 된다.
+        reported = candidate["reported_scope"]
+        out.append(
+            AdoptionFinding(
+                ADOPTION_SCOPE_UNREADABLE,
+                True,
+                "AI 가 적은 범위를 읽지 못했다(활동 "
+                + ", ".join(str(a) for a in reported.get("activities") or []) + "; 경로 "
+                + ", ".join(str(p) for p in reported.get("paths") or []) + ") — 활성화 폼에서 활동을 확인한다",
+            )
+        )
     # 경고.
     if evidence_count <= 0:
         out.append(AdoptionFinding(ADOPTION_NO_EVIDENCE, False, "근거 실행·근거 행이 없다. 활성화 사유가 근거다"))
@@ -600,6 +617,12 @@ def select(
             "state": version["state"],
             "role": role_for(version),
         }
+        if version.get("reported_scope"):
+            # P4-09(f), D-92. 범위를 읽지 못한 후보는 주입하지 않는다 — 모르는 범위를 "모든 작업"으로 읽지 않는다.
+            selection.skipped.append(
+                {**base, "decision": Decision.SCOPE_UNREADABLE.value, "scope_resolution": None}
+            )
+            continue
         if not activity_applies(list(version.get("activities") or []), activity):
             selection.skipped.append(
                 {**base, "decision": Decision.NOT_APPLICABLE_ACTIVITY.value,
@@ -667,10 +690,58 @@ def blocking_conflicts(
 MAX_REPORT_ITEMS = 5
 
 
-def parse_report_item(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
+#: P4-09(f), D-92. 거부·읽지 못한 범위의 사유 코드 → 사람이 읽을 말. 카드·패널·열람 조회가 같은 말을 쓴다.
+REFUSAL_TEXT: dict[str, str] = {
+    "unknown_repository": "그런 저장소가 이 프로젝트에 없다",
+    "unknown_supersedes_key": "바꾸라는 기존 규칙을 찾지 못했다",
+    "invalid_kind_or_obligation": "종류·효력을 알아볼 수 없다",
+    "format_error": "형식이 맞지 않는다",
+    "not_an_object": "항목의 형식이 맞지 않는다",
+    "reply_not_completed": "응답이 완료되지 않았다",
+    "run_not_completed": "실행이 완료되지 않았다",
+    "no_user_message": "권위가 될 사용자 메시지가 없다",
+    "summary_missing": "제목이 없다",
+    "content_not_stored": "내용이 저장되지 않았다",
+    "invalid_scope": "범위(활동·경로)를 알아볼 수 없다 — 사용자 말의 자동 등록은 범위가 분명해야 한다",
+    "paths_without_repository": "경로 조건은 저장소를 정해야 한다",
+    "too_many_items": "한 번에 너무 많다",
+    "unknown_related_key": "관계 대상 지식을 찾지 못했다",
+    "invalid_relation": "관계를 알아볼 수 없다",
+    "relation_without_target": "관계 대상이 없다",
+    "registration_failed": "등록 중 다른 처리와 겹쳤다",
+}
+
+
+def refusal_text(code: str | None) -> str:
+    """사유 코드의 읽을 말. 모르는 코드는 그대로(`refused: …` 같은 자유 문장 포함)."""
+    if not code:
+        return ""
+    return REFUSAL_TEXT.get(code, code)
+
+
+def _scope_problem(raw: Any) -> tuple[list[str], list[str], str | None]:
+    """활동·경로를 검사한다 — (활동, 경로, 문제). 문제가 있으면 활동·경로는 비어 있다."""
+    try:
+        activities = check_activities(raw.get("activities") or [])
+        paths = check_paths(raw.get("paths") or [])
+    except ValueError as exc:
+        return [], [], str(exc)[:200]
+    repository = raw.get("repository")
+    if paths and not (str(repository).strip() if repository else ""):
+        return [], [], "paths_without_repository"
+    return activities, paths, None
+
+
+def parse_report_item(
+    raw: Any, *, lenient_scope: bool = False
+) -> tuple[dict[str, Any] | None, str | None]:
     """Runner 가 보낸 등록 항목 하나(원문 참조 포함)를 검사한다. (항목, 거부 사유).
 
     **모르는 값을 지어내지 않는다** — 종류·효력이 틀리면 기본값으로 채우지 않고 거부한다.
+
+    P4-09(f), D-92. `lenient_scope`(AI 후보 — 추출·`proposal: true`)면 활동·경로가 틀려도 거부하지 않는다:
+    활동·경로를 비워 두고 AI 가 적은 원래 값과 문제를 `reported_scope` 에 남긴다(후보로만 등록되고 주입되지
+    않으며 채택 확인이 막는다). 사용자 말의 자동 등록(바로 활성)은 그대로 `invalid_scope` 거부다.
     """
     if not isinstance(raw, dict):
         return None, "not_an_object"
@@ -688,15 +759,18 @@ def parse_report_item(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
     revision = raw.get("revision")
     if not artifact_id or not isinstance(revision, int):
         return None, "content_not_stored"
-    try:
-        activities = check_activities(raw.get("activities") or [])
-        paths = check_paths(raw.get("paths") or [])
-    except ValueError:
-        return None, "invalid_scope"
+    activities, paths, problem = _scope_problem(raw)
+    reported_scope: dict[str, Any] | None = None
+    if problem is not None:
+        if not lenient_scope:
+            return None, "paths_without_repository" if problem == "paths_without_repository" else "invalid_scope"
+        reported_scope = {
+            "activities": [str(a)[:60] for a in (raw.get("activities") or [])][:20],
+            "paths": [str(p)[:200] for p in (raw.get("paths") or [])][:20],
+            "problem": problem,
+        }
     repository = raw.get("repository")
     repository = str(repository).strip() if repository else None
-    if paths and not repository:
-        return None, "paths_without_repository"
     supersedes = raw.get("supersedes")
     supersedes = str(supersedes).strip() if supersedes else None
     # P4-07. 후보의 관계·근거·제안 표지. `relation` 이 있으면 대상 키가 있어야 한다. 논의 응답의
@@ -727,6 +801,8 @@ def parse_report_item(raw: Any) -> tuple[dict[str, Any] | None, str | None]:
         "relation": relation,
         "basis": basis,
         "proposal": bool(raw.get("proposal")),
+        # P4-09(f). 읽지 못한 범위의 원래 값(없으면 None). 후보 버전에 그대로 남는다.
+        "reported_scope": reported_scope,
     }, None
 
 
