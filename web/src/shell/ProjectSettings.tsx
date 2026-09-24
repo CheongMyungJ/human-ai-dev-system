@@ -12,6 +12,9 @@ import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import {
   ApiError,
   AUTONOMY_LABEL,
+  BUDGET_METRIC_NOTE,
+  metricLabel,
+  orderMetrics,
   projectSettingsApi,
   PROJECT_SETTING_LABEL,
   PROJECT_SETTING_SOURCE_LABEL,
@@ -330,7 +333,7 @@ function BudgetDefaults(props: { view: ProjectSettingsView; onChange: (values: R
       <ul className="sh-result-list">
         {props.view.budget_defaults.map((row) => (
           <li key={row.key} className="sh-rule-line" data-testid={`setting-budget-${row.metric}-${row.threshold_kind}`}>
-            {row.metric} {row.threshold_kind} <strong>{row.limit_value}</strong> {row.unit} · {GUARANTEE_LABEL[row.guarantee] ?? row.guarantee} · 적용
+            {metricLabel(row.metric)} {row.threshold_kind} <strong>{row.limit_value}</strong> {row.unit} · {GUARANTEE_LABEL[row.guarantee] ?? row.guarantee} · 적용
             시점 {when(row.setting.created_at)}
             <button type="button" className="sh-link" onClick={() => void props.onChange({ [row.key]: null })} data-testid={`setting-budget-clear-${row.metric}-${row.threshold_kind}`}>
               해제
@@ -340,11 +343,14 @@ function BudgetDefaults(props: { view: ProjectSettingsView; onChange: (values: R
       </ul>
       <div className="sh-composer-bar sh-rule-actions">
         <select value={metric} onChange={(e) => setMetric(e.target.value)} data-testid="setting-budget-metric">
-          {Object.entries(props.view.budget_metrics).map(([name, info]) => (
-            <option key={name} value={name}>
-              {name} (hard {GUARANTEE_LABEL[info.hard_guarantee] ?? info.hard_guarantee})
-            </option>
-          ))}
+          {orderMetrics(Object.keys(props.view.budget_metrics)).map((name) => {
+            const info = props.view.budget_metrics[name]
+            return (
+              <option key={name} value={name}>
+                {metricLabel(name)} (hard {GUARANTEE_LABEL[info?.hard_guarantee ?? ''] ?? info?.hard_guarantee ?? '?'})
+              </option>
+            )
+          })}
         </select>
         <select value={threshold} onChange={(e) => setThreshold(e.target.value)} data-testid="setting-budget-threshold">
           <option value="warn">경고선</option>
@@ -355,7 +361,15 @@ function BudgetDefaults(props: { view: ProjectSettingsView; onChange: (values: R
           기본 한도 추가
         </button>
       </div>
-      <p className="sh-muted sh-rule-line">강제할 수 없는 지표의 hard 한도는 거부된다(D-61). 기존 대화의 예산은 그 대화의 상세 설정에서.</p>
+      {BUDGET_METRIC_NOTE[metric] && (
+        <p className="sh-muted sh-rule-line" data-testid="setting-budget-metric-note">
+          {metricLabel(metric)}: {BUDGET_METRIC_NOTE[metric]}
+        </p>
+      )}
+      <p className="sh-muted sh-rule-line">
+        강제할 수 없는 지표의 hard 한도는 거부된다(D-61). 시간 한도의 기본 지표는 실행시간 합계다(D-88). 기존 대화의 예산은
+        그 대화의 상세 설정에서.
+      </p>
     </section>
   )
 }

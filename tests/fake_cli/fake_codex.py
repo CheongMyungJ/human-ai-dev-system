@@ -172,10 +172,21 @@ def main() -> int:
             # 표지는 **사용자의 마지막 메시지**(고정 컨텍스트 뒤의 지시 원문)에서만 읽는다 — 앞선 대화에
             # 남은 표지를 다시 읽으면 설명 질문이 업무 요청이 된다.
             last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
-            work = re.search(r"HADS_FAKE_WORK=([a-z_]+)", last.split("hads-interpretation")[-1])
-            verdict = (
-                {"kind": "work_request", "profile": work.group(1)} if work else {"kind": "discussion"}
-            )
+            tail = last.split("hads-interpretation")[-1]
+            work = re.search(r"HADS_FAKE_WORK=([a-z_]+)", tail)
+            # UI-04c(D-86). 업무 단계 규칙을 받은 응답의 목적·유형 변경 표지 — `HADS_FAKE_PROFILE_CHANGE=<profile>`
+            # 또는 `<profile>:<obligation,...>`. 규칙을 받지 않았으면 표지가 있어도 붙이지 않는다.
+            change = re.search(r"HADS_FAKE_PROFILE_CHANGE=([a-z_]+)(?::([a-z_,]+))?", tail)
+            if change and "profile_change" in prompt:
+                verdict = {
+                    "kind": "profile_change",
+                    "profile": change.group(1),
+                    "objectives": [o for o in (change.group(2) or "").split(",") if o],
+                }
+            elif work:
+                verdict = {"kind": "work_request", "profile": work.group(1)}
+            else:
+                verdict = {"kind": "discussion"}
             text += "\n\n```hads-interpretation\n" + json.dumps(verdict) + "\n```"
         if "hads-knowledge" in prompt:
             # P4-06. 등록 규칙을 받은 논의 응답. 표지는 사용자의 마지막 메시지에서만 읽는다.

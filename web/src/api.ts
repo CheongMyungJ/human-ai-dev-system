@@ -49,6 +49,11 @@ export interface IntentVersion {
   // **누가 실제로 썼는가.** 기록되지 않은 옛 버전은 null 이다.
   authoring_mode: 'human_typed' | 'ai_drafted' | null
   author_run_id: string | null
+  // UI-04c(D-86). **이 버전의** Profile·정의판·유지 항목(개정 전 Profile 의 의미 항목). Case 의 현재 값이 아니다.
+  profile?: string | null
+  profile_version?: string | null
+  retained_fields?: string[]
+  required_fields?: string[]
 }
 
 export interface Decision {
@@ -2073,6 +2078,9 @@ export interface WorkspaceEffect {
   // 그 시점 트리 내용의 **지문(해시)**. 조합이 이것으로 스냅샷을 고정한다(P3-R2).
   tree_digest_before?: string
   tree_digest_after?: string
+  // UI-04c(D-89). Runner 가 CLI 를 부르기 전에 직전 실행의 지문과 대조한 결과. `null` 은 대조하지 않았다.
+  external_change_before_run?: boolean | null
+  external_change_basis_run_id?: string | null
 }
 
 export interface RunCommand {
@@ -2095,10 +2103,43 @@ export interface RunEffectRow {
   effect: WorkspaceEffect
   // 직전 실행이 남긴 상태와 다른 자리에서 시작했다. **드러내되 되돌리지 않는다**(FR-26).
   unexpected_external_change: boolean
+  // UI-04c(D-89). Runner 가 CLI 를 부르기 **전에** 직전 지문과 대조한 결과. `null` 은 대조하지 않았다
+  // (직전 실행 없음·옛 Runner)이며 `false` 가 아니다.
+  external_change_before_run?: boolean | null
+  external_change_basis_run_id?: string | null
   // 어느 저장소의 실행인가(P3-R2). `repository_recorded` 가 false 면 **모른다**이며
   // 아무 저장소에나 붙이지 않는다.
   repository_id: string | null
   repository_recorded?: boolean
+}
+
+// UI-04c(D-89). 작업 PC 에서 폴더·편집기를 열어 달라는 요청 한 건. 경로는 서버의 작업공간 행이다.
+export interface WorkspaceOpenRequest {
+  id: string
+  case_id: string
+  repository_id: string
+  runner_id: string
+  target: 'folder' | 'editor'
+  requested_by: string
+  state: 'pending' | 'done' | 'failed' | 'expired'
+  result_reason: string | null
+  requested_at: string
+  delivered_at: string | null
+  finished_at: string | null
+}
+
+export const OPEN_STATE_LABEL: Record<string, string> = {
+  pending: '작업 PC 에 전달 대기',
+  done: '작업 PC 에서 열림',
+  failed: '열지 못함',
+  expired: '전달되지 않아 만료됨',
+}
+
+export const OPEN_SUPPORT_LABEL: Record<string, string> = {
+  verified: '이 PC 에서 확인됨',
+  unsupported: '이 PC 는 지원하지 않음',
+  unknown: '이 PC 는 보고하지 않음',
+  doc_only: '문서만 있음(확인 안 됨)',
 }
 
 export type WorkspaceState = 'requested' | 'ready' | 'failed'
@@ -2125,6 +2166,12 @@ export interface RepositoryWorkspace {
   allowance_source: string
   run_effects: RunEffectRow[]
   outside_workspace_changed: boolean
+  // UI-04c(D-89). 이 작업공간을 만든 **작업 PC**(브라우저 PC 와 같다고 가정하지 않는다)와 그 PC 의 열기
+  // 지원·최근 열기 요청. `runner` 가 null 이면 소유 PC 를 기록하지 않은 옛 작업공간이다.
+  runner_id?: string | null
+  runner?: { runner_id: string; name?: string; host: string | null; connection: RunnerConnectionState | null } | null
+  open_support?: Record<'open_folder' | 'open_editor', { state: string; source: string }>
+  open_requests?: WorkspaceOpenRequest[]
 }
 
 // 저장소별 작업공간 전부와 조합·선택을 담은 조회 결과(P3-R2).
@@ -2208,6 +2255,14 @@ export const workspaceApi = {
   // 지금 상태로 코드 조합을 **고정한다.** 같은 상태면 새 revision 을 만들지 않는다.
   buildComposition: (caseId: string) =>
     request<CodeComposition | null>(`/api/cases/${caseId}/composition`, { method: 'POST' }),
+
+  // UI-04c(D-89). 작업 PC 에서 폴더·편집기를 열어 달라고 남긴다. **응답은 열렸다는 뜻이 아니다** — 결과는
+  // 작업공간 조회의 `open_requests` 에 온다. 미연결·미지원은 409 다. 경로는 보내지 않는다.
+  open: (caseId: string, repositoryId: string, target: 'folder' | 'editor') =>
+    request<WorkspaceOpenRequest>(`/api/cases/${caseId}/workspaces/${repositoryId}/open`, {
+      method: 'POST',
+      body: JSON.stringify({ target, requested_by: 'owner' }),
+    }),
 }
 
 // --------------------------------------------------------------- P3-R1 정책
@@ -2881,6 +2936,8 @@ export interface ConversationView {
   // P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식.
   knowledge_registrations?: KnowledgeRegistration[]
   closure?: ClosureRecord | null
+  // UI-04c(D-86). 업무 단계의 목적·유형 개정 이력(요약 — 대응 목록은 `profileRevisionApi.get`).
+  profile_revisions?: ProfileRevision[]
 }
 
 export interface ConversationInterpretation {
@@ -2889,12 +2946,93 @@ export interface ConversationInterpretation {
   request_id: string
   opening_message_id: string
   report_status: 'reported' | 'missing' | 'invalid'
-  kind: 'discussion' | 'work_request' | null
+  // UI-04c(D-86). `profile_change` 는 업무 단계의 목적·유형 변경 요청이다.
+  kind: 'discussion' | 'work_request' | 'profile_change' | null
   profile: string | null
   applied: boolean
   refusal: string | null
   recorded_at: string
   evaluated_at: string | null
+  objectives_json?: string | null
+}
+
+// UI-04c(D-86). 업무 단계 Case 의 Profile 개정 한 건(이력). 되돌림도 또 하나의 개정이다.
+export interface ProfileRevision {
+  id: string
+  revision: number
+  from_profile: string
+  from_profile_version: string
+  to_profile: string
+  to_profile_version: string
+  // 개정 뒤 의도 문서에 남는 이전 Profile 의 의미 항목.
+  retained_fields: string[]
+  // 계속 충족해야 하는 이전 목적 의무 — 새 의도 버전의 선언 목적에 합쳐진다.
+  carried_objectives: string[]
+  added_objectives: string[]
+  decided_by: 'person' | 'ai_interpretation'
+  actor: string
+  request_message_id: string | null
+  request_message_seq: number | null
+  interpretation_run_id: string | null
+  reason_summary: string | null
+  intent_version_id_before: string | null
+  intent_version_id_after: string | null
+  created_at: string
+  // 개정 직전 버전의 기준 → 개정 뒤 첫 버전의 같은 키 기준(승계/재검사/대상 없음/대기).
+  criteria_mapping?: CriteriaMappingRow[]
+}
+
+export interface CriteriaMappingRow {
+  key: string
+  summary: string | null
+  relates_to: string | null
+  obligation: string | null
+  before_id: string
+  before_verdict: string | null
+  after: { id: string; verdict: string | null; carried: boolean; obligation: string | null; relates_to: string | null } | null
+  state: 'carried' | 'recheck' | 'no_target' | 'pending'
+}
+
+export interface ProfileRevisionsView {
+  case_id: string
+  profile: string | null
+  profile_version: string | null
+  profile_source: string | null
+  kind: string
+  retained_fields: string[]
+  carried_objectives: string[]
+  revisions: ProfileRevision[]
+  note: string
+}
+
+export const CRITERIA_MAPPING_LABEL: Record<string, string> = {
+  carried: '판정 승계됨',
+  recheck: '재검사 필요(새 버전에서 다시 확인)',
+  no_target: '새 버전에 같은 키 없음(옛 판정은 보존)',
+  pending: '새 버전 대기',
+}
+
+export const profileRevisionApi = {
+  get: (caseId: string) => request<ProfileRevisionsView>(`/api/cases/${caseId}/profile-revisions`),
+
+  // 사람의 개정. **권한·동의·인수가 아니다** — 새 의도 버전이 기존 의도 단계(동의 포함)를 지난다.
+  revise: (
+    caseId: string,
+    profile: string,
+    addedObjectives: string[],
+    keepPreviousObjectives: boolean,
+    reason: string,
+  ) =>
+    request<ProfileRevisionsView>(`/api/cases/${caseId}/profile-revisions`, {
+      method: 'POST',
+      body: JSON.stringify({
+        profile,
+        added_objectives: addedObjectives,
+        keep_previous_objectives: keepPreviousObjectives,
+        actor: 'owner',
+        reason_summary: reason,
+      }),
+    }),
 }
 
 export interface SubmittedMessage {
@@ -2945,7 +3083,12 @@ export const CONVERSATION_REFUSAL_LABEL: Record<string, string> = {
   card_answer_target_missing: '카드 답변의 대상 질문·버전이 없다',
   reference_invalid: '참조한 자료가 이 업무·프로젝트의 것이 아니다',
   case_in_discussion_stage: '아직 준비 단계 대화다 — 업무화가 먼저다',
-  case_not_in_discussion_stage: '이미 업무 단계다 — 목적·유형 변경은 다른 경로다',
+  case_not_in_discussion_stage: '이미 업무 단계다 — 목적·유형 변경은 결정 사항 패널의 개정으로 한다',
+  // UI-04c(D-86). 개정의 거부.
+  case_not_in_work_stage: '아직 준비 단계 대화다 — 처음 Profile 은 업무화가 정한다',
+  profile_definition_not_current: '정의판 v1·Profile 미기록 업무는 개정할 수 없다(D-62)',
+  profile_revision_empty: '같은 Profile 이고 더하는 목적도 없다 — 바꿀 것이 없다',
+  runs_unfinished: '끝나지 않은 실행이 있다 — 끝난 뒤(사람 대기)에 개정한다',
   work_request_invalid: '업무 요청은 이 대화의 사용자 메시지여야 한다',
   work_request_not_stored: '업무 요청 메시지를 PC가 아직 저장하지 않았다',
   work_request_not_current: '그 메시지가 연 요청은 이미 끝났다',
@@ -3109,6 +3252,11 @@ export const INTERPRETATION_REFUSAL_LABEL: Record<string, string> = {
   case_already_closed: '종료된 업무였다',
   work_request_not_current: '그 요청이 이미 끝났다',
   work_request_not_stored: '요청 메시지가 저장되지 않았다',
+  // UI-04c(D-86). 목적·유형 변경 해석이 적용되지 않은 이유.
+  case_not_in_work_stage: '아직 준비 단계였다',
+  profile_definition_not_current: '정의판 v1·미기록 업무라 개정하지 않았다',
+  profile_revision_empty: '바꿀 것이 없었다',
+  runs_unfinished: '끝나지 않은 실행이 있었다',
 }
 
 export const PROFILE_LABEL: Record<string, string> = {
@@ -3119,6 +3267,43 @@ export const PROFILE_LABEL: Record<string, string> = {
   refactoring: '리팩터링',
   maintenance: '유지 보수',
 }
+
+// UI-04c(D-86). 목적 의무의 사람 말 — 모르는 값은 그대로 보인다(지어내지 않는다).
+export function obligationLabel(obligation: string | null | undefined): string {
+  if (!obligation) return '-'
+  return (OBLIGATION_LABEL as Record<string, string>)[obligation] ?? obligation
+}
+
+// Profile 의 각 의무가 어느 Profile 의 것인가 — 개정 폼이 "이전 목적 유지" 의 뜻을 보이는 데 쓴다.
+export const PROFILE_PRIMARY_OBLIGATION: Record<string, string[]> = {
+  feature: ['behavior'],
+  defect_fix: ['restoration'],
+  root_cause_analysis: ['cause'],
+  research: ['answer'],
+  refactoring: ['improvement', 'preservation'],
+  maintenance: ['target_state'],
+}
+
+export const PROFILE_SOURCE_LABEL: Record<string, string> = {
+  explicit: '요청에 지정',
+  derived_from_kind: 'kind 에서 유도(사람의 선택 아님)',
+  not_recorded: '기록되지 않음(R1 이전)',
+  work_start: '업무화 때 정함',
+  not_yet_decided: '아직 정하지 않음(준비 단계)',
+  revised: '업무 단계에서 개정함(D-86)',
+}
+
+// UI-04c(D-88). 예산 지표의 사람 말·시간 표시는 순수 모듈에 있다(시험이 그것을 본다).
+export {
+  BUDGET_METRIC_LABEL,
+  BUDGET_METRIC_NOTE,
+  DEFAULT_TIME_METRIC,
+  formatSeconds,
+  metricLabel,
+  orderMetrics,
+  TIME_METRICS,
+  timeSummary,
+} from './lib/budget'
 
 export const shellApi = {
   projects: () => request<ProjectWithAttention[]>('/api/projects'),

@@ -19,7 +19,7 @@ from domain import ids
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 
 def utc_now() -> str:
@@ -507,6 +507,38 @@ def migrate(conn: sqlite3.Connection) -> None:
     #      바꾸지 않고 데이터 이행도 없다** — 옛 DB 의 프로젝트는 설정 행이 없고 그것은 "설정 없음 =
     #      시스템 기본값" 이다. 기존 Case 의 정책·예산 행에 프로젝트 기본값을 지어 넣지 않는다.
 
+    # v26: 활성 목적·Profile 이행(UI-04c, D-86)과 작업 PC 열기(D-89). 표 둘(`case_profile_revision`·
+    #      `workspace_open_request`)은 schema.sql 이 만들고 여기서는 둘을 바꾼다.
+    #
+    #      `intent_version.profile/profile_version/retained_fields_json`  **버전별** Profile 과 유지 항목.
+    #                                 지금까지 Case 행만 봤는데, 개정 뒤에는 옛 버전이 새 Profile 의 항목을
+    #                                 빠뜨린 문서로 읽힌다. 옛 행은 **그 Case 의 현재 Profile 로 채운다** —
+    #                                 개정 경로가 없었으므로 만들 때의 값과 같다(당시 사실). Profile 미기록
+    #                                 Case 는 NULL 그대로. 유지 항목은 NULL(= 0건).
+    #      `conversation_interpretation`  `kind` 에 `profile_change`, `objectives_json` 컬럼(표 재구성, 행 보존).
+    for column, ddl in (
+        ("profile", "TEXT"),
+        ("profile_version", "TEXT"),
+        (
+            "retained_fields_json",
+            "TEXT CHECK (retained_fields_json IS NULL OR length(retained_fields_json) <= 400)",
+        ),
+    ):
+        _add_column_if_missing(conn, "intent_version", column, ddl)
+    conn.execute(
+        "UPDATE intent_version SET profile = (SELECT c.profile FROM \"case\" c WHERE c.id = case_id),"
+        " profile_version = (SELECT c.profile_version FROM \"case\" c WHERE c.id = case_id)"
+        " WHERE profile IS NULL AND profile_version IS NULL"
+        " AND EXISTS (SELECT 1 FROM \"case\" c WHERE c.id = case_id AND c.profile IS NOT NULL)"
+    )
+    _add_column_if_missing(
+        conn,
+        "conversation_interpretation",
+        "objectives_json",
+        "TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200)",
+    )
+    _migrate_v26_interpretation(conn)
+
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None
     if current is None or current < SCHEMA_VERSION:
@@ -547,6 +579,41 @@ def _migrate_v24_knowledge_intake(conn: sqlite3.Connection) -> None:
     if row is None or "'evidence'" in (row["sql"] or ""):
         return
     _rebuild_table(conn, "knowledge_intake", KNOWLEDGE_INTAKE_V24_DDL.strip(), "v24")
+
+
+#: v26 의 `conversation_interpretation`. v19 의 표에 `profile_change` 종류와 `objectives_json`(맨 뒤 — 옛 행을
+#: `SELECT *` 로 옮기려면 컬럼 순서가 같아야 한다)이 더해졌다. schema.sql 의 DDL 과 같다.
+CONVERSATION_INTERPRETATION_V26_DDL = """
+CREATE TABLE IF NOT EXISTS conversation_interpretation (
+    run_id             TEXT PRIMARY KEY REFERENCES run(run_id),
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    request_id         TEXT NOT NULL REFERENCES conversation_request(id),
+    opening_message_id TEXT NOT NULL REFERENCES conversation_message(id),
+    report_status      TEXT NOT NULL CHECK (report_status IN ('reported', 'missing', 'invalid')),
+    kind               TEXT CHECK (kind IS NULL OR kind IN ('discussion', 'work_request', 'profile_change')),
+    profile            TEXT CHECK (profile IS NULL OR profile IN
+                           ('feature', 'defect_fix', 'root_cause_analysis', 'research',
+                            'refactoring', 'maintenance')),
+    applied            INTEGER NOT NULL DEFAULT 0 CHECK (applied IN (0, 1)),
+    refusal            TEXT CHECK (refusal IS NULL OR length(refusal) <= 64),
+    recorded_at        TEXT NOT NULL,
+    evaluated_at       TEXT,
+    objectives_json    TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200),
+    CHECK (applied = 0 OR (report_status = 'reported' AND kind IN ('work_request', 'profile_change')
+                           AND profile IS NOT NULL AND evaluated_at IS NOT NULL))
+)
+"""
+
+
+def _migrate_v26_interpretation(conn: sqlite3.Connection) -> None:
+    """UI-04c. `conversation_interpretation` 의 `kind` CHECK 에 `profile_change` 를 더한다(표 재구성, 행
+    보존). 이미 그 값이 있으면 아무 것도 하지 않는다(멱등)."""
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_interpretation'"
+    ).fetchone()
+    if row is None or "'profile_change'" in (row["sql"] or ""):
+        return
+    _rebuild_table(conn, "conversation_interpretation", CONVERSATION_INTERPRETATION_V26_DDL.strip(), "v26")
 
 
 def _sql_list(values: Iterable[str]) -> str:

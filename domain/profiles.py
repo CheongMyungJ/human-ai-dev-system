@@ -21,6 +21,7 @@ Case 가 작성해야 하는 문서 세트"가 아니다.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -440,24 +441,66 @@ def current(profile: CaseProfile | str) -> ProfileDefinition:
     return resolve(CaseProfile(profile).value, CURRENT_PROFILE_VERSION)
 
 
-def required_fields(profile: str | None, version: str | None) -> frozenset[str]:
+#: 의미 항목 → 그 항목을 가진 Profile(UI-04c, D-86). 값이 전부 다르므로 한 항목은 한 Profile 의 것이다.
+#: 유지 항목(개정 전 Profile 의 의미 항목)에 걸린 기준의 의무를 **그 Profile 의 계약**으로 도출하는 데
+#: 쓴다 — 개정 뒤 계약이 바뀌었다고 `cause_questions` 기준이 갑자기 `restoration` 기준이 되지 않게.
+FIELD_OWNER: dict[str, CaseProfile] = {
+    field.value: d.profile for d in _V1 for field in d.semantic_fields
+}
+
+
+def field_owner(field: str | None) -> CaseProfile | None:
+    """그 항목을 가진 Profile. 공통 여섯 항목·모르는 이름은 `None` 이다."""
+    if field is None:
+        return None
+    return FIELD_OWNER.get(str(field))
+
+
+def retained_fields(
+    previous: Iterable[tuple[str | None, str | None]],
+    current: tuple[str | None, str | None],
+    already: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """개정 뒤에도 문서에 남는 **이전 Profile 의 의미 항목**(UI-04c, D-86).
+
+    `previous` 는 이전 (profile, version) 들(오래된 순), `already` 는 그 전 개정이 이미 유지하던
+    항목이다. 현재 Profile 의 항목과 겹치는 것은 빼고, 순서는 **먼저 유지된 것부터**다 — 화면·
+    문서·지시문이 같은 순서를 보여야 사람이 버전 사이 차이를 눈으로 볼 수 있다.
+    """
+    current_fields = set(field_order(current[0], current[1]))
+    out: list[str] = [f for f in already if f not in current_fields]
+    for profile, version in previous:
+        if profile is None or version is None:
+            continue
+        for field in resolve(profile, version).semantic_fields:
+            if field.value not in current_fields and field.value not in out:
+                out.append(field.value)
+    return tuple(out)
+
+
+def required_fields(
+    profile: str | None, version: str | None, retained: Iterable[str] = ()
+) -> frozenset[str]:
     """그 Case 의 구조 보고가 가져야 하는 항목 이름.
 
     **Profile 이 기록되지 않은 Case 는 공통 여섯 항목이다.** R1 이전에 만들어진
     Case 에 지금의 의미 항목을 요구하면, 그 Case 의 기존 의도 버전이 갑자기 불완전한
     문서가 된다 — 새 규칙의 소급 적용이다(DEVELOPMENT.md 3절).
+
+    `retained` 는 개정(D-86)으로 남은 이전 Profile 의 의미 항목이다. 그 항목이 문서에서
+    빠지면 그것을 가리키던 기준이 대상을 잃는다.
     """
-    if profile is None or version is None:
-        return frozenset(f.value for f in IntentField)
-    return frozenset(resolve(profile, version).required_fields)
+    return frozenset(field_order(profile, version, retained))
 
 
-def field_order(profile: str | None, version: str | None) -> tuple[str, ...]:
-    """표시·검사 순서. 공통 여섯 항목이 먼저 오고 의미 항목이 뒤에 온다."""
+def field_order(
+    profile: str | None, version: str | None, retained: Iterable[str] = ()
+) -> tuple[str, ...]:
+    """표시·검사 순서. 공통 여섯 항목 → 현재 의미 항목 → 유지 항목(개정 전 Profile 의 것)."""
     common = tuple(f.value for f in IntentField)
-    if profile is None or version is None:
-        return common
-    return resolve(profile, version).required_fields
+    base = common if profile is None or version is None else resolve(profile, version).required_fields
+    extra = tuple(f for f in retained if f not in base)
+    return base + extra
 
 
 def completion_contract(

@@ -37,12 +37,19 @@ REVIEW_CRITERIA = (
 
 _FIELD_LIST = "\n".join(f"  - {f.value}" for f in FIELD_ORDER)
 
-def _intent_field_list(profile: str | None, profile_version: str | None) -> str:
+def _intent_field_list(
+    profile: str | None,
+    profile_version: str | None,
+    retained_fields: list[str] | tuple[str, ...] = (),
+) -> str:
     """이 Case 가 채워야 하는 항목 목록(P3-R1).
 
     공통 여섯 항목 다음에 그 목적의 의미 항목이 온다. **Profile 이 없으면 여섯
     항목이다** — R1 이전 Case 의 형식이며, 여기서 현재 Profile 을 기본값으로 채우면
     문서 형식과 제어부의 필수 항목 검사가 어긋난다.
+
+    `retained_fields` 는 개정(D-86)으로 남은 이전 Profile 의 의미 항목이다(UI-04c). 새 문서에도
+    있어야 한다 — 그 항목을 가리키던 기준이 대상을 잃지 않게. 잃지 말고 갱신한다.
     """
     if profile is None or profile_version is None:
         return _FIELD_LIST
@@ -51,14 +58,30 @@ def _intent_field_list(profile: str | None, profile_version: str | None) -> str:
     lines.append(f"  (아래는 {profile} 업무에서 반드시 구별해 적을 내용이다)")
     for field in definition.semantic_fields:
         lines.append(f"  - {field.value} — {profiles.FIELD_LABEL[field.value]}")
+    retained = [f for f in retained_fields if f not in definition.required_fields]
+    if retained:
+        lines.append(
+            "  (아래는 **이전 목적에서 이어지는 항목**이다 — 직전 초안의 내용을 잃지 말고 갱신한다."
+            " 이 항목을 가리키는 기준도 그대로 유지한다)"
+        )
+        for name in retained:
+            lines.append(f"  - {name} — {profiles.FIELD_LABEL.get(name, name)}")
     return "\n".join(lines)
 
 
-def _intent_profile_note(profile: str | None, profile_version: str | None) -> str:
+def _intent_profile_note(
+    profile: str | None,
+    profile_version: str | None,
+    revision: dict[str, Any] | None = None,
+) -> str:
     """그 목적의 의미와 **초안에서 고정하지 않는 것.**
 
     뒤쪽이 중요하다. 목적에 맞지 않는 내용을 요구하면 AI 가 빈칸을 채우려고 없는
     사실을 만든다(case-profiles 2절 "사용자에게 빈칸을 채우게 하지 않는다").
+
+    `revision` 은 개정(D-86, UI-04c)의 사실이다 — 이전 Profile, 계속 충족해야 하는 목적, 직전
+    버전의 기준(키·의무). 계약이 바뀌어도 이전 목적이 사라지지 않게, 같은 키의 기준은 같은
+    obligation 을 적게 한다.
     """
     if profile is None or profile_version is None:
         return ""
@@ -70,7 +93,35 @@ def _intent_profile_note(profile: str | None, profile_version: str | None) -> st
     )
     if d.completion is not None:
         note += _completion_contract_note(d.completion)
+    if revision:
+        note += _revision_note(revision)
     return note
+
+
+def _revision_note(revision: dict[str, Any]) -> str:
+    """개정(D-86)된 업무의 의도 재작성 지시. 이전 목적·기준을 **잃지 않는다**."""
+    carried = [str(o) for o in revision.get("carried_objectives") or []]
+    lines = [
+        "\n**이 업무는 목적·유형이 개정됐다**"
+        f"(이전 {revision.get('from_profile') or '?'} → 지금 {revision.get('to_profile') or '?'};"
+        f" 사유: {revision.get('reason_summary') or '-'}).",
+        "직전 초안(고정 컨텍스트)의 항목·기준을 잃지 말고 새 목적의 항목·기준을 **더한다**.",
+    ]
+    if carried:
+        lines.append(
+            "이전 목적 "
+            + ", ".join(f"{o}({profiles.OBLIGATION_LABEL.get(o, o)})" for o in carried)
+            + " 은 계속 충족해야 한다 — objectives 에 넣고 그 의무의 기준을 그대로 둔다."
+        )
+    previous = revision.get("previous_criteria") or []
+    if previous:
+        lines.append("직전 버전의 기준(키 · 연결 항목 · 의무). 같은 키는 같은 obligation 으로 적는다:")
+        for c in previous:
+            lines.append(
+                f"  - {c.get('key')} · {c.get('relates_to')} · {c.get('obligation') or '-'}"
+                f" · {c.get('summary') or ''}"
+            )
+    return "\n".join(lines) + "\n"
 
 
 #: 목적 의무의 설명. 지시문과 화면이 같은 뜻을 쓰도록 정의의 이름표를 그대로 쓴다.
@@ -345,6 +396,42 @@ DISCUSSION_INTERPRETATION_RULE = """이 대화는 아직 **준비 단계**다(�
 - 업무 요청인지 애매하면 "discussion" 으로 두고 글에서 무엇을 하면 되는지 묻는다.
 - "work_request" 로 적으면 글에 이해한 목표·범위·제약을 짧게 정리한다. 이 실행에서
   작업을 시작했거나 끝냈다고 말하지 않는다(규칙 2).
+
+"""
+
+#: UI-04c(D-86). **업무 단계 대화**의 논의 응답에 붙이는 해석 규칙.
+#:
+#: 준비 단계 규칙(UI-03)과 같은 자리·같은 이유다 — 시스템은 본문을 읽지 않으므로 "같은 문제의 목적을
+#: 더하거나 유형을 바꾸라는 요청인가"를 AI 가 답 끝에 구조로 남긴다. 규칙이 좁은 이유도 같다(오판의
+#: 비용이 비대칭 — 개정은 의도를 다시 쓰고 준비·그래프를 낡게 만든다). **이 블록은 위임이 아니다** —
+#: 근거는 사용자의 메시지 원문이고, 개정은 이전 목적을 유지하며 되돌림은 또 하나의 개정이다.
+WORK_STAGE_INTERPRETATION_RULE = """이 대화는 **업무 진행 중**이다(목표·업무 유형이 정해져 있다). 답 글을 다 쓴 뒤 맨 끝에
+시스템이 읽는 블록을 **정확히 하나** 붙인다. 이 블록은 사람에게 보이지 않는다.
+
+```hads-interpretation
+{"kind": "discussion"}
+```
+
+사용자의 **마지막 메시지**가 **같은 문제**에 대해 목적을 더하거나(예: 원인 분석 중 "수정까지 해줘")
+업무 유형을 바꾸라고 **명시적으로** 요청할 때만 kind 를 "profile_change" 로 하고 profile 을 아래 여섯
+중 하나로, objectives 에 더해지는 목적 의무를 적는다(없으면 빈 목록).
+
+  feature              새 기능·동작을 더한다              (의무 behavior)
+  defect_fix           잘못된 동작을 고친다              (의무 restoration)
+  root_cause_analysis  문제의 원인을 규명한다            (의무 cause)
+  research             조사·분석·비교를 정리한다         (의무 answer)
+  refactoring          동작을 바꾸지 않고 구조를 개선한다 (의무 improvement · preservation)
+  maintenance          의존성·설정·환경 등을 유지 보수한다 (의무 target_state · preservation)
+
+예: {"kind": "profile_change", "profile": "defect_fix", "objectives": ["restoration"]}
+
+해석 규칙:
+- 질문, 설명 요청, 진행 상황 확인, 선택지 동의, "아직 ~하지 마" 같은 제한 표명은 모두
+  "discussion" 이다.
+- **다른 문제**의 새 작업 요청은 "discussion" 으로 두고 글에서 새 대화를 권한다.
+- 애매하면 "discussion" 으로 두고 글에서 무엇을 원하는지 묻는다.
+- "profile_change" 로 적으면 글에 무엇이 더해지는지 짧게 정리한다. 이전 목적은 시스템이 유지한다.
+  이 실행에서 개정했거나 작업을 시작했다고 말하지 않는다(규칙 2).
 
 """
 
@@ -1055,8 +1142,12 @@ def build(
     gate_findings: list[dict[str, Any]] | None = None,
     closed_case: bool = False,
     knowledge_index: dict[str, Any] | None = None,
+    intent_revision: dict[str, Any] | None = None,
 ) -> str:
     """목적별 지시문 + 고정 컨텍스트 + 지시 원문 (+ 이 실행의 작업·지적, P4-05).
+
+    `intent_revision` 은 개정(D-86, UI-04c)된 Case 의 의도 재작성에 제어부가 실어 주는 사실 —
+    유지 항목·유지 목적·이전 Profile·직전 기준. 개정이 없는 Case 는 `None` 이다.
 
     `conversation_stage` 는 **제어부가 정한** 대화 단계다(UI-03). 준비 단계의 논의 응답에만
     해석 규칙을 붙인다 — 업무 단계 응답의 해석은 쓰이지 않는다.
@@ -1095,14 +1186,24 @@ def build(
         # **P3-R1: 항목 목록과 목적 설명을 Profile 로 채운다.** 지시문을 Profile 마다
         # 따로 두지 않는 이유는 규칙(출처·미정·기준·수준)이 같기 때문이고, 다른 것은
         # "무엇을 구별해 적는가"뿐이다(case-profiles 2절).
+        retained = list((intent_revision or {}).get("retained_fields") or [])
         head = head.replace(
-            "{FIELD_LIST}", _intent_field_list(profile, profile_version)
-        ).replace("{PROFILE_NOTE}", _intent_profile_note(profile, profile_version))
+            "{FIELD_LIST}", _intent_field_list(profile, profile_version, retained)
+        ).replace(
+            "{PROFILE_NOTE}", _intent_profile_note(profile, profile_version, intent_revision)
+        )
     if purpose == "discussion_reply" and conversation_stage == "discussion":
         if DISCUSSION_REPLY_TAIL not in head:
             raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
         head = head.replace(
             DISCUSSION_REPLY_TAIL, DISCUSSION_INTERPRETATION_RULE + DISCUSSION_REPLY_TAIL
+        )
+    elif purpose == "discussion_reply" and conversation_stage == "work" and not closed_case:
+        # UI-04c(D-86). 업무 단계의 논의 응답 — 같은 문제의 목적 확장·유형 변경만 구조로 남긴다.
+        if DISCUSSION_REPLY_TAIL not in head:
+            raise ValueError("논의 지시문의 마지막 줄을 찾지 못했다")
+        head = head.replace(
+            DISCUSSION_REPLY_TAIL, WORK_STAGE_INTERPRETATION_RULE + DISCUSSION_REPLY_TAIL
         )
     elif purpose == "discussion_reply" and closed_case:
         # P4-05. 종료된 업무의 설명 응답. 준비 단계 규칙과 같은 자리에 종료 규칙이 들어간다.
@@ -1183,6 +1284,7 @@ def parse_intent_draft(
     text: str,
     profile: str | None = None,
     profile_version: str | None = None,
+    retained_fields: list[str] | tuple[str, ...] = (),
 ) -> tuple[
     dict[str, Any],
     list[dict[str, Any]],
@@ -1213,8 +1315,8 @@ def parse_intent_draft(
     fields: dict[str, Any] = {}
     # **P3-R1: 항목 목록은 Profile 이 정한다.** 빠진 항목은 여기서 만들어 내지 않고
     # 빈 항목으로 남겨 `compose` 가 `undecided` 로 적는다 — 그래야 QG-01 이 "무엇이
-    # 비었는가"를 볼 수 있다.
-    for name in profiles.field_order(profile, profile_version):
+    # 비었는가"를 볼 수 있다. 유지 항목(D-86)도 같은 목록에 있다.
+    for name in profiles.field_order(profile, profile_version, tuple(retained_fields)):
         given = raw_fields.get(name) or {}
         if isinstance(given, str):  # 문자열만 준 경우도 받아들이되 출처는 추정하지 않는다
             given = {"text": given}

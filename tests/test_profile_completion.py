@@ -932,7 +932,9 @@ def test_the_v5_document_reports_enumerations_only():
         objectives=["cause", "cause"],
     )
     doc = json.loads(body)
-    assert doc["doc_version"] == 5
+    # v5 가 목적 의무를 넣었고 v6(UI-04c) 이 유지 항목을 더했다 — 여기서 보는 것은 v5 의 열거값 규칙이다.
+    assert doc["doc_version"] == intent_doc.DOC_VERSION >= 5
+    assert doc["retained_fields"] == []
     assert doc["objectives"] == ["cause"]
     # 도출값은 문서에 쓰지 않는다 — "원문이 명시했다"와 구별되지 않게 되기 때문이다.
     assert "obligation" not in doc["criteria"][0]

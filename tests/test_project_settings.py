@@ -372,7 +372,8 @@ def test_a_v24_database_gets_no_project_setting_it_never_had(tmp_path):
     tables = {r["name"] for r in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert "project_setting" in tables
     assert conn.execute("SELECT COUNT(*) AS n FROM project_setting").fetchone()["n"] == 0
-    assert conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"] == 25
+    # v25 가 표를 더했고 그 뒤 판(v26 …)이 이어진다 — 이 시험이 보는 것은 v25 의 사실이다.
+    assert conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()["v"] == db.SCHEMA_VERSION >= 25
     columns = {c["name"] for c in conn.execute('PRAGMA table_info("project_setting")')}
     assert not columns & {"content", "body", "text", "raw", "payload"}
     from controller.repository import Repository

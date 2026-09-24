@@ -1352,6 +1352,9 @@ class ProfileSource(str, Enum):
     #: UI-01. **조회에서만 쓰는 도출값이다**(저장하지 않는다). 준비 단계 대화는 Profile 이
     #: 아직 없다 — `not_recorded`(R1 이전의 기록되지 않은 과거)와 뜻이 반대다.
     NOT_YET_DECIDED = "not_yet_decided"
+    #: UI-04c. **업무 단계에서 개정했다**(D-86). 누가·무엇에서·무엇으로·어떤 목적을 유지하며
+    #: 바꿨는지는 `case_profile_revision` 에 있다. 이전 의도 버전·기준·판정은 그대로다.
+    REVISED = "revised"
 
 
 class Autonomy(str, Enum):
@@ -2016,6 +2019,16 @@ class ConversationRefusal(str, Enum):
     RUN_ALREADY_FINISHED = "run_already_finished"
     #: UI-02. 잔류 재확인은 확인되지 않은 실행이 있는 `unknown` 요청에만 한다.
     REQUEST_NOT_UNKNOWN = "request_not_unknown"
+    #: UI-04c(D-86). 준비 단계 Case 의 Profile 을 개정하려 했다. 최초 배정은 업무화(`work-start`)다.
+    CASE_NOT_IN_WORK_STAGE = "case_not_in_work_stage"
+    #: UI-04c. Profile 미기록·정의판 v1 Case 는 개정하지 않는다 — 완료 계약 없는 Case 에 v2 규칙이
+    #: 들어간다(D-62).
+    PROFILE_DEFINITION_NOT_CURRENT = "profile_definition_not_current"
+    #: UI-04c. 같은 Profile 에 추가 목적도 없다 — 바꿀 것이 없다.
+    PROFILE_REVISION_EMPTY = "profile_revision_empty"
+    #: UI-04c. 끝나지 않은 실행이 있다. 그 실행의 고정 문맥·결과가 어느 버전의 것인지 모호해지지
+    #: 않게 끝난 뒤(사람 대기)에 개정한다.
+    RUNS_UNFINISHED = "runs_unfinished"
 
 
 # ===================================================================== UI-03
@@ -2027,12 +2040,15 @@ class ConversationRefusal(str, Enum):
 class InterpretationKind(str, Enum):
     """논의 응답을 쓴 AI 가 사용자의 마지막 메시지를 어떻게 읽었는가(D-69).
 
-    `DISCUSSION`   논의·질문·선택 동의·금지 표명. 업무화하지 않는다
-    `WORK_REQUEST` 구체적인 작업 수행을 **명시적으로** 요청했다. 같은 Case 에서 업무화한다
+    `DISCUSSION`     논의·질문·선택 동의·금지 표명. 업무화하지 않는다
+    `WORK_REQUEST`   구체적인 작업 수행을 **명시적으로** 요청했다. 같은 Case 에서 업무화한다
+    `PROFILE_CHANGE` UI-04c(D-86). **업무 단계**에서 같은 문제의 목적을 더하거나 유형을 바꾸라고
+                     명시적으로 요청했다. 같은 Case 의 Profile 을 개정한다(이전 목적은 유지)
     """
 
     DISCUSSION = "discussion"
     WORK_REQUEST = "work_request"
+    PROFILE_CHANGE = "profile_change"
 
 
 class InterpretationStatus(str, Enum):

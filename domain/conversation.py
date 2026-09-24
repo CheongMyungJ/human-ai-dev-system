@@ -23,6 +23,7 @@ from domain.models import (
     CaseProfile,
     CaseStage,
     ConversationRefusal,
+    CriterionObligation,
     InterpretationKind,
     InterpretationRefusal,
     InterpretationStatus,
@@ -323,6 +324,8 @@ class Interpretation:
     kind: InterpretationKind | None = None
     profile: CaseProfile | None = None
     detail: str = ""
+    #: UI-04c(D-86). `profile_change` 가 더하는 목적 의무(열거값). 없으면 빈 튜플이다.
+    objectives: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         out: dict[str, Any] = {"status": self.status.value}
@@ -330,6 +333,8 @@ class Interpretation:
             out["kind"] = self.kind.value
         if self.profile is not None:
             out["profile"] = self.profile.value
+        if self.objectives:
+            out["objectives"] = list(self.objectives)
         if self.detail:
             out["detail"] = self.detail[:200]
         return out
@@ -353,9 +358,27 @@ def parse_interpretation(value: Any) -> Interpretation:
         profile = CaseProfile(value.get("profile"))
     except ValueError:
         return Interpretation(
-            InterpretationStatus.INVALID, kind, detail="work_request needs one of the six profiles"
+            InterpretationStatus.INVALID,
+            kind,
+            detail=f"{kind.value} needs one of the six profiles",
         )
-    return Interpretation(InterpretationStatus.REPORTED, kind, profile)
+    # UI-04c(D-86). 목적 변경은 더하는 목적 의무를 함께 적을 수 있다. **모르는 의무 이름은 형식
+    # 오류다** — 조용히 버리면 그 목적이 사라진 채 개정된다.
+    objectives: list[str] = []
+    raw = value.get("objectives")
+    if raw is not None:
+        if not isinstance(raw, list):
+            return Interpretation(InterpretationStatus.INVALID, kind, detail="objectives is not a list")
+        for item in raw:
+            try:
+                name = CriterionObligation(str(item)).value
+            except ValueError:
+                return Interpretation(
+                    InterpretationStatus.INVALID, kind, detail=f"unknown objective: {item!s}"[:200]
+                )
+            if name not in objectives:
+                objectives.append(name)
+    return Interpretation(InterpretationStatus.REPORTED, kind, profile, objectives=tuple(objectives))
 
 
 def interpretation_from_report(report: Any) -> Interpretation:
@@ -413,7 +436,12 @@ def interpretation_refusal(
     """
     if interpretation.status is not InterpretationStatus.REPORTED:
         return InterpretationRefusal.NOT_REPORTED
-    if interpretation.kind is not InterpretationKind.WORK_REQUEST:
+    # UI-04c. `profile_change`(업무 단계의 목적·유형 변경, D-86)도 시도한다 — 그 조건(업무 단계·
+    # 저장된 메시지·완료된 실행)은 `revise_profile` 이 본다.
+    if interpretation.kind not in (
+        InterpretationKind.WORK_REQUEST,
+        InterpretationKind.PROFILE_CHANGE,
+    ):
         return InterpretationRefusal.NOT_A_WORK_REQUEST
     if reply_outcome != RunOutcome.COMPLETED.value:
         return InterpretationRefusal.REPLY_NOT_COMPLETED

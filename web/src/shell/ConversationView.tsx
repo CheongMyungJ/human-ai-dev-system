@@ -319,26 +319,40 @@ export function ConversationView(props: {
                   onChanged={props.onChanged}
                 />
               )}
-              {interp && (interp.kind === 'work_request' || interp.report_status === 'invalid') && (
+              {interp && (interp.kind === 'work_request' || interp.kind === 'profile_change' || interp.report_status === 'invalid') && (
                 <p className="sh-system-line" data-testid="interpretation-line">
                   AI 해석:{' '}
                   {interp.kind === 'work_request'
                     ? `업무 요청(${PROFILE_LABEL[interp.profile ?? ''] ?? interp.profile ?? '?'})`
-                    : '형식이 맞지 않음'}
+                    : interp.kind === 'profile_change'
+                      ? `목적·유형 변경 요청(${PROFILE_LABEL[interp.profile ?? ''] ?? interp.profile ?? '?'})`
+                      : '형식이 맞지 않음'}
                   {interp.applied
-                    ? ' → 같은 대화에서 업무로 전환'
+                    ? interp.kind === 'profile_change'
+                      ? ' → 같은 대화에서 개정'
+                      : ' → 같은 대화에서 업무로 전환'
                     : interp.refusal
-                      ? ` → 전환하지 않음(${INTERPRETATION_REFUSAL_LABEL[interp.refusal] ?? interp.refusal})`
+                      ? ` → ${interp.kind === 'profile_change' ? '개정하지 않음' : '전환하지 않음'}(${INTERPRETATION_REFUSAL_LABEL[interp.refusal] ?? interp.refusal})`
                       : ''}
                 </p>
               )}
               {conv.work_start?.request_message_id === message.id && (
                 <WorkStartCard conv={conv} basisSeq={message.seq} />
               )}
+              {(conv.profile_revisions ?? [])
+                .filter((r) => r.request_message_id === message.id)
+                .map((r) => (
+                  <ProfileRevisionCard key={r.id} revision={r} basisSeq={message.seq} />
+                ))}
               {opened && opened.id !== current?.id && <RequestOutcome request={opened} />}
             </div>
           )
         })}
+        {(conv.profile_revisions ?? [])
+          .filter((r) => !r.request_message_id)
+          .map((r) => (
+            <ProfileRevisionCard key={r.id} revision={r} basisSeq={null} />
+          ))}
         <KnowledgeCandidateCards
           registrations={conv.knowledge_registrations ?? []}
           projectId={props.project.id}
@@ -434,6 +448,22 @@ function WorkStartCard(props: { conv: ConversationData; basisSeq: number }) {
         결정 주체: {work.decided_by === 'ai_interpretation' ? 'AI 해석(사용자 메시지를 근거로)' : '사람'}
         {work.started_at ? ` · ${time(work.started_at)}` : ''} · 위임 근거: 메시지 #{props.basisSeq} 원문. 논의
         중의 동의·금지·소비는 그대로 이어진다.
+      </div>
+    </div>
+  )
+}
+
+// UI-04c(D-86). 목적·유형 변경 표식 — 근거 메시지 뒤(AI 해석) 또는 목록 끝(사람의 개정, 근거 메시지 없음).
+function ProfileRevisionCard(props: { revision: NonNullable<ConversationData['profile_revisions']>[number]; basisSeq: number | null }) {
+  const r = props.revision
+  return (
+    <div className="sh-card sh-card-event" data-testid={`profile-revision-marker-${r.revision}`} data-to={r.to_profile}>
+      <strong>목적·유형 변경됨</strong> · {PROFILE_LABEL[r.from_profile] ?? r.from_profile} → {PROFILE_LABEL[r.to_profile] ?? r.to_profile}
+      {r.carried_objectives.length > 0 && ' (이전 목적 유지)'}
+      <div className="sh-muted">
+        결정 주체: {r.decided_by === 'ai_interpretation' ? 'AI 해석(사용자 메시지를 근거로)' : '사람'} · {time(r.created_at)}
+        {props.basisSeq !== null ? ` · 근거: 메시지 #${props.basisSeq} 원문` : r.reason_summary ? ` · 사유: ${r.reason_summary}` : ''}
+        . 이전 기준·판정·결정·소비는 그대로이고 의도가 새 버전으로 다시 쓰인 뒤 동의를 기다린다.
       </div>
     </div>
   )

@@ -1716,7 +1716,8 @@ CREATE TABLE IF NOT EXISTS conversation_interpretation (
     request_id         TEXT NOT NULL REFERENCES conversation_request(id),
     opening_message_id TEXT NOT NULL REFERENCES conversation_message(id),
     report_status      TEXT NOT NULL CHECK (report_status IN ('reported', 'missing', 'invalid')),
-    kind               TEXT CHECK (kind IS NULL OR kind IN ('discussion', 'work_request')),
+    -- v26(UI-04c, D-86): `profile_change` — 업무 단계의 목적·유형 변경 요청. 옛 DB 는 표를 다시 만든다.
+    kind               TEXT CHECK (kind IS NULL OR kind IN ('discussion', 'work_request', 'profile_change')),
     profile            TEXT CHECK (profile IS NULL OR profile IN
                            ('feature', 'defect_fix', 'root_cause_analysis', 'research',
                             'refactoring', 'maintenance')),
@@ -1724,7 +1725,9 @@ CREATE TABLE IF NOT EXISTS conversation_interpretation (
     refusal            TEXT CHECK (refusal IS NULL OR length(refusal) <= 64),
     recorded_at        TEXT NOT NULL,
     evaluated_at       TEXT,
-    CHECK (applied = 0 OR (report_status = 'reported' AND kind = 'work_request'
+    -- v26: `profile_change` 가 더하는 목적 의무(열거값 목록). 본문이 아니다.
+    objectives_json    TEXT CHECK (objectives_json IS NULL OR length(objectives_json) <= 200),
+    CHECK (applied = 0 OR (report_status = 'reported' AND kind IN ('work_request', 'profile_change')
                            AND profile IS NOT NULL AND evaluated_at IS NOT NULL))
 );
 
@@ -2061,3 +2064,74 @@ CREATE TABLE IF NOT EXISTS project_setting (
 
 CREATE INDEX IF NOT EXISTS idx_project_setting_current
     ON project_setting(project_id, setting_key, state);
+
+-- ===================================================================
+-- 스키마 v26 (UI-04c) — 활성 목적·Profile 이행(D-86), 작업 PC 열기 요청(D-89)
+--
+-- 새 표 둘. `intent_version` 의 버전별 Profile·유지 항목 컬럼 셋과 `conversation_interpretation` 의
+-- `profile_change`·`objectives_json` 은 `controller/db.py` 가 더한다(옛 DB 의 의도 버전에는 그 Case 의
+-- Profile 을 채운다 — 개정 경로가 없었으므로 당시에 참이었던 사실이다. Profile 미기록 Case 는 NULL).
+--
+-- 지키는 것: 개정은 이력이며 이전 의도 버전·기준·판정·결정·예약·시도 수·위임 근거·확인 지점을 바꾸지
+-- 않는다. 개정·열기 요청은 권한·동의·인수가 아니다. 본문 컬럼은 여전히 `knowledge_body` 에만 있다.
+-- ===================================================================
+
+-- 업무 단계 Case 의 Profile 개정(D-86). 한 Case 에 여러 행(개정 순), 되돌림도 또 하나의 개정이다.
+CREATE TABLE IF NOT EXISTS case_profile_revision (
+    id                       TEXT PRIMARY KEY,
+    case_id                  TEXT NOT NULL REFERENCES "case"(id),
+    revision                 INTEGER NOT NULL,
+    from_profile             TEXT NOT NULL,
+    from_profile_version     TEXT NOT NULL,
+    to_profile               TEXT NOT NULL CHECK (to_profile IN
+                                 ('feature', 'defect_fix', 'root_cause_analysis', 'research',
+                                  'refactoring', 'maintenance')),
+    to_profile_version       TEXT NOT NULL,
+    -- 개정 뒤 의도 문서에 남는 이전 Profile 의 의미 항목(이름 목록). 그 항목을 가리키던 기준이 대상을 잃지 않는다.
+    retained_fields_json     TEXT NOT NULL,
+    -- 계속 충족해야 하는 이전 목적 의무(열거값 목록). 새 의도 버전의 선언 목적에 합쳐진다.
+    carried_objectives_json  TEXT NOT NULL,
+    -- 이 개정이 더한 목적 의무(열거값 목록).
+    added_objectives_json    TEXT NOT NULL,
+    decided_by               TEXT NOT NULL CHECK (decided_by IN ('person', 'ai_interpretation')),
+    actor                    TEXT NOT NULL,
+    -- 근거: 사용자 메시지(AI 해석이면 필수) 또는 사람의 사유. 해석 글은 근거가 아니다.
+    request_message_id       TEXT REFERENCES conversation_message(id),
+    interpretation_run_id    TEXT REFERENCES run(run_id),
+    reason_summary           TEXT,
+    -- 개정 시점의 최신 의도 버전(그 버전의 기준과 새 버전의 기준을 대응해 보인다). 없을 수 있다.
+    intent_version_id_before TEXT REFERENCES intent_version(id),
+    created_at               TEXT NOT NULL,
+    UNIQUE (case_id, revision),
+    CHECK (length(retained_fields_json) <= 400),
+    CHECK (length(carried_objectives_json) <= 200),
+    CHECK (length(added_objectives_json) <= 200),
+    CHECK (reason_summary IS NULL OR length(reason_summary) <= 200),
+    CHECK (decided_by != 'ai_interpretation' OR (request_message_id IS NOT NULL AND interpretation_run_id IS NOT NULL))
+);
+
+CREATE INDEX IF NOT EXISTS idx_case_profile_revision_case ON case_profile_revision(case_id, revision);
+
+-- 작업 PC 에서 작업공간 폴더·편집기를 열어 달라는 요청(D-89). 경로는 `case_workspace` 행의 것이며
+-- 브라우저가 주지 않는다. Runner 가 heartbeat 제어로 받아 **자기 worktree 만** 열고 결과를 적는다.
+-- 60초 안에 전달되지 않으면 만료된다(뒤늦게 재시작한 Runner 가 옛 요청을 열지 않게).
+CREATE TABLE IF NOT EXISTS workspace_open_request (
+    id             TEXT PRIMARY KEY,
+    case_id        TEXT NOT NULL REFERENCES "case"(id),
+    repository_id  TEXT NOT NULL,
+    runner_id      TEXT NOT NULL REFERENCES runner(id),
+    target         TEXT NOT NULL CHECK (target IN ('folder', 'editor')),
+    requested_by   TEXT NOT NULL,
+    state          TEXT NOT NULL CHECK (state IN ('pending', 'done', 'failed', 'expired')),
+    -- 실패·만료의 짧은 사유 코드. 경로·명령줄·프로세스 정보는 적지 않는다.
+    result_reason  TEXT,
+    requested_at   TEXT NOT NULL,
+    delivered_at   TEXT,
+    finished_at    TEXT,
+    CHECK (result_reason IS NULL OR length(result_reason) <= 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_open_request_runner
+    ON workspace_open_request(runner_id, state, requested_at);
+CREATE INDEX IF NOT EXISTS idx_workspace_open_request_case
+    ON workspace_open_request(case_id, repository_id, requested_at);

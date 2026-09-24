@@ -112,6 +112,10 @@ class SettleSource(str, Enum):
     #: P4-04. Runner 가 재시작 뒤 **자기 원시 출력에서** 되찾은 사용량이다. 어댑터가
     #: 결과로 보고한 값과 출처가 같지만(같은 CLI 출력) 경로가 다르므로 구분해 둔다.
     RECOVERED_FROM_RUNNER_LOG = "recovered_from_runner_log"
+    #: UI-04c(D-88). 재배정으로 **옛 세대**가 된 예약이다. 그 호출이 언제 끝났는지(끝났는지)는
+    #: 모르므로 재배정 시점까지 관측한 값으로 `unresolved` 에 둔다 — 벽시계로 계속 자라게 두면
+    #: 실행시간 합계가 거짓이 되고, 0 으로 풀면 있었던 호출이 공짜가 된다(P3-R3 7절).
+    REASSIGNED = "reassigned"
 
 
 #: 사용량 묶음에 이 표시가 있으면 Runner 가 재시작 뒤 원시 출력에서 되찾은 값이다.
@@ -148,8 +152,11 @@ RESERVATION_REASON: dict[BudgetMetric, str] = {
     BudgetMetric.CONTEXT_BYTES: "제어부가 만들어 전달한 입력 패키지의 크기다."
     " CLI 가 내부에서 더 읽은 자료는 관측 범위 밖이다",
     BudgetMetric.EXECUTION_SECONDS: "끝나야 실제 시간을 안다. 진행 중에는 지금까지의"
-    " 노출만 보이고, 돌고 있는 실행을 초 단위로 끊을 수 없다(P1-03)",
-    BudgetMetric.ELAPSED_SECONDS: "Case 시작부터의 벽시계다. 배정을 멈춰도 줄지 않는다",
+    " 노출만 보이고, 돌고 있는 실행을 초 단위로 끊을 수 없다(P1-03)."
+    " 실행별 배정~종료 시각의 합계다 — 논의·업무·재시도·종료 후 설명 실행 전부, 병렬은 각각,"
+    " 사람의 답변 대기는 실행 밖이라 들어가지 않는다(D-88)",
+    BudgetMetric.ELAPSED_SECONDS: "Case 시작부터의 벽시계다. 배정을 멈춰도 줄지 않는다."
+    " 시간 한도의 기본은 실행시간 합계이며 이것은 별도 선택이다(D-88)",
     BudgetMetric.INPUT_TOKENS: "어댑터가 주면 알고 주지 않으면 모른다. 미제공을 0 으로"
     " 적지 않는다",
     BudgetMetric.OUTPUT_TOKENS: "같음",

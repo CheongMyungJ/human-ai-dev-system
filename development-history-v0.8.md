@@ -318,7 +318,25 @@ R1~R4가 붙인 네 축의 강제는 게시 권한이 아니다. R4는 필수 �
 
 ## 6. 이전 인계 (당시 10절)
 
-S-027 은 S-029 에, S-026 은 S-028 에, S-025 는 S-027 에, S-024 는 S-026 에 옮겼다.
+S-028 은 S-031 에, S-027 은 S-029 에, S-026 은 S-028 에, S-025 는 S-027 에, S-024 는 S-026 에 옮겼다.
+
+### 이전 개발 인계 — S-029 / 2026-09-24 / P4-07b 참고 후보의 자동 활성 조건 표시(반자동) (**완료**, S-031 에 옮김)
+
+- **사용자 요청:** "DEVELOPMENT.md를 읽고 지금 진행할 단계를 수행해줘. plan·검증·인계 절차를 지켜줘." 다음 단계는 1.12절의 **P4-07b**(사용자 결정 2026-09-24, S-028: 반자동)였다.
+- **수행:** 시작 상태(`main`/`6f33867`, clean, `git fetch` 뒤 `origin/main` 과 같음)와 기준선(`scripts\run-tests.ps1` → 웹 빌드·웹 단위 21, pytest **693 통과·2 건너뜀**, P1 계약 18, 10분 38초)을 확인한 뒤 [P4-PLAN-07b](plans/P4-PLAN-07b.md)를 **구현 전에 기록**하고 구현·검증했다. 결과 [P4-07b](p4/evidence/P4-07b-results.md). 기준선 실행의 마지막 15% 쯤(하위 프로세스를 띄우는 시험)은 서버 코드를 고친 뒤 돌았다 — 고친 것이 추가 전용(새 끝점·새 조회 칸)이라 수치는 변경 전 상태로 본다(결과 문서 3절에 적음).
+- **제품 판단:** 새로 내리지 않았다 — 사용자 결정(반자동·S-027 조건 그대로)을 구현했다. 상세 설계 선택(조건 코드 이름·근거 실행 세는 법·화면이 본 것만 활성화·논의 제안의 조건 (4) 불가)은 plan 0·9절.
+- **서버:** `domain/knowledge.py` 의 `AutoReferenceFinding`·`AUTO_REFERENCE_CODES`(여덟)·`auto_reference_check`·`auto_reference_ready`·`auto_reference_summary`·`AUTO_REFERENCE_REASON`; `controller/repository.py` 의 `auto_reference_check_for`·`activate_ready_knowledge`·`activate_knowledge(extra_adoption=)`·`knowledge_view`/`knowledge_registrations_view` 의 `auto_reference`; `controller/api.py` 의 `GET /api/knowledge/{id}/auto-reference`·`POST /api/projects/{id}/knowledge/activate-ready`(`KnowledgeActivateReadyIn`). 스키마·Runner·지시문·진입 검사·권위 코드는 바꾸지 않았다.
+- **화면:** `web/src/api.ts`(형·라벨·`activateReady`), `shell/ProjectRules.tsx`(배지·조건 목록·한 번에 활성화 버튼·결과 줄·`autoReferenceText`), `shell/ProgressCards.tsx`(후보 카드 배지), `KnowledgePanel.tsx`(관리 패널 배지·안내).
+- **기존 시험의 의미 검토:** 기존 시험은 바꾸지 않았다(전부 통과). 새 시험: 순수 1 + 서버 1(`test_knowledge_extraction.py`) + 브라우저 1(`test_web_shell.py`). 서버 시험의 거부 건너뜀(AC-5)은 활성화 함수를 끼워 넣어 봤다(같은 호출 안에서 조건 계산과 채택 확인 사이에 끼어들 실제 경로가 없다).
+- **검증:** 최종 `scripts\run-tests.ps1` → 웹 빌드 성공, 웹 단위 **21**, pytest **696 통과·2 건너뜀·0 실패**(11분 17초, +3 = 순수 1 + 서버 1 + 브라우저 1), P1 계약 **18**, "전체 시험 통과". 새 시험을 따로 돌린 첫 회차에서 셋이 실패했다 — 순수 시험 도우미의 잘못된 단언, 옛 후보 버전에 없는 DB CHECK 를 기대한 서버 시험의 가정, 절이 바뀐 뒤에도 펼쳐진 항목을 다시 접은 브라우저 시험 — 셋 다 시험을 고쳤고 제품은 바꾸지 않았다. 분리 실행한 브라우저 시험의 `-q` 요약 줄이 로그 파일에 찍히지 않아(`.` 100% 는 찍힘) 대기 루프가 멈춰 있었다 — 시험은 통과였고 전체 실행에서 다시 통과했다.
+- **실제 CLI:** 하지 않았다(선택 사항, 결과 문서 3절 — 실제 codex 가 후보에 근거 둘을 만들 근거가 없다).
+- **경계:** 강제 축은 넷 그대로. 조건 충족 표시·한 번에 활성화는 권한·동의·인수·준수가 아니다. 클릭 없는 활성화 경로 없음(`activate_ready_knowledge` 는 API 끝점에서만). 효력 참고만, 필수 승격 없음(DB CHECK). 스키마 v24·원문 경계 그대로(조회에 더한 것은 코드·실행 id·수).
+- **다음 행동:** **UI-04b**(1.11절, 사용자 동의)를 다른 세션에서 새 plan(UI-PLAN-04b)으로. 완료된 plan 을 다시 열지 않는다.
+- **사람에게 물어야 할 것:** (1) 이 세션 작업의 커밋·push 여부 — **사용자의 답(2026-09-24): "커밋푸시해줘 다른세션에서 이어서 작업할게"** → 커밋·push 지시. (2) 조건의 Project 설정화를 UI-04b 상세 설정에 넣을지 — 새 제품 판단이며 UI-04b plan 에서 묻는다(지금은 코드 고정). 완전 자동은 후보가 실제로 쌓이면 다시 묻는다(사용자 결정).
+- **사용자 지시로 한 일:** 작업 보고 뒤 사용자가 커밋·push 를 지시했다. 이 세션 작업을 **`f57c036`** 으로 커밋한 뒤 이 인계 기록을 `2bdfb8a` 로 이어서 커밋해 둘을 함께 `origin/main` 에 push 했다(push 전에 fetch 해 원격이 `6f33867` 그대로임을 확인). 허용은 이 두 커밋에만 적용된다. PR 은 만들지 않았다. **그 뒤 사용자 지시("이미 작업완료되어서 이후 작업에 필요없는것들이 있다면 이전에 정리했던것처럼 정리해줘")로 이 문서를 정리했다** — 사용자가 고른 범위: 머리 문단을 현재 상태 한 단락으로, 1절 표의 "구현 기준"·"남은 상세" 행 축약, 3절 plan 표의 옛 완료 행(P4-PLAN-01~06b·UI-PLAN-01~03) 이동; 분명한 것으로 7행의 커밋 이력·1.2~1.10·1.12 절 합침·2절 5단계 축약. 6절 P4 표와 4절 진행표 근거는 사용자 선택으로 그대로 뒀다. 옮긴 글은 [보존본](development-history-v0.8.md) 1·5절에 글자 그대로 있다(제품 코드·시험 변경 없음, 시험 미실행 — 문서만). 이 정리도 사용자 지시("커밋푸시해줘")로 `2bdfb8a` 뒤에 커밋해 `origin/main` 에 push 했다(커밋은 `git log`). 허용은 그 커밋에만 적용된다.
+- **작업공간:** 시작 `main`/`6f33867` clean. 이 세션의 변경은 `f57c036`(P4-07b)과 인계 기록 커밋으로 `origin/main` 에 push됐다. 새 파일 `plans/P4-PLAN-07b.md`, `p4/evidence/P4-07b-results.md`. 수정 파일 `domain/knowledge.py`, `controller/{api,repository}.py`, `web/src/{api.ts,KnowledgePanel.tsx}`, `web/src/shell/{ProjectRules,ProgressCards}.tsx`, `tests/{test_knowledge_extraction,test_web_shell}.py`, 문서 `DEVELOPMENT.md`·`development-history-v0.8.md`(1.12절·S-027 인계 옮김)·`README.md`·`decisions.md`(D-67 구현 기록)·`project-knowledge.md`(3절)·`quality-gates.md`(QG-08)·`review-acceptance-matrix.md`(AC-32)·`ui-conversation-design.md`(11절). `web/dist` 는 빌드 산출물(`.gitignore`). 줄 끝은 `git ls-files --eol` 로 확인했다(LF). `git status --short` 로 재확인한다.
+- **남은 자원:** 시험이 띄운 제어부·Runner·Edge 는 pytest 가 내렸다. 새 의존성 없음. 세션 시작 시 이 PC 에 사용자의 codex 프로세스(00:54 기동)와 Edge 가 있었고 건드리지 않았다. 라이브 데이터 없음(라이브 미수행). 저장소 `var\` 는 건드리지 않았다.
+- **다음 세션이 이어서 할 때:** 조건은 `domain.knowledge.AUTO_REFERENCE_CODES` 순서로 표시되고 `auto_reference_check_for` 가 사실을 모은다. 한 번에 활성화 버튼은 `ProjectRules.tsx` 의 후보 절 머리(`rules-ready-bar`)에 있다 — 규칙 화면을 설정 화면(UI-04b)으로 옮기면 함께 옮긴다. 서버 시험의 도우미는 `_auto(h, id)`·`_auto_check`·`ALL_AUTO_CODES`, 브라우저 시험의 `_git_repo`·`_run_work_with_candidate`. 분리 실행은 `.cmd` 스크립트로 띄운다(`-k` 표현식).
 
 ### 이전 개발 인계 — S-028 / 2026-09-24 / UI-04a 결정 사항 패널·프로젝트 규칙 화면 (**완료**, S-030 에 옮김)
 

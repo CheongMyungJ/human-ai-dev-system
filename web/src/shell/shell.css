@@ -954,3 +954,17 @@ textarea {
   max-height: 160px;
   overflow-y: auto;
 }
+
+/* UI-04c. 결정 사항 패널의 개정 폼·체크 표시. */
+.sh-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+.sh-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 8px;
+}

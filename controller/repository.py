@@ -998,12 +998,17 @@ class Repository:
         revision = (row["r"] or 0) + 1
         intent_id = ids.new_id("intent")
         now = utc_now()
+        # UI-04c(D-86). **버전은 자기 Profile·유지 항목을 적는다.** 개정 뒤 옛 버전을 새 Profile 의
+        # 항목으로 읽으면 항목이 빠진 문서가 되기 때문이다(문서 자체도 v4 부터 그렇게 적는다).
+        case = self.get_case(case_id)
+        retained = self.retained_intent_fields(case_id)
         with transaction(self.conn):
             # 새 행을 먼저 넣는다. 이전 버전의 superseded_by 가 이 행을 가리키기 때문이다.
             self.conn.execute(
                 "INSERT INTO intent_version (id, case_id, revision, artifact_id, artifact_rev,"
-                " status, created_at, authoring_mode, author_run_id)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " status, created_at, authoring_mode, author_run_id,"
+                " profile, profile_version, retained_fields_json)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     intent_id,
                     case_id,
@@ -1014,6 +1019,9 @@ class Repository:
                     now,
                     authoring_mode.value,
                     author_run_id,
+                    case.get("profile"),
+                    case.get("profile_version"),
+                    json.dumps(list(retained)) if retained else None,
                 ),
             )
             if revision > 1:
@@ -1380,12 +1388,17 @@ class Repository:
         workspace = self.get_workspace(run["case_id"], run.get("repository_id"))
         if workspace is not None and workspace["state"] == WorkspaceState.READY.value:
             run["repo_path"] = workspace["repo_path"] or project["repo_path"]
+            # UI-04c(D-89). 이 저장소의 **직전 실행이 남긴 트리 지문**. Runner 가 CLI 를 부르기 전 관측한
+            # 지문과 대조해 외부 변경(사람의 편집기 등)을 드러낸다 — 제어부는 트리를 보지 못한다.
+            last = self._last_workspace_effect(run["case_id"], workspace["repository_id"])
             run["workspace"] = {
                 "repository_id": workspace["repository_id"],
                 "branch": workspace["branch"],
                 "worktree_path": workspace["worktree_path"],
                 "repo_path": workspace["repo_path"],
                 "base_commit": workspace["base_commit"],
+                "last_tree_digest": last["effect"].get("tree_digest_after") if last else None,
+                "last_effect_run_id": last["run_id"] if last else None,
             }
             run["workspace_path"] = workspace["worktree_path"]
         else:
@@ -1408,6 +1421,14 @@ class Repository:
         # Runner 가 현재 정의로 채우지 않는다(D-62).
         run["case_profile"] = case.get("profile")
         run["case_profile_version"] = case.get("profile_version")
+        # UI-04c(D-86). 개정된 Case 의 유지 항목과, 의도 재작성 실행에 실어 주는 개정 사실(이전 Profile·
+        # 유지 목적·직전 기준의 키·의무·요약). 요약뿐이며 본문은 없다. 개정이 없으면 `None`.
+        run["intent_retained_fields"] = list(self.retained_intent_fields(run["case_id"]))
+        run["intent_revision"] = (
+            self._intent_revision_for_assignment(run["case_id"])
+            if run.get("purpose") == RunPurpose.INTENT_AUTHORING.value
+            else None
+        )
         # 의미 검토의 대상 의도 버전은 지시 원문에서 끌어낸다. 별도 컬럼을 두면
         # 지시와 대상이 어긋날 수 있다.
         target = self.intent_version_for_artifact(
@@ -1581,6 +1602,32 @@ class Repository:
             breaches = self._budget_breaches(run["case_id"], want, now)
             if breaches:
                 raise BudgetExhausted(breaches)
+            # UI-04c(D-88). **옛 세대의 예약을 닫는다** — 재배정 시점까지 관측한 값으로 `unresolved`.
+            # 그 호출이 끝났는지는 모르므로 풀지 않되(과대 쪽 그대로), 열어 두면 시간 행이 새 세대의
+            # `assigned_at` 을 타고 벽시계로 영원히 자라 실행시간 합계가 거짓이 된다. 재배정 자체의
+            # 정산 의미는 P6-03 그대로다.
+            observed = elapsed_seconds(run.get("assigned_at"), now)
+            for row in self.conn.execute(
+                "SELECT * FROM budget_reservation WHERE run_id = ? AND generation = ? AND state = ?",
+                (run_id, run["assignment_generation"], ReservationState.HELD.value),
+            ).fetchall():
+                kind = ReservationKind(row["reservation_kind"])
+                if kind is ReservationKind.OPEN_ENDED_PER_RUN:
+                    actual: float | None = observed
+                else:
+                    actual = None if row["reserved_value"] is None else float(row["reserved_value"])
+                self.conn.execute(
+                    "UPDATE budget_reservation SET actual_value = ?, measurement = ?, state = ?,"
+                    " settle_source = ?, settled_at = ? WHERE id = ?",
+                    (
+                        actual,
+                        measurement_for_settlement(BudgetMetric(row["metric"]), actual).value,
+                        ReservationState.UNRESOLVED.value,
+                        SettleSource.REASSIGNED.value,
+                        now,
+                        row["id"],
+                    ),
+                )
             self.conn.execute(
                 "UPDATE run SET assignment_generation = assignment_generation + 1,"
                 " status = ?, assigned_runner_id = NULL, assigned_at = NULL WHERE run_id = ?",
@@ -1907,6 +1954,16 @@ class Repository:
                 if value not in declared:
                     declared.append(value)
             objectives_json = json.dumps(declared)
+        # UI-04c(D-86). **유지 목적은 개정 요청이 선언한 것이다.** 개정 뒤의 버전에는 이전 Profile 의
+        # 필수 의무가 선언 목적에 합쳐진다 — 그래서 `required_objectives` 가 양쪽을 요구한다. AI 가
+        # 적지 않았어도 사라지지 않는다(문서가 적은 것과 합친 값이며 본문이 아니다).
+        carried = self.carried_objectives(intent["case_id"])
+        if carried:
+            merged = json.loads(objectives_json) if objectives_json else []
+            for value in carried:
+                if value not in merged:
+                    merged.append(value)
+            objectives_json = json.dumps(merged)
 
         now = utc_now()
         with transaction(self.conn):
@@ -2126,17 +2183,32 @@ class Repository:
         뒤로 보내고 지우지 않는다.
         """
         intent = self.get_intent_version(intent_version_id)
-        case = self.get_case(intent["case_id"])
+        profile, version, retained = self._intent_version_profile(intent)
         order = {
             name: index
-            for index, name in enumerate(
-                profiles.field_order(case.get("profile"), case.get("profile_version"))
-            )
+            for index, name in enumerate(profiles.field_order(profile, version, retained))
         }
         rows = self.conn.execute(
             "SELECT * FROM intent_field WHERE intent_version_id = ?", (intent_version_id,)
         ).fetchall()
         return sorted((dict(r) for r in rows), key=lambda r: order.get(r["field"], 99))
+
+    def _intent_version_profile(
+        self, intent: dict[str, Any]
+    ) -> tuple[str | None, str | None, tuple[str, ...]]:
+        """그 의도 버전의 **자기** Profile·정의판·유지 항목(UI-04c, D-86).
+
+        버전 행에 적힌 값이 정본이다(v26 부터). 없으면(Profile 미기록 Case) Case 행을 본다 — 그 Case 는
+        어차피 공통 여섯 항목이다. 개정 뒤에도 옛 버전은 자기 항목 집합으로 읽힌다.
+        """
+        profile = intent.get("profile")
+        version = intent.get("profile_version")
+        if profile is None or version is None:
+            case = self.get_case(intent["case_id"])
+            profile, version = case.get("profile"), case.get("profile_version")
+        raw = intent.get("retained_fields_json")
+        retained = tuple(str(f) for f in json.loads(raw)) if raw else ()
+        return profile, version, retained
 
     def list_questions(
         self, intent_version_id: str, state: QuestionState | None = None
@@ -2210,12 +2282,13 @@ class Repository:
         # **P3-R1: 필수 항목 집합을 함께 실어 준다.** 게이트 규칙이 이 목록으로
         # 검사한다 — 규칙이 스스로 Profile 을 조회하면 제어부의 두 곳이 같은 판단을
         # 따로 하게 되고, 한쪽만 고치는 실수가 생긴다.
-        case = self.get_case(intent["case_id"])
-        intent["profile"] = case.get("profile")
-        intent["profile_version"] = case.get("profile_version")
-        intent["required_fields"] = list(
-            profiles.field_order(case.get("profile"), case.get("profile_version"))
-        )
+        # UI-04c(D-86). **이 버전의** Profile·유지 항목이다(Case 의 현재 값이 아니다) — 개정 뒤에도 옛
+        # 버전이 자기 항목 집합으로 조회·검사된다.
+        profile, version, retained = self._intent_version_profile(intent)
+        intent["profile"] = profile
+        intent["profile_version"] = version
+        intent["retained_fields"] = list(retained)
+        intent["required_fields"] = list(profiles.field_order(profile, version, retained))
         return intent
 
     def latest_intent_version(self, case_id: str) -> dict[str, Any] | None:
@@ -2461,6 +2534,7 @@ class Repository:
                 "open_intent_questions": [],
                 "unresolved_feedback": [],
                 "views": [],
+                "profile_stale": False,
             }
 
         current_agreement = self.agreement_for(latest["id"])
@@ -2486,6 +2560,14 @@ class Repository:
         unresolved = [
             f for f in self.list_feedback(case_id) if f["state"] == FeedbackState.RECEIVED.value
         ]
+        # UI-04c(D-86). 최신 버전이 아직 개정 전 Profile·유지 항목의 것인가. 진행기가 이것으로 의도 개정
+        # 실행을 만든다. 저장하지 않고 도출한다.
+        case = self.get_case(case_id)
+        profile_stale = (
+            (latest.get("profile"), latest.get("profile_version"))
+            != (case.get("profile"), case.get("profile_version"))
+            or tuple(latest.get("retained_fields") or ()) != self.retained_intent_fields(case_id)
+        ) and case.get("profile") is not None
         return {
             "case_id": case_id,
             "latest_intent_version": latest,
@@ -2494,6 +2576,7 @@ class Repository:
             "open_intent_questions": self.open_intent_stage_questions(latest["id"]),
             "unresolved_feedback": unresolved,
             "views": self.list_intent_views(latest["id"]),
+            "profile_stale": profile_stale,
         }
 
     # ------------------------------------------------------ 원문 열람 요청
@@ -4792,6 +4875,7 @@ class Repository:
         intent = self.get_intent_version(intent_version_id)
         rows = list(criteria)
         contract = self.completion_contract(intent["case_id"])
+        _profile, intent_profile_version, _retained = self._intent_version_profile(intent)
         # **P4-03: 기준마다 무엇을 입증하는가.** 계약이 있는 Case 만 정한다. 원문이
         # 적었으면 그것이고, 아니면 연결 항목에 정의의 대응표를 적용한다 — 본문 해석이
         # 아니라 공개된 정의의 적용이며, 출처를 따로 남긴다.
@@ -4808,8 +4892,10 @@ class Repository:
                 obligations.append((None, None, None))
                 continue
             try:
+                # UI-04c(D-86). 유지 항목의 기준은 그 항목을 가진 Profile 의 의무로 도출한다(정의판은
+                # 이 버전의 것).
                 obligation, source = meaningmod.derive_obligation(
-                    contract, str(row["relates_to"]), reported
+                    contract, str(row["relates_to"]), reported, intent_profile_version
                 )
                 conclusion_rule = ConclusionRule(rule).value if rule else None
             except ValueError as exc:
@@ -8421,17 +8507,33 @@ class Repository:
             if last is not None:
                 # 직전 실행이 남긴 상태와 다른 자리에서 시작했다. 사람이 직접
                 # 고쳤을 수 있으며 **되돌리지 않고 드러낸다**(FR-26).
+                # UI-04c(D-89). 트리 지문도 본다 — HEAD·항목 수가 같은 채 **내용만** 고친 경우를 놓치지
+                # 않게. 지문이 없는 옛 효과(P3-R2 이전)는 HEAD·항목 수 규칙 그대로다.
+                digests = last.get("tree_digest_after"), effect.get("tree_digest_before")
                 item["unexpected_external_change"] = (
                     last.get("head_after") != effect.get("head_before")
                     or last.get("entries_after") != effect.get("entries_before")
+                    or (all(digests) and digests[0] != digests[1])
                 )
+            # UI-04c(D-89). Runner 가 CLI 를 부르기 **전에** 직전 지문과 대조한 결과. `None` 은 대조하지
+            # 않았다(직전 실행 없음·옛 Runner)이며 `False` 가 아니다.
+            item["external_change_before_run"] = effect.get("external_change_before_run")
+            item["external_change_basis_run_id"] = effect.get("external_change_basis_run_id")
             previous[repository_id] = effect
             by_repo[repository_id]["run_effects"].append(item)
 
+        self._expire_open_requests()
         for workspace in workspaces:
             workspace["outside_workspace_changed"] = any(
                 e["effect"].get("outside_workspace_changed")
                 for e in workspace["run_effects"]
+            )
+            # UI-04c(D-89). 작업 PC(이 작업공간을 만든 Runner)·연결·열기 지원·최근 열기 요청. 브라우저 PC 와
+            # 같다고 가정하지 않는다 — 화면이 이 값으로 "어느 PC 의 폴더인가"를 말한다.
+            workspace["runner"] = self._workspace_runner(workspace.get("runner_id"))
+            workspace["open_support"] = self.open_support(workspace.get("runner_id"))
+            workspace["open_requests"] = self.list_open_requests(
+                case_id, workspace["repository_id"], limit=5
             )
 
         ready = [w for w in workspaces if w["state"] == WorkspaceState.READY.value]
@@ -8454,6 +8556,187 @@ class Repository:
                 " OS 격리가 아니며, 경계 밖 변경은 감지해 드러낼 뿐 막지 못한다"
             ),
         }
+
+    def _last_workspace_effect(
+        self, case_id: str, repository_id: str | None
+    ) -> dict[str, Any] | None:
+        """이 (Case, 저장소)에서 **가장 최근에 끝난 실행의 작업공간 효과**(UI-04c, D-89). 없으면 `None`."""
+        rows = self.conn.execute(
+            "SELECT run_id, repository_id, workspace_effect_json FROM run"
+            " WHERE case_id = ? AND workspace_effect_json IS NOT NULL"
+            " ORDER BY finished_at DESC, run_id DESC",
+            (case_id,),
+        ).fetchall()
+        single = (
+            len(self.list_workspaces(case_id)) == 1
+        )
+        for row in rows:
+            if row["repository_id"] == repository_id or (row["repository_id"] is None and single):
+                return {"run_id": row["run_id"], "effect": json.loads(row["workspace_effect_json"])}
+        return None
+
+    # ------------------------------------------------ UI-04c 작업 PC 열기(D-89)
+
+    #: 전달되지 않은 열기 요청이 만료되는 시간(초). 뒤늦게 재시작한 Runner 가 옛 요청을 열지 않게.
+    OPEN_REQUEST_TTL_SECONDS = 60.0
+
+    def _workspace_runner(self, runner_id: str | None) -> dict[str, Any] | None:
+        if not runner_id:
+            return None
+        row = self.conn.execute(
+            "SELECT id, name, host FROM runner WHERE id = ?", (runner_id,)
+        ).fetchone()
+        if row is None:
+            return {"runner_id": runner_id, "host": None, "connection": None}
+        return {
+            "runner_id": row["id"],
+            "name": row["name"],
+            "host": row["host"],
+            "connection": self.runner_connection_state(runner_id, "workspace_owner"),
+        }
+
+    def open_support(self, runner_id: str | None) -> dict[str, dict[str, Any]]:
+        """그 PC 가 보고한 열기 능력(`runner-host/desktop`). 보고가 없으면 `unknown` — 지원으로 읽지 않는다."""
+        out: dict[str, dict[str, Any]] = {
+            capability: {"state": CapabilityState.UNKNOWN.value, "source": "이 PC 는 열기 능력을 보고하지 않았다"}
+            for capability in ("open_folder", "open_editor")
+        }
+        if not runner_id:
+            return out
+        rows = self.conn.execute(
+            "SELECT capability, state, source FROM runner_capability"
+            " WHERE runner_id = ? AND tool_id = 'runner-host' AND mode = 'desktop'",
+            (runner_id,),
+        ).fetchall()
+        for row in rows:
+            if row["capability"] in out:
+                out[row["capability"]] = {"state": row["state"], "source": row["source"]}
+        return out
+
+    def request_workspace_open(
+        self, case_id: str, repository_id: str, target: str, requested_by: str
+    ) -> dict[str, Any]:
+        """작업 PC 에서 작업공간 폴더·편집기를 열어 달라는 요청을 남긴다(UI-04c, D-89).
+
+        경로는 여기서 받지 않는다 — Runner 가 `case_workspace` 행의 경로를 받고 그것이 자기 worktree 일
+        때만 연다. 준비된 작업공간·연결된 PC·그 PC 가 `verified` 로 보고한 능력이 있어야 받는다. 열기는
+        쓰기 허용·진입 검사·동의가 아니다.
+        """
+        if target not in ("folder", "editor"):
+            raise ConflictError(f"unknown open target: {target}")
+        workspace = self.get_workspace(case_id, repository_id)
+        if workspace is None or workspace["state"] != WorkspaceState.READY.value:
+            raise ConflictError("the workspace is not ready on any PC")
+        runner_id = workspace.get("runner_id")
+        if not runner_id or not workspace.get("worktree_path"):
+            raise ConflictError("the workspace has no owning PC recorded")
+        self.guard_runner_connected(runner_id)
+        capability = "open_folder" if target == "folder" else "open_editor"
+        support = self.open_support(runner_id)[capability]
+        if support["state"] != CapabilityState.VERIFIED.value:
+            raise ConflictError(
+                f"open_unsupported: {capability} is {support['state']} on {runner_id}"
+                f" — {support['source']}"
+            )
+        now = utc_now()
+        request_id = ids.new_id("open")
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO workspace_open_request"
+                " (id, case_id, repository_id, runner_id, target, requested_by, state,"
+                "  result_reason, requested_at, delivered_at, finished_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, 'pending', NULL, ?, NULL, NULL)",
+                (request_id, case_id, repository_id, runner_id, target, requested_by, now),
+            )
+        return self.get_open_request(request_id)
+
+    def get_open_request(self, request_id: str) -> dict[str, Any]:
+        row = self.conn.execute(
+            "SELECT * FROM workspace_open_request WHERE id = ?", (request_id,)
+        ).fetchone()
+        if row is None:
+            raise NotFoundError(f"open request not found: {request_id}")
+        return dict(row)
+
+    def list_open_requests(
+        self, case_id: str, repository_id: str, limit: int = 5
+    ) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM workspace_open_request WHERE case_id = ? AND repository_id = ?"
+            " ORDER BY requested_at DESC, id DESC LIMIT ?",
+            (case_id, repository_id, limit),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def _expire_open_requests(self, now: str | None = None) -> int:
+        """TTL 을 넘긴 미전달 요청을 `expired` 로 닫는다. 조회·제어 때 부른다."""
+        now = now or utc_now()
+        rows = self.conn.execute(
+            "SELECT id, requested_at FROM workspace_open_request WHERE state = 'pending'"
+        ).fetchall()
+        expired = [
+            r["id"]
+            for r in rows
+            if (elapsed_seconds(r["requested_at"], now) or 0.0) > self.OPEN_REQUEST_TTL_SECONDS
+        ]
+        if expired:
+            with transaction(self.conn):
+                for request_id in expired:
+                    self.conn.execute(
+                        "UPDATE workspace_open_request SET state = 'expired', result_reason = ?,"
+                        " finished_at = ? WHERE id = ? AND state = 'pending'",
+                        ("not_delivered_in_time", now, request_id),
+                    )
+        return len(expired)
+
+    def pending_open_requests_for(self, runner_id: str) -> list[dict[str, Any]]:
+        """이 Runner 가 열 요청(heartbeat 제어에 싣는다). 경로는 `case_workspace` 행의 것이다."""
+        now = utc_now()
+        self._expire_open_requests(now)
+        rows = self.conn.execute(
+            "SELECT o.*, w.worktree_path FROM workspace_open_request o"
+            " LEFT JOIN case_workspace w ON w.case_id = o.case_id AND w.repository_id = o.repository_id"
+            " WHERE o.runner_id = ? AND o.state = 'pending' ORDER BY o.requested_at",
+            (runner_id,),
+        ).fetchall()
+        out = []
+        with transaction(self.conn):
+            for row in rows:
+                self.conn.execute(
+                    "UPDATE workspace_open_request SET delivered_at = COALESCE(delivered_at, ?)"
+                    " WHERE id = ?",
+                    (now, row["id"]),
+                )
+                out.append(
+                    {
+                        "id": row["id"],
+                        "case_id": row["case_id"],
+                        "repository_id": row["repository_id"],
+                        "target": row["target"],
+                        "worktree_path": row["worktree_path"],
+                        "requested_at": row["requested_at"],
+                    }
+                )
+        return out
+
+    def report_open_result(
+        self, request_id: str, runner_id: str, state: str, reason: str | None
+    ) -> dict[str, Any]:
+        """Runner 의 열기 결과. `done`/`failed` 와 짧은 사유뿐이다. 다른 PC·이미 끝난 요청은 거부한다."""
+        if state not in ("done", "failed"):
+            raise ConflictError(f"unknown open result state: {state}")
+        row = self.get_open_request(request_id)
+        if row["runner_id"] != runner_id:
+            raise ConflictError("this open request belongs to another runner")
+        if row["state"] != "pending":
+            raise ConflictError(f"this open request is already {row['state']}")
+        with transaction(self.conn):
+            self.conn.execute(
+                "UPDATE workspace_open_request SET state = ?, result_reason = ?, finished_at = ?,"
+                " delivered_at = COALESCE(delivered_at, ?) WHERE id = ? AND state = 'pending'",
+                (state, (reason or None) and str(reason)[:200], utc_now(), utc_now(), request_id),
+            )
+        return self.get_open_request(request_id)
 
     # --------------------------------------------------------- 코드 조합 (P3-R2)
     #
@@ -8942,20 +9225,365 @@ class Repository:
                 " 의도 초안은 공통 여섯 항목을 쓴다",
             }
         definition = profiles.resolve(profile, version)
+        retained = self.retained_intent_fields(case_id)
+        revisions = self._profile_revision_rows(case_id)
         return {
             "profile": profile,
             "version": version,
             "source": case.get("profile_source") or ProfileSource.EXPLICIT.value,
             "definition": definition.to_dict(),
-            "required_fields": list(definition.required_fields),
+            "required_fields": list(profiles.field_order(profile, version, retained)),
             "kind": case["kind"],
             "detail": None,
+            # UI-04c(D-86). 개정으로 남은 이전 Profile 의 항목·계속 충족해야 하는 목적·개정 수.
+            "retained_fields": list(retained),
+            "carried_objectives": self.carried_objectives(case_id),
+            "revision_count": len(revisions),
         }
 
     def required_intent_fields(self, case_id: str) -> frozenset[str]:
-        """그 Case 의 구조 보고가 가져야 하는 항목. 게이트와 구조 검사가 함께 쓴다."""
+        """그 Case 의 **다음** 구조 보고가 가져야 하는 항목. 게이트와 구조 검사가 함께 쓴다.
+
+        현재 Profile 의 항목 + 개정(D-86)으로 남은 유지 항목이다. 옛 버전의 검사는 그 버전의
+        `required_fields`(`get_intent_detail`)를 쓴다.
+        """
         case = self.get_case(case_id)
-        return profiles.required_fields(case.get("profile"), case.get("profile_version"))
+        return profiles.required_fields(
+            case.get("profile"), case.get("profile_version"), self.retained_intent_fields(case_id)
+        )
+
+    # ------------------------------------------------ UI-04c Profile 개정(D-86)
+
+    def _profile_revision_rows(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT * FROM case_profile_revision WHERE case_id = ? ORDER BY revision",
+            (case_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def retained_intent_fields(self, case_id: str) -> tuple[str, ...]:
+        """개정으로 남은 이전 Profile 의 의미 항목 — 가장 최근 개정 행의 값(그 행이 이전 것을 누적한다)."""
+        rows = self._profile_revision_rows(case_id)
+        if not rows:
+            return ()
+        return tuple(str(f) for f in json.loads(rows[-1]["retained_fields_json"]))
+
+    def carried_objectives(self, case_id: str) -> list[str]:
+        """계속 충족해야 하는 이전 목적 의무 — 가장 최근 개정 행의 값(누적)."""
+        rows = self._profile_revision_rows(case_id)
+        if not rows:
+            return []
+        return [str(o) for o in json.loads(rows[-1]["carried_objectives_json"])]
+
+    def revise_profile(
+        self,
+        case_id: str,
+        *,
+        profile: CaseProfile | str,
+        added_objectives: Iterable[str] = (),
+        keep_previous_objectives: bool = True,
+        decided_by: WorkStartDecider,
+        actor: str,
+        reason_summary: str | None,
+        request_message_id: str | None = None,
+        interpretation_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        """업무 단계 Case 의 목적 확장·유형 변경(UI-04c, D-86). **같은 Case 에서** Profile 을 개정한다.
+
+        바꾸는 것은 Case 행의 Profile·kind·출처와 개정 행 하나다. **바꾸지 않는 것**: 위임 근거·예산
+        예약과 한도·시도 수·확인 지점·저장소 선택·이전 의도 버전·기준·판정·결정. 되돌림은 또 하나의
+        개정이다. 개정은 권한·동의·인수가 아니다 — 새 의도 버전은 기존 의도 단계(QG-01·delta·사람의
+        동의)를 그대로 지나고, 제품 쓰기는 진입 검사가 그대로 본다.
+
+        `keep_previous_objectives` 면 이전 Profile 의 필수 의무(계약의 무조건 요구)를 **유지 목적**으로
+        누적한다 — 새 의도 버전의 선언 목적에 합쳐져 "원인 확정+수정은 양쪽 충족"이 기존 완료 계약으로
+        판정된다. 끄는 것은 유형 정정(잘못 분류)이며 사람만 한다(AI 해석 경로는 항상 유지).
+        """
+        case = self.get_case(case_id)
+        if self.case_is_closed(case_id):
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_ALREADY_CLOSED],
+                "this case is closed; a change after closure is a linked new case (D-33·D-78)",
+            )
+        stage, _source = self.case_stage(case_id)
+        if stage is not CaseStage.WORK:
+            raise ConversationRefused(
+                [ConversationRefusal.CASE_NOT_IN_WORK_STAGE],
+                "this case is still in the discussion stage; the first profile comes from work-start (D-69)",
+            )
+        from_profile = case.get("profile")
+        from_version = case.get("profile_version")
+        if (
+            from_profile is None
+            or from_version is None
+            or profiles.completion_contract(from_profile, from_version) is None
+        ):
+            raise ConversationRefused(
+                [ConversationRefusal.PROFILE_DEFINITION_NOT_CURRENT],
+                "only a case on profile definition v2 (completion contract) can be revised;"
+                " an unrecorded or v1 profile keeps its old rules (D-62)",
+            )
+        resolved = CaseProfile(profile)
+        added: list[str] = []
+        for raw in added_objectives:
+            value = CriterionObligation(str(raw)).value
+            if value not in added:
+                added.append(value)
+        if resolved.value == from_profile and not added:
+            raise ConversationRefused(
+                [ConversationRefusal.PROFILE_REVISION_EMPTY],
+                "same profile and no added objective — nothing to revise",
+            )
+        unfinished = self.unfinished_case_runs(case_id)
+        if unfinished:
+            raise ConversationRefused(
+                [ConversationRefusal.RUNS_UNFINISHED],
+                "a run of this case has not finished: "
+                + ", ".join(r["run_id"] for r in unfinished)
+                + " — revise after it ends (the flow waits for a person between runs)",
+            )
+        message: dict[str, Any] | None = None
+        if request_message_id is not None:
+            try:
+                message = self.get_message(request_message_id)
+            except NotFoundError:
+                message = None
+            if (
+                message is None
+                or message["case_id"] != case_id
+                or message["author"] != MessageAuthor.USER.value
+            ):
+                raise ConversationRefused(
+                    [ConversationRefusal.WORK_REQUEST_INVALID],
+                    "the basis must be a user message of this conversation",
+                )
+        if decided_by is WorkStartDecider.AI_INTERPRETATION:
+            # UI-03 의 업무화와 같은 검사 — 근거 메시지·완료된 해석 실행·같은 요청.
+            if message is None:
+                raise ConversationRefused(
+                    [ConversationRefusal.WORK_REQUEST_INVALID],
+                    "an AI interpretation names the user message it read",
+                )
+            if message["receipt"] != MessageReceipt.STORED.value:
+                raise ConversationRefused(
+                    [ConversationRefusal.WORK_REQUEST_NOT_STORED],
+                    f"the message is {message['receipt']}; the PC has not stored it",
+                )
+            try:
+                run = self.get_run(interpretation_run_id) if interpretation_run_id else None
+            except NotFoundError:
+                run = None
+            if (
+                run is None
+                or run["case_id"] != case_id
+                or run.get("request_id") != message.get("request_id")
+                or run.get("outcome") != RunOutcome.COMPLETED.value
+            ):
+                raise ConversationRefused(
+                    [ConversationRefusal.INTERPRETATION_RUN_INVALID],
+                    "an AI interpretation names a completed run of the same request",
+                )
+        elif interpretation_run_id is not None:
+            raise ConversationRefused(
+                [ConversationRefusal.INTERPRETATION_RUN_INVALID],
+                "a person's choice does not name an interpretation run",
+            )
+        to_version = profiles.CURRENT_PROFILE_VERSION
+        previous_retained = self.retained_intent_fields(case_id)
+        retained = profiles.retained_fields(
+            [(from_profile, from_version)], (resolved.value, to_version), previous_retained
+        )
+        carried = list(self.carried_objectives(case_id))
+        if keep_previous_objectives:
+            contract = profiles.completion_contract(from_profile, from_version)
+            for req in contract.requirements if contract else ():
+                if req.when_field_filled is None and req.obligation.value not in carried:
+                    carried.append(req.obligation.value)
+        # 새 Profile 의 필수 의무는 계약이 요구하므로 유지 목적에서 뺀다(같은 뜻을 두 번 적지 않는다).
+        new_contract = profiles.completion_contract(resolved.value, to_version)
+        new_required = {
+            r.obligation.value for r in (new_contract.requirements if new_contract else ())
+            if r.when_field_filled is None
+        }
+        carried = [o for o in carried if o not in new_required]
+        added = [o for o in added if o not in new_required and o not in carried]
+        latest = self.latest_intent_version(case_id)
+        rows = self._profile_revision_rows(case_id)
+        now = utc_now()
+        revision_id = ids.new_id("prev")
+        short = _summary(reason_summary or "") or None
+        with transaction(self.conn):
+            cur = self.conn.execute(
+                'UPDATE "case" SET kind = ?, profile = ?, profile_version = ?, profile_source = ?,'
+                " updated_at = ? WHERE id = ? AND profile = ? AND stage = ?",
+                (
+                    profiles.KIND_FOR_PROFILE[resolved].value,
+                    resolved.value,
+                    to_version,
+                    ProfileSource.REVISED.value,
+                    now,
+                    case_id,
+                    from_profile,
+                    CaseStage.WORK.value,
+                ),
+            )
+            if cur.rowcount != 1:
+                raise ConversationRefused(
+                    [ConversationRefusal.CASE_NOT_IN_WORK_STAGE],
+                    "the case changed while revising its profile",
+                )
+            self.conn.execute(
+                "INSERT INTO case_profile_revision"
+                " (id, case_id, revision, from_profile, from_profile_version, to_profile,"
+                "  to_profile_version, retained_fields_json, carried_objectives_json,"
+                "  added_objectives_json, decided_by, actor, request_message_id,"
+                "  interpretation_run_id, reason_summary, intent_version_id_before, created_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    revision_id,
+                    case_id,
+                    len(rows) + 1,
+                    from_profile,
+                    from_version,
+                    resolved.value,
+                    to_version,
+                    json.dumps(list(retained)),
+                    json.dumps(carried),
+                    json.dumps(added),
+                    decided_by.value,
+                    actor,
+                    message["id"] if message else None,
+                    interpretation_run_id,
+                    short,
+                    latest["id"] if latest else None,
+                    now,
+                ),
+            )
+        return self.profile_revisions_view(case_id)
+
+    def profile_revisions_view(self, case_id: str) -> dict[str, Any]:
+        """개정 이력과 **이전 기준 → 새 기준의 대응**(승계/재검사/대상 없음). 저장하지 않고 도출한다."""
+        case = self.get_case(case_id)
+        seq_of = {
+            m["id"]: m["seq"]
+            for m in self.conn.execute(
+                "SELECT id, seq FROM conversation_message WHERE case_id = ?", (case_id,)
+            ).fetchall()
+        }
+        versions = [
+            dict(r)
+            for r in self.conn.execute(
+                "SELECT id, revision, created_at FROM intent_version WHERE case_id = ?"
+                " ORDER BY revision",
+                (case_id,),
+            ).fetchall()
+        ]
+        items: list[dict[str, Any]] = []
+        for row in self._profile_revision_rows(case_id):
+            before_id = row.get("intent_version_id_before")
+            after = next(
+                (v for v in versions if v["created_at"] > row["created_at"]),
+                None,
+            )
+            item = {
+                "id": row["id"],
+                "revision": row["revision"],
+                "from_profile": row["from_profile"],
+                "from_profile_version": row["from_profile_version"],
+                "to_profile": row["to_profile"],
+                "to_profile_version": row["to_profile_version"],
+                "retained_fields": json.loads(row["retained_fields_json"]),
+                "carried_objectives": json.loads(row["carried_objectives_json"]),
+                "added_objectives": json.loads(row["added_objectives_json"]),
+                "decided_by": row["decided_by"],
+                "actor": row["actor"],
+                "request_message_id": row.get("request_message_id"),
+                "request_message_seq": seq_of.get(row.get("request_message_id") or ""),
+                "interpretation_run_id": row.get("interpretation_run_id"),
+                "reason_summary": row.get("reason_summary"),
+                "intent_version_id_before": before_id,
+                "intent_version_id_after": after["id"] if after else None,
+                "created_at": row["created_at"],
+                "criteria_mapping": self._criteria_mapping(before_id, after["id"] if after else None),
+            }
+            items.append(item)
+        return {
+            "case_id": case_id,
+            "profile": case.get("profile"),
+            "profile_version": case.get("profile_version"),
+            "profile_source": case.get("profile_source"),
+            "kind": case["kind"],
+            "retained_fields": list(self.retained_intent_fields(case_id)),
+            "carried_objectives": self.carried_objectives(case_id),
+            "revisions": items,
+            "note": (
+                "개정은 기록이며 권한·동의·인수가 아니다. 이전 버전·기준·판정·결정·예약·시도 수는 그대로다."
+                " 새 의도 버전은 QG-01·material delta·사람의 동의를 그대로 지난다. 되돌림은 또 하나의 개정이다"
+            ),
+        }
+
+    def _criteria_mapping(
+        self, before_id: str | None, after_id: str | None
+    ) -> list[dict[str, Any]]:
+        """개정 직전 버전의 기준마다 개정 뒤 첫 버전의 같은 키 기준(승계 여부)을 잇는다. 대응표를 저장하지
+        않는다 — 같은 키·같은 지문이 대응이고 `carried_from` 이 그 흔적이다(P4-02)."""
+        if before_id is None:
+            return []
+        before = self.list_success_criteria(before_id)
+        after = {c["criterion_key"]: c for c in self.list_success_criteria(after_id)} if after_id else {}
+        out: list[dict[str, Any]] = []
+        for crit in before:
+            new = after.get(crit["criterion_key"])
+            entry: dict[str, Any] = {
+                "key": crit["criterion_key"],
+                "summary": crit.get("summary"),
+                "relates_to": crit.get("relates_to"),
+                "obligation": crit.get("obligation"),
+                "before_id": crit["id"],
+                "before_verdict": crit.get("verdict"),
+                "after": None,
+            }
+            if new is not None:
+                source = new.get("recheck_source")
+                entry["after"] = {
+                    "id": new["id"],
+                    "verdict": new.get("verdict"),
+                    "carried": bool(source and str(source).startswith("carried_from:")),
+                    "obligation": new.get("obligation"),
+                    "relates_to": new.get("relates_to"),
+                }
+                entry["state"] = "carried" if entry["after"]["carried"] else "recheck"
+            else:
+                entry["state"] = "no_target" if after_id else "pending"
+            out.append(entry)
+        return out
+
+    def _intent_revision_for_assignment(self, case_id: str) -> dict[str, Any] | None:
+        """의도 재작성 실행에 싣는 개정 사실(UI-04c). 개정이 없으면 `None`. **요약뿐이다.**"""
+        rows = self._profile_revision_rows(case_id)
+        if not rows:
+            return None
+        last = rows[-1]
+        previous_criteria: list[dict[str, Any]] = []
+        if last.get("intent_version_id_before"):
+            previous_criteria = [
+                {
+                    "key": c["criterion_key"],
+                    "relates_to": c.get("relates_to"),
+                    "obligation": c.get("obligation"),
+                    "summary": c.get("summary"),
+                }
+                for c in self.list_success_criteria(last["intent_version_id_before"])
+            ]
+        return {
+            "from_profile": last["from_profile"],
+            "to_profile": last["to_profile"],
+            "retained_fields": json.loads(last["retained_fields_json"]),
+            "carried_objectives": self.carried_objectives(case_id),
+            "added_objectives": json.loads(last["added_objectives_json"]),
+            "reason_summary": last.get("reason_summary"),
+            "previous_criteria": previous_criteria,
+        }
 
     # ------------------------------------------------ P4-03 완료 의미
 
@@ -10335,7 +10963,8 @@ class Repository:
         clock["source"] = "case_created_at"
 
         rows = self.conn.execute(
-            "SELECT b.*, r.assigned_at FROM budget_reservation b"
+            "SELECT b.*, r.assigned_at, r.assignment_generation AS run_generation"
+            " FROM budget_reservation b"
             " JOIN run r ON r.run_id = b.run_id WHERE b.case_id = ?",
             (case_id,),
         ).fetchall()
@@ -10344,6 +10973,17 @@ class Repository:
             state = row["state"]
             actual = row["actual_value"]
             reserved = row["reserved_value"]
+            if state == ReservationState.HELD.value and row["generation"] < row["run_generation"]:
+                # UI-04c(D-88). v26 이전에 재배정된 실행의 **옛 세대** 행 — 지금은 재배정이 닫지만 옛 DB 에
+                # 열린 채 남아 있을 수 있다. 새 세대의 `assigned_at` 으로 시간을 더하지 않고(거짓이 된다)
+                # "모른다" 로 센다. 예약값은 그대로 노출에 둔다(풀지 않는다).
+                bucket["runs_unknown"] += 1
+                bucket["complete"] = False
+                if actual is not None:
+                    bucket["unresolved"] += float(actual)
+                elif reserved is not None:
+                    bucket["unresolved"] += float(reserved)
+                continue
             if state == ReservationState.HELD.value:
                 bucket["runs_in_flight"] += 1
                 if reserved is not None:
@@ -12177,6 +12817,11 @@ class Repository:
             "closure": self.get_closure(case_id),
             # P4-06. 이 대화의 말에서 등록한(또는 거부한) 프로젝트 지식. 요약·키·상태뿐이다.
             "knowledge_registrations": self.knowledge_registrations_view(case_id),
+            # UI-04c(D-86). 업무 단계의 목적·유형 개정 이력(요약 — 대응 목록은 개정 조회에).
+            "profile_revisions": [
+                {k: v for k, v in item.items() if k != "criteria_mapping"}
+                for item in self.profile_revisions_view(case_id)["revisions"]
+            ],
         }
 
     def _with_conversation_summary(self, case: dict[str, Any]) -> dict[str, Any]:
@@ -12311,6 +12956,8 @@ class Repository:
                 }
                 for r in checks
             ],
+            # UI-04c(D-89). 이 PC 에서 열 작업공간(폴더·편집기). 경로는 `case_workspace` 행의 것이다.
+            "open_requests": self.pending_open_requests_for(runner_id),
         }
 
     def acknowledge_stop(self, run_id: str, runner_id: str, generation: int) -> dict[str, Any]:
@@ -12685,8 +13332,8 @@ class Repository:
         self.conn.execute(
             "INSERT INTO conversation_interpretation"
             " (run_id, case_id, request_id, opening_message_id, report_status, kind, profile,"
-            "  applied, refusal, recorded_at, evaluated_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL)"
+            "  applied, refusal, recorded_at, evaluated_at, objectives_json)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL, ?, NULL, ?)"
             " ON CONFLICT(run_id) DO NOTHING",
             (
                 run["run_id"],
@@ -12697,6 +13344,8 @@ class Repository:
                 parsed.kind.value if parsed.kind else None,
                 parsed.profile.value if parsed.profile else None,
                 recorded_at,
+                # UI-04c(D-86). `profile_change` 가 더하는 목적 의무(열거값). 없으면 NULL.
+                json.dumps(list(parsed.objectives)) if parsed.objectives else None,
             ),
         )
 

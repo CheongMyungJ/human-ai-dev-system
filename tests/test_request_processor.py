@@ -143,14 +143,20 @@ def test_the_processor_asks_completed_only_for_an_answer_the_person_can_see():
 
 
 def test_the_rule_is_added_only_to_discussion_stage_replies():
-    """AC-5 — 업무 단계 응답의 해석은 쓰이지 않으므로 규칙을 붙이지 않는다."""
+    """AC-5 — 준비 단계 응답은 업무화 규칙(`work_request`)을 받는다. 업무 단계 응답은 **다른** 규칙 — 목적·유형
+    변경(`profile_change`, UI-04c D-86)만 구조로 남기고 업무화 규칙은 받지 않는다. 단계 없는 응답은 규칙이 없다."""
     discussion = prompts.build("discussion_reply", b"hi", conversation_stage="discussion")
     work = prompts.build("discussion_reply", b"hi", conversation_stage="work")
-    assert "hads-interpretation" in discussion
-    assert "hads-interpretation" not in work
+    none = prompts.build("discussion_reply", b"hi", conversation_stage=None)
+    assert "hads-interpretation" in discussion and '"work_request"' in discussion
+    assert "profile_change" not in discussion
+    assert "hads-interpretation" in work and '"profile_change"' in work
+    assert '"work_request"' not in work
+    assert "hads-interpretation" not in none
     assert discussion.startswith(prompts.DISCUSSION_REPLY_PROMPT[:40])
     # 사용자의 말은 규칙 **뒤에** 온다 — 규칙이 사용자의 말 안에 섞이지 않는다.
     assert discussion.index("hads-interpretation") < discussion.index("hi")
+    assert work.index("hads-interpretation") < work.index("hi")
 
 
 # ================================================== AC-1 시작
@@ -504,7 +510,9 @@ def test_a_reply_that_is_only_a_block_fails(processing_harness):
 
 
 def test_work_stage_replies_get_no_rule_and_no_interpretation(processing_harness):
-    """AC-5·AC-6 — 업무 단계 대화의 응답은 해석하지 않는다. 목적 변경은 D-86(UI-04)."""
+    """AC-5·AC-6 (UI-04c 로 뜻이 바뀜) — 업무 단계 대화의 응답은 **업무화 규칙을 받지 않는다**. 받는 것은
+    목적·유형 변경 규칙(D-86)이며, 그 응답에 `work_request` 블록이 와도 기록만 남고 업무화(재업무화)는
+    `case_not_in_discussion_stage` 로 적용되지 않는다. `discussion` 블록은 아무것도 바꾸지 않는다."""
     h = processing_harness
     project = h.create_project()
     case = h.create_case(project["id"])  # 업무 단계(기능 개발)
@@ -512,13 +520,26 @@ def test_work_stage_replies_get_no_rule_and_no_interpretation(processing_harness
     h.send_message(case["id"], "지금 어디까지 됐나요?", "c-1")
     h.agent.poll_once()
     view = h.conversation(case["id"])
-    assert view["interpretations"] == []
-    assert "hads-interpretation" not in h.agent.cli_executor.calls[-1]["prompt"]
+    prompt = h.agent.cli_executor.calls[-1]["prompt"]
+    assert "hads-interpretation" in prompt and '"profile_change"' in prompt
+    assert '"work_request"' not in prompt  # 업무화 규칙이 아니다
+    [row] = view["interpretations"]
+    assert (row["kind"], row["applied"], row["refusal"]) == ("work_request", False, "case_not_in_discussion_stage")
+    assert view["profile"] == "feature" and view["profile_source"] != "revised"
     assert view["requests"][0]["state"] == "completed"
     reply = view["messages"][-1]
-    # 규칙을 받지 않은 응답의 글은 건드리지 않는다.
+    # 규칙을 받은 응답이므로 블록은 떼어지고 글만 대화에 붙는다.
     _read, body = h.read_original(reply["artifact_id"], reply["artifact_rev"])
-    assert "hads-interpretation" in body
+    assert "hads-interpretation" not in body and "진행 상황입니다." in body
+
+    _set_reply(h, f"논의 응답입니다.\n{DISCUSSION_BLOCK}")
+    h.send_message(case["id"], "그렇군요", "c-2")
+    h.agent.poll_once()
+    view = h.conversation(case["id"])
+    assert [(r["kind"], r["applied"]) for r in view["interpretations"]] == [
+        ("work_request", False), ("discussion", False),
+    ]
+    assert view["profile"] == "feature" and view.get("profile_revisions") == []
 
 
 def test_a_case_that_already_started_work_refuses_the_ai_start(processing_harness):
@@ -591,6 +612,8 @@ def test_the_interpretation_record_keeps_no_body(processing_harness):
         assert columns == {
             "run_id", "case_id", "request_id", "opening_message_id", "report_status", "kind",
             "profile", "applied", "refusal", "recorded_at", "evaluated_at",
+            # UI-04c(D-86). 목적 변경이 더하는 의무의 열거값 목록 — 본문이 아니다.
+            "objectives_json",
         }
     finally:
         conn.close()

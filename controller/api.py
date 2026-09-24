@@ -2806,6 +2806,47 @@ def get_workspace(request: Request, case_id: str) -> dict[str, Any] | None:
     return _repo(request).workspace_view(case_id)
 
 
+class WorkspaceOpenIn(BaseModel):
+    """UI-04c(D-89). 작업 PC 에서 작업공간 폴더·편집기를 열어 달라는 요청. **경로는 받지 않는다.**"""
+
+    target: str = Field(pattern="^(folder|editor)$")
+    requested_by: str = Field(default="owner", min_length=1, max_length=120)
+
+
+@router.post("/api/cases/{case_id}/workspaces/{repository_id}/open", status_code=202)
+def open_workspace(
+    request: Request, case_id: str, repository_id: str, payload: WorkspaceOpenIn
+) -> dict[str, Any]:
+    """작업 PC(그 작업공간을 만든 Runner)에 열기 요청을 남긴다. **응답은 열렸다는 뜻이 아니다** — Runner 가
+    heartbeat 제어로 받아 자기 worktree 일 때만 열고 결과를 적는다. 미연결 PC·확인되지 않은 지원은 409 다.
+    열기는 쓰기 허용·진입 검사·동의가 아니다."""
+    try:
+        return _repo(request).request_workspace_open(
+            case_id, repository_id, payload.target, payload.requested_by
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
+class OpenResultIn(BaseModel):
+    """Runner 의 열기 결과. 경로·명령줄·프로세스 정보는 오지 않는다."""
+
+    runner_id: str
+    state: str = Field(pattern="^(done|failed)$")
+    reason: str | None = Field(default=None, max_length=200)
+
+
+@router.post("/api/runner/open-requests/{request_id}/result")
+def runner_open_result(request: Request, request_id: str, payload: OpenResultIn) -> dict[str, Any]:
+    """UI-04c(D-89). 열기 요청의 결과를 적는다(`done`/`failed` 와 짧은 사유)."""
+    try:
+        return _repo(request).report_open_result(
+            request_id, payload.runner_id, payload.state, payload.reason
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+
+
 @router.post("/api/runner/{runner_id}/workspace-requests")
 def runner_workspace_requests(request: Request, runner_id: str) -> list[dict[str, Any]]:
     """Runner 가 맡을 작업공간 준비 요청을 가져간다.
@@ -3755,6 +3796,49 @@ def start_work(request: Request, case_id: str, payload: WorkStartIn) -> dict[str
         work.get("request_id"),
     )
     return repo.conversation_view(case_id)
+
+
+class ProfileRevisionIn(BaseModel):
+    """UI-04c(D-86). 업무 단계 Case 의 목적 확장·유형 변경. 사람의 개정이며 사유가 근거다."""
+
+    profile: CaseProfile
+    added_objectives: list[CriterionObligation] = Field(default_factory=list)
+    keep_previous_objectives: bool = True
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    reason_summary: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/api/cases/{case_id}/profile-revisions")
+def get_profile_revisions(request: Request, case_id: str) -> dict[str, Any]:
+    """UI-04c(D-86). 개정 이력과 이전 기준 → 새 기준의 대응(승계/재검사/대상 없음)."""
+    try:
+        return _repo(request).profile_revisions_view(case_id)
+    except NotFoundError as exc:
+        raise _handle(exc)
+
+
+@router.post("/api/cases/{case_id}/profile-revisions", status_code=201)
+def revise_profile(request: Request, case_id: str, payload: ProfileRevisionIn) -> dict[str, Any]:
+    """UI-04c(D-86). 같은 Case 에서 Profile 을 개정한다 — 이전 버전·기준·판정·결정·예약·시도 수는 그대로다.
+
+    기록 뒤 **사람 입력으로 진행기를 부른다**(상한 변경과 같다) — 사람 대기 중이었으면 그 자리에서 의도 개정
+    실행을 만든다. 개정은 권한·동의·인수가 아니며 새 의도 버전은 QG-01·delta·사람의 동의를 그대로 지난다.
+    """
+    repo = _repo(request)
+    try:
+        repo.revise_profile(
+            case_id,
+            profile=payload.profile,
+            added_objectives=[o.value for o in payload.added_objectives],
+            keep_previous_objectives=payload.keep_previous_objectives,
+            decided_by=WorkStartDecider.PERSON,
+            actor=payload.actor,
+            reason_summary=payload.reason_summary,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    _after_human_input(request, repo, case_id, "profile_revision")
+    return repo.profile_revisions_view(case_id)
 
 
 @router.get("/api/cases/{case_id}/progress")

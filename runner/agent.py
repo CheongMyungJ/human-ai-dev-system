@@ -77,7 +77,7 @@ from domain.models import (
     RunPurpose,
     WorkLevel,
 )
-from runner import cli_adapter, cli_events, process_tree, prompts, workspace
+from runner import cli_adapter, cli_events, desktop, process_tree, prompts, workspace
 from runner.client import ControllerClient
 from runner.config import RunnerConfig
 from runner.executor import TOOL_ID, TOOL_VERSION, LocalEchoExecutor
@@ -160,6 +160,8 @@ def default_capabilities() -> list[dict[str, Any]]:
     rows = local_executor_capabilities()
     for tool_id in cli_adapter.SUPPORTED_TOOLS:
         rows.extend(cli_adapter.capabilities_for(tool_id))
+    # UI-04c(D-89). 이 PC 의 데스크톱 능력 — 폴더·편집기 열기를 실제로 찾았는지. 코딩 CLI 가 아니다.
+    rows.extend(desktop.capabilities())
     return rows
 
 
@@ -172,10 +174,14 @@ class RunnerAgent:
         cli_executor: Any | None = None,
         capabilities: list[dict[str, Any]] | None = None,
         control_client: ControllerClient | None = None,
+        opener: desktop.Opener | None = None,
     ) -> None:
         config.ensure_dirs()
         self.config = config
         self.client = client
+        #: UI-04c(D-89). 작업 PC 에서 폴더·편집기를 실제로 여는 함수. 시험은 기록만 하는 것을 넣는다 —
+        #: 자동 시험이 이 PC 의 창을 띄우지 않게. 기본은 이 PC 에서 확인한 방법(`runner.desktop`)이다.
+        self.opener: desktop.Opener = opener or desktop.open_path
         #: UI-02. 제어 루프가 쓰는 클라이언트. 두 흐름이 한 HTTP 클라이언트를 나눠 쓰지 않게
         #: 따로 둘 수 있다. 주지 않으면 같은 것을 쓴다(`poll_once` 는 한 스레드다).
         self.control_client = control_client or client
@@ -658,6 +664,8 @@ class RunnerAgent:
             closed_case=bool(assignment.get("closed_case")),
             # P4-06. 논의 응답의 등록 규칙에 채우는 현재 지식 목록·저장소 이름(요약뿐).
             knowledge_index=assignment.get("knowledge_index"),
+            # UI-04c(D-86). 개정된 Case 의 의도 재작성 사실(유지 항목·유지 목적·직전 기준). 요약뿐.
+            intent_revision=assignment.get("intent_revision"),
         )
         permission = Permission(assignment["permission"])
         work_dir = Path(assignment.get("workspace_path") or assignment["repo_path"])
@@ -724,6 +732,9 @@ class RunnerAgent:
                 numbers=workspace.diff_numbers(work_dir, space["base_commit"]),
                 repo_before=repo_before,
                 repo_after=repo_after,
+                # UI-04c(D-89). 직전 실행이 남긴 지문(제어부가 실어 준다)과 대조해 외부 변경을 드러낸다.
+                last_tree_digest=space.get("last_tree_digest"),
+                last_effect_run_id=space.get("last_effect_run_id"),
             )
 
         produced = self._produce_for_purpose(assignment, purpose, output, context)
@@ -952,9 +963,12 @@ class RunnerAgent:
         produced: dict[str, Any] = {"produced": "discussion_reply"}
         if knowledge_items:
             produced["knowledge_items"] = knowledge_items
-        interprets = assignment.get("conversation_stage") == CaseStage.DISCUSSION.value or bool(
-            assignment.get("closed_case")
-        )
+        # UI-04c(D-86). 업무 단계 응답도 해석 규칙을 받는다(`profile_change` / `discussion`). 준비 단계·
+        # 종료 Case 규칙은 그대로다.
+        interprets = assignment.get("conversation_stage") in (
+            CaseStage.DISCUSSION.value,
+            CaseStage.WORK.value,
+        ) or bool(assignment.get("closed_case"))
         if not interprets and text == original:
             return produced
         if interprets:
@@ -1214,10 +1228,13 @@ class RunnerAgent:
         메모리를 지나 이 Runner로 왔다. 여기서는 초안이 이 Runner에서 태어나므로
         제어부에는 참조와 구조만 올라간다 — **본문은 올라가지 않는다.**
         """
+        # UI-04c(D-86). 개정된 Case 의 유지 항목 — 제어부가 배정에 실어 준 것 그대로.
+        retained = list(assignment.get("intent_retained_fields") or [])
         fields, questions, criteria, sizing, objectives = prompts.parse_intent_draft(
             output.final_message,
             profile=assignment.get("case_profile"),
             profile_version=assignment.get("case_profile_version"),
+            retained_fields=retained,
         )
         case_id = assignment["case_id"]
         run_id = assignment["run_id"]
@@ -1236,6 +1253,7 @@ class RunnerAgent:
             profile_version=assignment.get("case_profile_version"),
             # P4-03. 완료 계약이 있는 Profile 에서만 파서가 읽어 온다.
             objectives=objectives,
+            retained_fields=retained,
         )
         artifact_id = ids.new_artifact_id()
         stored = self.store.put(artifact_id, 1, body)
@@ -1791,7 +1809,50 @@ class RunnerAgent:
                 checked.append(self.check_residual(check["run_id"]))
             except Exception as exc:  # noqa: BLE001
                 checked.append({"run_id": check["run_id"], "error": f"{exc!r}"})
-        return {"stop_delivered": delivered, "residual_checked": checked}
+        opened = [self.handle_open_request(item) for item in controls.get("open_requests") or []]
+        return {"stop_delivered": delivered, "residual_checked": checked, "opened": opened}
+
+    def handle_open_request(self, item: dict[str, Any]) -> dict[str, Any]:
+        """UI-04c(D-89). 작업 PC 에서 작업공간 폴더·편집기를 연다 — **자기 worktree 만.**
+
+        경로는 제어부의 `case_workspace` 행에서 왔지만 그래도 이 Runner 가 그 (Case, 저장소)에 쓰는
+        자리(`worktree_for`)와 같을 때만 연다. 브라우저가 경로를 주지 못하고, 제어부 행이 어긋나도
+        임의 경로가 열리지 않는다. 결과는 `done`/`failed` 와 짧은 사유뿐이다.
+        """
+        request_id = item["id"]
+        target = str(item.get("target") or "")
+        path = str(item.get("worktree_path") or "")
+        state, reason = "failed", None
+        try:
+            if target not in desktop.TARGETS:
+                reason = f"unknown_target:{target}"[:200]
+            elif not path:
+                reason = "path_missing"
+            else:
+                expected = self.worktree_for(item["case_id"], item.get("repository_id"))
+                legacy = self.worktree_for(item["case_id"])
+                same = os.path.normcase(os.path.abspath(path)) in {
+                    os.path.normcase(os.path.abspath(str(expected))),
+                    os.path.normcase(os.path.abspath(str(legacy))),
+                }
+                if not same:
+                    reason = "path_not_owned"
+                elif not os.path.isdir(path):
+                    reason = "path_missing"
+                else:
+                    ok, source = desktop.supported(target)
+                    if not ok and self.opener is desktop.open_path:
+                        reason = f"unsupported:{source}"[:200]
+                    else:
+                        self.opener(target, path)
+                        state = "done"
+        except Exception as exc:  # noqa: BLE001 — 실패는 사유로 남긴다
+            reason = f"{type(exc).__name__}: {exc}"[:200]
+        try:
+            self.control_client.send_open_result(request_id, self.config.runner_id, state, reason)
+        except (httpx.TransportError, httpx.HTTPStatusError) as exc:
+            return {"id": request_id, "state": state, "reason": reason, "report_error": f"{exc!r}"}
+        return {"id": request_id, "state": state, "reason": reason}
 
     # -------------------------------------------------------------- 두 흐름
 

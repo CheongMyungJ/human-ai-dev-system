@@ -37,6 +37,7 @@ from domain.models import (
     RunStatus,
     Satisfaction,
 )
+from domain import profiles
 from domain.profiles import CompletionContract
 
 _O = CriterionObligation
@@ -96,6 +97,7 @@ def derive_obligation(
     contract: CompletionContract | None,
     relates_to: str | None,
     reported: str | None,
+    version: str | None = None,
 ) -> tuple[CriterionObligation | None, ObligationSource | None]:
     """기준 하나의 목적 의무와 그 출처.
 
@@ -105,11 +107,25 @@ def derive_obligation(
     보고값이 있으면 그것이다(모르는 이름은 `ValueError`). 없으면 연결 항목에 정의의
     대응표를 적용한다. 그것은 본문 해석이 아니라 공개된 정의의 적용이며, 출처를
     `derived_from_field` 로 구별해 남긴다.
+
+    **유지 항목의 기준은 그 항목을 가진 Profile 의 의무다**(UI-04c, D-86). 개정으로
+    계약이 바뀌어도 `cause_questions` 에 걸린 기준은 RCA 계약의 `cause` 로 도출된다 —
+    현재 계약의 주 의무로 도출하면 원인 기준이 조용히 수정 기준이 되고, 지문이 바뀌어
+    판정도 잇지 못한다. `version` 이 없으면(옛 호출자) 현재 계약만 본다. 공통 항목·자기
+    Profile 의 항목은 그대로 현재 계약이다.
     """
     if contract is None:
         return None, None
     if reported:
         return CriterionObligation(reported), ObligationSource.REPORTED
+    owner = profiles.field_owner(relates_to)
+    if owner is not None and version is not None:
+        owner_contract = profiles.completion_contract(owner.value, version)
+        if owner_contract is not None and owner_contract != contract:
+            return (
+                owner_contract.obligation_for_field(relates_to),
+                ObligationSource.DERIVED_FROM_FIELD,
+            )
     return contract.obligation_for_field(relates_to), ObligationSource.DERIVED_FROM_FIELD
 
 

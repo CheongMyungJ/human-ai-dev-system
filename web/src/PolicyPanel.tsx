@@ -38,6 +38,7 @@ import {
   AUTONOMY_LABEL,
   AUTONOMY_SOURCE_LABEL,
   CHECKPOINT_LABEL,
+  metricLabel,
   COMPLETION_SOURCE_LABEL,
   CONFORMANCE_METHOD_LABEL,
   MATERIALITY_LABEL,
@@ -584,7 +585,7 @@ export function PolicyPanel(props: {
           <select value={metric} onChange={(event) => setMetric(event.target.value)}>
             {Object.entries(budget.reservation_contract).map(([name, contract]) => (
               <option key={name} value={name}>
-                {name} (측정 {contract.measurement} · hard {guaranteeLabel(contract.hard_guarantee)})
+                {metricLabel(name)} (측정 {contract.measurement} · hard {guaranteeLabel(contract.hard_guarantee)})
               </option>
             ))}
           </select>

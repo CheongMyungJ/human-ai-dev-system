@@ -14,9 +14,14 @@ import {
   ApiError,
   AUTONOMY_LABEL,
   AUTONOMY_SOURCE_LABEL,
+  BUDGET_METRIC_NOTE,
   COMPLETION_SOURCE_LABEL,
+  DEFAULT_TIME_METRIC,
   GATE_VERDICT_LABEL,
+  metricLabel,
+  orderMetrics,
   policyApi,
+  timeSummary,
   preparationApi,
   progressApi,
   PROGRESS_LIMIT_LABEL,
@@ -202,6 +207,10 @@ function BudgetSection(props: {
   const [metric, setMetric] = useState('run_count')
   const [threshold, setThreshold] = useState('hard')
   const [value, setValue] = useState('5')
+  // UI-04c(D-88). 시간 값은 서버 조회 그대로다 — 실행시간 합계(실행별 배정~종료의 합)와 대화 생성 후 경과시간.
+  const execution = budget.usage?.execution_seconds ?? null
+  const elapsed = budget.usage?.elapsed_seconds ?? null
+  const metrics = orderMetrics(Object.keys(budget.reservation_contract))
   return (
     <section data-testid="case-setting-budget">
       <h3 className="sh-section-title">예산 한도</h3>
@@ -209,7 +218,7 @@ function BudgetSection(props: {
       <ul className="sh-result-list">
         {current.map((row) => (
           <li key={row.id} className="sh-rule-line" data-testid={`case-budget-${row.metric}-${row.threshold_kind}`} data-set-by={row.set_by}>
-            {row.metric} {row.threshold_kind} <strong>{row.limit_value}</strong> {row.unit} ·{' '}
+            {metricLabel(row.metric)} {row.threshold_kind} <strong>{row.limit_value}</strong> {row.unit} ·{' '}
             {GUARANTEE_LABEL[row.guarantee ?? ''] ?? row.guarantee} · 설정{' '}
             {row.set_by === 'project_default' ? '프로젝트 기본값' : row.set_by} · {when(row.created_at)}
             <button
@@ -226,13 +235,39 @@ function BudgetSection(props: {
       {budget.stop.stopped && (
         <p className="sh-rule-line sh-warn">예산으로 새 실행이 중지됐다 — {budget.stop.detail}</p>
       )}
+      <div data-testid="case-time">
+        <p className="sh-rule-line" data-testid="case-time-execution" data-complete={String(execution?.complete ?? '')}>
+          실행시간 합계: <strong>{timeSummary(execution)}</strong>
+        </p>
+        <p className="sh-rule-line" data-testid="case-time-elapsed">
+          대화 생성 후 경과시간: <strong>{timeSummary(elapsed)}</strong>
+        </p>
+        <p className="sh-muted sh-rule-line">
+          {BUDGET_METRIC_NOTE.execution_seconds}. {BUDGET_METRIC_NOTE.elapsed_seconds}.
+        </p>
+        <button
+          type="button"
+          className="sh-link"
+          onClick={() => {
+            setMetric(DEFAULT_TIME_METRIC)
+            setThreshold('hard')
+            setValue('1800')
+          }}
+          data-testid="case-budget-add-time"
+        >
+          시간 한도 추가(기본: 실행시간 합계)
+        </button>
+      </div>
       <div className="sh-composer-bar sh-rule-actions">
         <select value={metric} onChange={(e) => setMetric(e.target.value)} data-testid="case-budget-metric">
-          {Object.entries(budget.reservation_contract).map(([name, contract]) => (
-            <option key={name} value={name}>
-              {name} (hard {GUARANTEE_LABEL[contract.hard_guarantee] ?? contract.hard_guarantee})
-            </option>
-          ))}
+          {metrics.map((name) => {
+            const contract = budget.reservation_contract[name]
+            return (
+              <option key={name} value={name}>
+                {metricLabel(name)} (hard {GUARANTEE_LABEL[contract?.hard_guarantee ?? ''] ?? contract?.hard_guarantee ?? '?'})
+              </option>
+            )
+          })}
         </select>
         <select value={threshold} onChange={(e) => setThreshold(e.target.value)} data-testid="case-budget-threshold">
           <option value="warn">경고선</option>
@@ -262,6 +297,11 @@ function BudgetSection(props: {
           프로젝트 기본 예산 적용
         </button>
       </div>
+      {BUDGET_METRIC_NOTE[metric] && (
+        <p className="sh-muted sh-rule-line" data-testid="case-budget-metric-note">
+          {metricLabel(metric)}: {BUDGET_METRIC_NOTE[metric]}
+        </p>
+      )}
       <p className="sh-muted sh-rule-line">
         정확히 측정할 수 없는 지표의 hard 한도는 거부된다(D-61). 시간 한도는 새 배정만 막는다(절대 상한 아님).
       </p>

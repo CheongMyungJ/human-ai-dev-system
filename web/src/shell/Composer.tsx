@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react'
 
 import {
   CONVERSATION_REFUSAL_LABEL,
+  metricLabel,
   shellApi,
   type ConversationView,
   type MessageReferenceInput,
@@ -417,7 +418,7 @@ function SettingsSummary(props: {
     ? '예산 —'
     : budget.unlimited || activeLimits.length === 0
       ? '예산 한도 없음'
-      : `예산 ${activeLimits.map((l) => `${l.metric} ≤ ${l.limit_value}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}`
+      : `예산 ${activeLimits.map((l) => `${metricLabel(l.metric)} ≤ ${l.limit_value}${l.unit ? ` ${l.unit}` : ''}`).join(', ')}`
   const repos = policy?.repositories
   const repoCount = repos ? repos.selected.length || (repos.implicit_single_repository ? 1 : 0) : null
   const auto = props.conv.processing?.auto
@@ -451,7 +452,7 @@ function SettingsSummary(props: {
           </p>
           {activeLimits.map((l) => (
             <p key={l.id}>
-              {l.metric} {l.threshold_kind} {l.limit_value} {l.unit} · {l.enforcement} · 설정{' '}
+              {metricLabel(l.metric)} {l.threshold_kind} {l.limit_value} {l.unit} · {l.enforcement} · 설정{' '}
               {l.set_by === 'project_default' ? '프로젝트 기본값' : l.set_by}
             </p>
           ))}

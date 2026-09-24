@@ -494,6 +494,17 @@ def _intent_phase(state: FlowState) -> Step | None:
         )
     if not state.intent_structure_reported:
         return Step("busy", "intent_structure_pending", "의도 초안의 구조 보고를 기다린다")
+    if state.intent.get("profile_stale"):
+        # UI-04c(D-86). 목적·유형이 개정됐는데 최신 의도 버전이 아직 이전 Profile 의 것이다. 새 버전을
+        # 쓴다 — 직전 원문을 참조로 받아 이전 항목·기준을 잃지 않고 새 항목·기준을 더한다. 그 뒤는
+        # 기존 의도 단계 그대로다(QG-01·delta·**사람의 동의**). `attempts` 는 초기화되지 않는다.
+        return Step(
+            "run",
+            "intent_revision",
+            "목적·유형이 바뀌어 의도를 새 버전으로 다시 쓴다(이전 항목·기준은 유지)",
+            purpose=RunPurpose.INTENT_AUTHORING,
+            attempt_key="intent_revision",
+        )
     questions = state.intent.get("open_intent_questions") or []
     if questions:
         return _wait(

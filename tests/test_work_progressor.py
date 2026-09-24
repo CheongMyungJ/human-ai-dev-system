@@ -543,12 +543,15 @@ def test_recovery_pauses_a_running_progress_whose_request_already_ended(processi
 
 
 def test_a_work_stage_message_gets_a_read_only_reply_and_nothing_else_moves(processing_harness):
-    """AC-14 — 업무 단계 메시지는 읽기 전용 응답만 받는다. 해석 규칙이 없고 진행은 조건 그대로다."""
+    """AC-14 (UI-04c 로 뜻이 넓어짐) — 업무 단계 메시지는 읽기 전용 응답만 받는다. 응답은 목적·유형 변경 규칙
+    (D-86)을 받지만 `discussion` 으로 읽으면 아무것도 움직이지 않는다 — 진행은 조건 그대로, Profile 그대로."""
     h = processing_harness
     _project, case_id, _request_id = _start(h)
     conv = _drive(h, case_id)
     assert _wait_codes(conv) == ["intent_agreement"]
-    h.agent.cli_executor.discussion_response = "지금은 동의를 기다리고 있습니다."
+    h.agent.cli_executor.discussion_response = (
+        '지금은 동의를 기다리고 있습니다.\n\n```hads-interpretation\n{"kind": "discussion"}\n```'
+    )
     h.send_message(case_id, "지금 뭘 기다리는 거야?", "c-2")
     h.agent.poll_once()
     conv = h.conversation(case_id)
@@ -556,8 +559,11 @@ def test_a_work_stage_message_gets_a_read_only_reply_and_nothing_else_moves(proc
     assert reply["state"] == "completed" and reply["settled_by"] == "request-processor"
     assert conv["messages"][-1]["author"] == "assistant"
     prompt = h.agent.cli_executor.calls[-1]["prompt"]
-    assert "hads-interpretation" not in prompt
-    assert len(conv["interpretations"]) == 1  # 업무화 때의 것 하나뿐
+    assert "hads-interpretation" in prompt and '"profile_change"' in prompt
+    assert '"work_request"' not in prompt  # 업무화 규칙이 아니다(이미 업무 단계)
+    kinds = [(r["kind"], r["applied"]) for r in conv["interpretations"]]
+    assert kinds == [("work_request", True), ("discussion", False)]
+    assert conv["profile"] == "feature" and conv.get("profile_revisions") == []
     assert _wait_codes(conv) == ["intent_agreement"]
     assert conv["send"]["general"]["allowed"] is True
 

@@ -54,8 +54,12 @@ DOC_TYPE = "hads.intent-draft"
 #: (`conclusion_rule`)를 적는다. 셋 다 **완료 계약이 있는 Profile(정의판 v2)** 에서만
 #: 쓴다. v1~v4 문서의 목적은 **없음**이고 기준의 의무도 없다 — 없던 것을 지금 와서
 #: 만들어 내지 않는다.
-DOC_VERSION = 5
-SUPPORTED_DOC_VERSIONS = (1, 2, 3, 4, 5)
+#: v6 에서 **유지 항목**(`retained_fields`)이 들어왔다(UI-04c, D-86). 업무 단계에서 Profile 을
+#: 개정하면 이전 Profile 의 의미 항목이 새 문서에 남는다 — 그 항목을 가리키던 기준이 대상을
+#: 잃지 않기 위해서다. 문서가 `field_order` 와 함께 어느 항목이 유지 항목인지를 스스로 적는다.
+#: v1~v5 문서의 유지 항목은 **0건**이다.
+DOC_VERSION = 6
+SUPPORTED_DOC_VERSIONS = (1, 2, 3, 4, 5, 6)
 
 #: 필수 여섯 항목의 고정 순서. 줄이지 않는다.
 FIELD_ORDER: tuple[IntentField, ...] = (
@@ -105,6 +109,7 @@ def compose(
     profile: str | None = None,
     profile_version: str | None = None,
     objectives: list[str] | None = None,
+    retained_fields: tuple[str, ...] | list[str] = (),
 ) -> bytes:
     """필수 항목과 질문 목록을 정규 문서 바이트로 만든다.
 
@@ -125,7 +130,10 @@ def compose(
     것만** 적는다. Profile 의 필수 의무를 여기에 복사하지 않는다 — 그것은 정의가
     말하고, 문서는 요청이 말한 것을 말한다.
     """
-    field_order = profiles.field_order(profile, profile_version)
+    # 유지 항목(v6, D-86)은 현재 Profile 의 항목 뒤에 온다. 그 항목이 문서에 있어야 이전 기준의
+    # `relates_to` 가 이 문서의 항목을 가리킨다.
+    retained = tuple(str(f) for f in retained_fields)
+    field_order = profiles.field_order(profile, profile_version, retained)
     contract = profiles.completion_contract(profile, profile_version)
     declared: list[str] | None = None
     if objectives is not None:
@@ -151,6 +159,8 @@ def compose(
         "profile": profile,
         "profile_version": profile_version,
         "field_order": list(field_order),
+        # 개정(D-86)으로 남은 이전 Profile 의 의미 항목(v6). `field_order` 의 뒤쪽이 이것이다.
+        "retained_fields": list(retained),
         "fields": {},
         "questions": [],
         # 성공 기준은 **이 문서 안에** 있다. 기준마다 관련 의도 항목 → 확인 방법 →
@@ -244,7 +254,7 @@ def compose(
             "summary": summary,
             "method_summary": method_summary,
         }
-        entry.update(_criterion_obligation(key, raw, contract, relates_to))
+        entry.update(_criterion_obligation(key, raw, contract, relates_to, profile_version))
         body["criteria"].append(entry)
 
     if sizing is not None:
@@ -258,6 +268,7 @@ def _criterion_obligation(
     raw: dict[str, Any],
     contract: profiles.CompletionContract | None,
     relates_to: str,
+    version: str | None = None,
 ) -> dict[str, str]:
     """기준의 의무·결론 요구를 **작성자가 적은 그대로** 검증해 돌려준다(v5).
 
@@ -279,7 +290,7 @@ def _criterion_obligation(
     out: dict[str, str] = {}
     if obligation:
         out["obligation"] = CriterionObligation(str(obligation)).value
-    effective, _ = derive_obligation(contract, relates_to, out.get("obligation"))
+    effective, _ = derive_obligation(contract, relates_to, out.get("obligation"), version)
     if rule:
         if effective not in CONCLUSION_OBLIGATIONS:
             raise ValueError(
@@ -358,6 +369,8 @@ def parse(body: bytes) -> dict[str, Any]:
     doc.setdefault("field_order", [f.value for f in FIELD_ORDER])
     # v1~v4 문서에는 목적 선언이 없다. `None` 이며 빈 목록으로 바꾸지 않는다.
     doc.setdefault("objectives", None)
+    # v1~v5 문서에는 유지 항목이 없다(개정 경로가 없었다). 0건이다.
+    doc.setdefault("retained_fields", [])
     return doc
 
 
@@ -443,6 +456,8 @@ def structure(body: bytes, previous: bytes | None = None) -> dict[str, Any]:
     return {
         "profile": doc.get("profile"),
         "profile_version": doc.get("profile_version"),
+        # 개정(D-86)으로 남은 유지 항목 — 문서가 스스로 적은 것을 그대로 올린다(v6, 옛 문서는 0건).
+        "retained_fields": list(doc.get("retained_fields") or []),
         "fields": fields,
         "questions": questions,
         "criteria": criteria,

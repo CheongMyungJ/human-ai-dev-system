@@ -319,12 +319,19 @@ def compose_effect(
     numbers: dict[str, int],
     repo_before: TreeState | None = None,
     repo_after: TreeState | None = None,
+    last_tree_digest: str | None = None,
+    last_effect_run_id: str | None = None,
 ) -> dict[str, Any]:
     """제어부로 올릴 작업공간 효과. **식별자와 수만 들어간다.**
 
     `outside_workspace_changed` 는 **감지했다는 뜻이지 막았다는 뜻이 아니다.**
     worktree 는 OS 격리가 아니므로(D-44) CLI 는 원래 저장소를 고칠 수 있고, 우리가
     할 수 있는 것은 실행 전후를 대조해 드러내는 것뿐이다.
+
+    `last_tree_digest` 는 제어부가 실어 준 **이 저장소의 직전 실행이 남긴 트리 지문**이다(UI-04c,
+    D-89). 이 실행이 시작할 때 본 지문과 다르면 그 사이에 **외부 변경**(사람의 편집기 등)이 있었다 —
+    `external_change_before_run` 으로 드러내되 되돌리지 않는다(FR-26). 직전 실행이 없으면 `None`
+    (모른다)이지 `False` 가 아니다.
     """
     # **이 실행이 바꾼 것만 본다.** `numbers` 는 기준 커밋 대비 **누적**이라
     # 앞선 실행이 이미 바꿔 놓았으면 아무 것도 하지 않은 실행까지 "바뀜"이 된다.
@@ -365,6 +372,13 @@ def compose_effect(
     else:
         effect["outside_workspace_changed"] = None
         effect["outside_workspace_observed"] = False
+    # UI-04c(D-89). 직전 실행이 남긴 지문과 이 실행 전의 지문을 대조한다. **확인일 뿐이다** — worktree 는
+    # 초기화되지 않으므로 외부 변경은 그대로 보존된 채 이 실행의 입력이 됐다.
+    if last_tree_digest is None:
+        effect["external_change_before_run"] = None
+    else:
+        effect["external_change_before_run"] = before.digest != last_tree_digest
+    effect["external_change_basis_run_id"] = last_effect_run_id
     return effect
 
 

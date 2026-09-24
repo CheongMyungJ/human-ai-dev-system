@@ -166,6 +166,10 @@ def stack(tmp_path_factory):
     bin_dir.mkdir()
     (bin_dir / "codex.cmd").write_text(f'@"{sys.executable}" "{FAKE_CLI}" %*\r\n', encoding="utf-8")
     runner = RunnerProcess(controller.base_url, root / "runner", bin_dir, root / "pids", root / "runner.log")
+    # UI-04c(D-89). 시험 Runner 는 이 PC 에서 폴더·편집기를 열지 않는다 — 실제 창을 띄우지 않기 위해서다. 화면은 그
+    # 사실("이 PC 는 지원하지 않음 — HADS_RUNNER_DESKTOP=off")을 보인다. 실제로 여는 경로는 tests/test_workspace_open.py 가
+    # 기록만 하는 opener 로 본다.
+    runner.env["HADS_RUNNER_DESKTOP"] = "off"
     playwright = None
     browser = None
     try:
@@ -1343,3 +1347,139 @@ def test_pc_notifications_record_transitions_and_suppress_the_conversation_being
     _wait(lambda: _case_in_url(page) == other, 15, "알림에서 연 대화")
     expect(page.locator('[data-testid="conversation-title"]')).to_contain_text("다른 대화")
     context.close()
+
+
+# ================================================== UI-04c — D-86 목적·유형 변경 / D-88 시간 / D-89 작업 PC
+
+RCA_FIELDS = ["phenomenon", "observations", "cause_questions", "conclusion_requirement", "analysis_end_condition"]
+
+
+def test_a_purpose_change_in_the_work_stage_revises_the_profile_and_reauthors_the_intent(stack):
+    """UI-04c AC-9 — 결정 사항 패널의 개정 폼으로 원인 분석 업무를 결함 수정으로 개정(이전 목적 유지)하면 같은 대화의
+    Profile 이 바뀌고(머리·업무 절·타임라인 표식), 진행기가 의도를 새 버전(유지 항목 포함)으로 다시 써 동의 카드가 그
+    버전을 가리킨다. 개정 목록이 대응(승계/재검사)을 보인다. 준비 단계 대화에는 개정 폼이 없다."""
+    project = stack.project("목적 변경")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=root_cause_analysis HADS_FAKE_NO_QUESTION 로그 형식 문제의 원인을 찾아줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    expect(page.locator('[data-testid="stage-label"]')).to_contain_text("원인 분석")
+    first = stack.http.get(f"/api/cases/{case_id}/intent-state").json()["latest_intent_version"]
+    assert (first["revision"], first["profile"], first["retained_fields"]) == (1, "root_cause_analysis", [])
+
+    page.click('[data-testid="open-decisions"]')
+    work = page.locator('[data-testid="decisions-work"]')
+    expect(work).to_have_attribute("data-profile", "root_cause_analysis")
+    expect(page.locator('[data-testid="decisions-current-profile"]')).to_have_text("원인 분석")
+    expect(page.locator('[data-testid="revision-submit"]')).to_be_disabled()  # 사유가 필수다
+    page.select_option('[data-testid="revision-profile"]', "defect_fix")
+    page.fill('[data-testid="revision-reason"]', "원인을 찾고 수정도 한다")
+    page.click('[data-testid="revision-submit"]')
+    expect(page.locator('[data-testid="revision-notice"]')).to_contain_text("개정을 기록했다", timeout=15_000)
+    expect(work).to_have_attribute("data-profile", "defect_fix", timeout=15_000)
+    expect(page.locator('[data-testid="decisions-current-profile"]')).to_have_text("결함 수정")
+    revision = page.locator('[data-testid="profile-revision-1"]')
+    expect(revision).to_contain_text("원인 분석 → 결함 수정")
+    expect(revision).to_contain_text("이전 목적 유지: 원인 질문에 대한 결론")
+    expect(revision).to_contain_text("사람")
+    expect(page.locator('[data-testid="stage-label"]')).to_contain_text("결함 수정")
+    expect(page.locator('[data-testid="profile-revision-marker-1"]')).to_contain_text("목적·유형 변경됨")
+    view = stack.http.get(f"/api/cases/{case_id}/profile-revisions").json()
+    assert (view["profile"], view["profile_source"]) == ("defect_fix", "revised")
+    assert view["revisions"][0]["carried_objectives"] == ["cause"] and view["retained_fields"] == RCA_FIELDS
+
+    # 진행기 — 의도 개정 실행이 새 버전을 쓰고(유지 항목 포함) 동의 카드가 그 버전을 가리킨다.
+    second = _wait(
+        lambda: (lambda v: v if v and v["revision"] == 2 else None)(
+            stack.http.get(f"/api/cases/{case_id}/intent-state").json()["latest_intent_version"]
+        ),
+        90,
+        "의도 v2",
+    )
+    assert (second["profile"], second["retained_fields"]) == ("defect_fix", RCA_FIELDS)
+    assert {f["field"] for f in second["fields"]} >= set(RCA_FIELDS)
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+    _wait(
+        lambda: stack.http.get(f"/api/cases/{case_id}/conversation").json()["progress"]["wait"]
+        and stack.http.get(f"/api/cases/{case_id}/conversation").json()["progress"]["wait"][0].get("intent_version_id") == second["id"],
+        60,
+        "새 버전의 동의 대기",
+    )
+    expect(page.locator('[data-testid="revision-mapping-1"]')).to_be_visible(timeout=30_000)
+    mapping = stack.http.get(f"/api/cases/{case_id}/profile-revisions").json()["revisions"][0]["criteria_mapping"]
+    assert {m["key"] for m in mapping} == {"C-01", "C-02"}
+    assert all(m["state"] in ("carried", "recheck", "no_target") for m in mapping)  # 판정이 없던 기준은 승계할 것이 없다
+    conv = stack.http.get(f"/api/cases/{case_id}/conversation").json()
+    assert (conv["profile"], conv["profile_source"], len(conv["profile_revisions"])) == ("defect_fix", "revised", 1)
+
+    # 준비 단계 대화 — 업무 절·개정 폼이 없다(처음 Profile 은 업무화가 정한다).
+    prep = _new_conversation(page)
+    page.click('[data-testid="open-decisions"]')
+    expect(page.locator('[data-testid="decisions"]')).to_be_visible()
+    assert page.locator('[data-testid="profile-revision-form"]').count() == 0
+    refused = stack.http.post(
+        f"/api/cases/{prep}/profile-revisions",
+        json={"profile": "feature", "added_objectives": [], "keep_previous_objectives": True, "actor": "owner", "reason_summary": "x"},
+    )
+    assert refused.status_code == 409 and refused.json()["detail"]["refusals"] == ["case_not_in_work_stage"]
+    page.context.close()
+
+
+def test_time_limits_default_to_execution_time_and_the_workspace_row_names_the_work_pc(stack):
+    """UI-04c AC-10·AC-14 — 상세 설정의 시간 절이 실행시간 합계·경과시간을 보이고 "시간 한도 추가" 가 실행시간 합계를
+    기본으로 고른다(설정된 한도는 라벨·보장 그대로). 결과물의 작업공간 절이 작업 PC(작업공간을 만든 Runner)·경로·복사·
+    열기 지원 상태를 서버 값 그대로 보인다 — 시험 Runner 는 열기를 껐으므로 버튼이 비활성이고 서버도 거부한다."""
+    project = stack.project("작업 PC")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _run_work_with_candidate(page)
+
+    page.click('[data-testid="settings-summary-line"]')
+    page.click('[data-testid="open-case-settings"]')
+    expect(page.locator('[data-testid="case-time-execution"]')).to_contain_text("합계")
+    expect(page.locator('[data-testid="case-time-elapsed"]')).to_contain_text("합계")
+    usage = stack.http.get(f"/api/cases/{case_id}/budget").json()["usage"]
+    assert usage["execution_seconds"]["exposure"] > 0 and usage["elapsed_seconds"]["exposure"] > 0
+    page.click('[data-testid="case-budget-add-time"]')
+    expect(page.locator('[data-testid="case-budget-metric"]')).to_have_value("execution_seconds")
+    expect(page.locator('[data-testid="case-budget-threshold"]')).to_have_value("hard")
+    expect(page.locator('[data-testid="case-budget-metric-note"]')).to_contain_text("병렬")
+    page.click('[data-testid="case-budget-set"]')
+    row = page.locator('[data-testid="case-budget-execution_seconds-hard"]')
+    expect(row).to_contain_text("실행시간 합계", timeout=15_000)
+    expect(row).to_contain_text("새 배정만 차단")
+    limits = [l for l in stack.http.get(f"/api/cases/{case_id}/budget").json()["limits"] if l["state"] == "current"]
+    assert [(l["metric"], l["threshold_kind"], l["limit_value"], l["guarantee"]) for l in limits] == [
+        ("execution_seconds", "hard", 1800.0, "no_absolute_cap"),
+    ]
+    expect(page.locator('[data-testid="settings-summary"]')).to_contain_text("실행시간 합계")
+
+    page.click('[data-testid="open-results"]')
+    if page.locator('[data-testid="viewer"]').count():
+        page.click('[data-testid="viewer"] >> text=← 목록')  # 동의 때 연 의도 원문이 열려 있다 — 목록으로
+    ws = stack.http.get(f"/api/cases/{case_id}/workspace").json()["workspaces"][0]
+    repo_id = ws["repository_id"]
+    assert ws["runner"]["runner_id"] == RunnerProcessId.get(stack) and ws["runner"]["host"]
+    assert ws["open_support"]["open_folder"]["state"] == "unsupported"
+    assert "HADS_RUNNER_DESKTOP=off" in ws["open_support"]["open_folder"]["source"]
+    expect(page.locator(f'[data-testid="workspace-{repo_id}"]')).to_have_attribute("data-connection", "connected")
+    expect(page.locator(f'[data-testid="ws-runner-{repo_id}"]')).to_contain_text(ws["runner"]["host"])
+    expect(page.locator(f'[data-testid="ws-path-{repo_id}"]')).to_have_text(ws["worktree_path"])
+    expect(page.locator(f'[data-testid="ws-copy-{repo_id}"]')).to_be_enabled()
+    expect(page.locator(f'[data-testid="ws-open-folder-{repo_id}"]')).to_be_disabled()
+    expect(page.locator(f'[data-testid="ws-open-editor-{repo_id}"]')).to_be_disabled()
+    expect(page.locator(f'[data-testid="ws-open-support-{repo_id}"]')).to_contain_text("HADS_RUNNER_DESKTOP=off")
+    # 화면의 비활성 버튼은 잠금이 아니다 — 서버가 같은 이유로 거부한다.
+    refused = stack.http.post(
+        f"/api/cases/{case_id}/workspaces/{repo_id}/open", json={"target": "folder", "requested_by": "owner"}
+    )
+    assert refused.status_code == 409 and "open_unsupported" in refused.text
+    assert ws["open_requests"] == []
+    # 첫 쓰기 실행은 직전 실행이 없어 외부 변경을 "모른다"(`null`) — `false` 가 아니다.
+    effects = [e for e in ws["run_effects"] if e["permission"] == "workspace_write"]
+    assert effects and effects[0]["external_change_before_run"] is None
+    expect(page.locator(f'[data-testid="effect-{effects[0]["run_id"]}"]')).to_have_attribute("data-external", "null")
+    page.context.close()

@@ -28,6 +28,7 @@ UI-01 은 "요청을 처리하는 쪽"을 비워 두었다 — 메시지가 저�
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Any
 
 from controller.repository import ConflictError, ConversationRefused, NotFoundError, Repository
@@ -47,6 +48,7 @@ from domain.models import (
     RunStatus,
     WorkStartDecider,
 )
+from domain.models import InterpretationKind
 
 if TYPE_CHECKING:  # pragma: no cover
     from controller.work_progressor import WorkProgressor
@@ -244,9 +246,14 @@ class RequestProcessor:
         if row is None or row["evaluated_at"] is not None:
             return row
         run = self.repo.get_run(run_id)
-        parsed = convmod.interpretation_from_report(
-            {"status": row["report_status"], "kind": row["kind"], "profile": row["profile"]}
-        )
+        report: dict[str, Any] = {
+            "status": row["report_status"],
+            "kind": row["kind"],
+            "profile": row["profile"],
+        }
+        if row.get("objectives_json"):
+            report["objectives"] = json.loads(row["objectives_json"])
+        parsed = convmod.interpretation_from_report(report)
         refusal = convmod.interpretation_refusal(parsed, run.get("outcome"))
         if refusal is not None:
             return self.repo.mark_interpretation_evaluated(
@@ -255,6 +262,28 @@ class RequestProcessor:
         opening = self.repo.get_message(row["opening_message_id"])
         if self.repo.case_is_closed(row["case_id"]):
             return self._move_to_follow_up(row, run, opening)
+        if parsed.kind is InterpretationKind.PROFILE_CHANGE:
+            # UI-04c(D-86). 업무 단계의 목적 확장·유형 변경. 근거는 사용자 메시지 원문이고 이전 목적은
+            # 유지한다(AI 경로는 항상 유지 — 유형 정정은 사람의 폼). 개정 조건(업무 단계·v2·끝나지 않은
+            # 실행 없음)은 `revise_profile` 이 본다. 그 다음 걸음(의도 개정 실행)은 진행기가 잇는다.
+            try:
+                self.repo.revise_profile(
+                    row["case_id"],
+                    profile=parsed.profile,
+                    added_objectives=parsed.objectives,
+                    keep_previous_objectives=True,
+                    decided_by=WorkStartDecider.AI_INTERPRETATION,
+                    actor=f"ai:{run['tool_id']}",
+                    reason_summary=(
+                        f"AI 해석 · {parsed.profile.value} 로 목적·유형 변경 · 메시지 #{opening['seq']}"
+                    ),
+                    request_message_id=row["opening_message_id"],
+                    interpretation_run_id=run_id,
+                )
+            except ConversationRefused as exc:
+                code = exc.refusals[0].value if exc.refusals else "profile_revision_refused"
+                return self.repo.mark_interpretation_evaluated(run_id, applied=False, refusal=code)
+            return self.repo.mark_interpretation_evaluated(run_id, applied=True, refusal=None)
         try:
             self.repo.start_work(
                 row["case_id"],

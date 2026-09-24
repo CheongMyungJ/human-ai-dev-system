@@ -71,6 +71,13 @@ class ControllerClient:
             },
         )
 
+    def send_open_result(self, request_id: str, runner_id: str, state: str, reason: str | None) -> Any:
+        """UI-04c(D-89). 작업 PC 열기 요청의 결과 — `done`/`failed` 와 짧은 사유뿐이다(경로·명령줄 없음)."""
+        return self._post(
+            f"/api/runner/open-requests/{request_id}/result",
+            {"runner_id": runner_id, "state": state, "reason": reason},
+        )
+
     # ----------------------------------------------------------------- 원문
 
     def pending_intakes(self, runner_id: str) -> list[dict]:
