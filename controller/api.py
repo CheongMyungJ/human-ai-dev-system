@@ -728,6 +728,8 @@ def get_run(request: Request, run_id: str) -> dict[str, Any]:
     except NotFoundError as exc:
         raise _handle(exc)
     run["events"] = repo.list_events(run_id)
+    # P4-10d(D-98). 결과 모름 실행이 어떻게 풀렸는가(대체·사람 확인). 결과는 그대로다.
+    run["unknown_settlement"] = repo.unknown_run_settlements(run["case_id"]).get(run_id)
     # 실제로 끝났는가(UI-02). 결과 보고 값과 그 뒤의 확인을 함께 보인다.
     run["residual_observations"] = repo.residual_observations(run_id)
     # 무엇을 실제로 실행했는가(P3-03). 원문은 Runner 의 산출물에 있다.
@@ -825,6 +827,18 @@ def runner_stop_ack(request: Request, run_id: str, payload: StopAckIn) -> dict[s
 
 @router.post("/api/runner/runs/{run_id}/residual")
 def runner_residual(request: Request, run_id: str, payload: ResidualIn) -> dict[str, Any]:
+    result = _runner_residual(request, run_id, payload)
+    # P4-10d. 트리 종료가 확인되면 결과 모름 실행이 종료를 막지 않게 될 수 있다 — 그 대기에서 멈춘 진행기가 다시 본다.
+    repo = _repo(request)
+    try:
+        case_id = repo.get_run(run_id)["case_id"]
+    except NotFoundError:
+        return result
+    _after_report(request, "residual_settled", _progressor(request, repo).on_runs_settled, case_id)
+    return result
+
+
+def _runner_residual(request: Request, run_id: str, payload: ResidualIn) -> dict[str, Any]:
     """끝난 실행의 잔류를 **다시 확인한** 결과. 확인 근거 없는 `none` 은 409 다."""
     try:
         return _repo(request).report_residual_observation(
@@ -1652,8 +1666,9 @@ def runner_read_content(
 @router.post("/api/runner/intent-structure")
 def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dict[str, Any]:
     """Runner가 계산한 의도 구조를 받는다. 본문은 오지 않는다."""
+    repo = _repo(request)
     try:
-        return _repo(request).apply_intent_structure(
+        detail = repo.apply_intent_structure(
             payload.intent_version_id,
             payload.fields,
             payload.questions,
@@ -1663,6 +1678,10 @@ def runner_intent_structure(request: Request, payload: IntentStructureIn) -> dic
         )
     except (NotFoundError, ConflictError) as exc:
         raise _handle(exc)
+    # P4-10d. 진행기가 구조를 기다리며(`intent_structure_pending`) 멈췄을 수 있다 — 구조가 결과 보고 뒤에 오면 이것이
+    # 뒤따르는 보고다. 결과 전이면 진행기는 끝나지 않은 실행을 보고 그대로 둔다.
+    _after_report(request, "intent_structure", _progressor(request, repo).on_workspace_reported, detail["case_id"])
+    return detail
 
 
 # ===================================================================== P2-03
@@ -4096,6 +4115,51 @@ def clear_progress_limit(request: Request, case_id: str, key: str) -> dict[str, 
         raise _handle(exc)
     _after_human_input(request, repo, case_id, f"progress_limit_clear:{key}")
     return {"limits": repo.progress_limits_view(case_id), "progress": repo.progress_view(case_id)}
+
+
+class UnknownRunConfirmationIn(BaseModel):
+    """P4-10d(D-98 A). 결과를 모르는 끝난 실행을 사람이 **확인했다** — 작업공간 영향 확인 표시와 사유가 필수다."""
+
+    actor: str = Field(default="owner", min_length=1, max_length=120)
+    workspace_checked: bool
+    reason: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/api/cases/{case_id}/runs/{run_id}/unknown-confirmation")
+def confirm_unknown_run(
+    request: Request, case_id: str, run_id: str, payload: UnknownRunConfirmationIn, response: Response
+) -> dict[str, Any]:
+    """P4-10d(이슈 #10, D-98 A). 사람이 결과 모름 실행과 작업공간 영향을 보고 확인을 적는다 — 그 실행은 종료를 막지 않는다.
+
+    결과는 `unknown` 그대로다. 인수·예외·다른 실행의 허용이 아니다. 트리 종료가 확인되지 않은 실행은 거부한다(PC 의
+    재확인을 기다린다). 새로 적으면 201, 같은 실행의 재전송은 200(처음 기록). 기록 뒤 자동 완료를 시도하고 사람 입력으로
+    진행기를 부른다.
+    """
+    if not payload.workspace_checked:
+        raise HTTPException(status_code=422, detail="workspace_not_checked: tick that you checked the workspace effect")
+    if not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="reason_required")
+    repo = _repo(request)
+    try:
+        record, created = repo.confirm_unknown_run(
+            case_id, run_id, actor=payload.actor, reason=payload.reason,
+            workspace_checked=payload.workspace_checked,
+        )
+    except (NotFoundError, ConflictError) as exc:
+        raise _handle(exc)
+    response.status_code = 201 if created else 200
+    if created:
+        if repo.progress_state(case_id) is not None:
+            repo.record_progress_event(
+                case_id, "unknown_run_confirmed", "recorded", run_id=run_id,
+                detail=f"{payload.actor} 가 결과 모름 실행 {run_id} 를 확인했다(결과는 unknown 그대로)"[:200],
+            )
+        try:
+            repo.maybe_auto_complete(case_id)
+        except (NotFoundError, ConflictError) as exc:
+            request.app.state.logger.error("unknown_confirmation_auto_complete error=%s", type(exc).__name__)
+        _after_human_input(request, repo, case_id, f"unknown_run_confirmation:{run_id}")
+    return {"confirmation": record, "progress": repo.progress_view(case_id)}
 
 
 class ResumeIn(BaseModel):

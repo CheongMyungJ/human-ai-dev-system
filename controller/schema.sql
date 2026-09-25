@@ -2198,3 +2198,25 @@ CREATE INDEX IF NOT EXISTS idx_workspace_open_request_case
 --   `case`                         `title_source`·`title_set_by`·`title_set_at`·`title_previous`(D-93 대화 제목)
 --   `conversation_interpretation`  `title`(D-93 — 응답이 낸 자동 제목)
 -- 데이터 이행 없음 — 옛 행의 새 컬럼은 NULL/빈 값이며 "기록 없음" 이다. 지어 채우지 않는다.
+
+-- ===================================================================
+-- 스키마 v30 (P4-10d — 이슈 #10, D-98 결과 모름 실행의 해소)
+--
+-- 사람이 결과를 모르는(`unknown`) 끝난 실행과 작업공간 영향을 보고 "확인했다" 를 적은 기록(실행당 하나). 그 실행은 업무
+-- 종료를 막지 않는다. **결과는 바꾸지 않는다**(`run.outcome` 은 `unknown` 그대로) — 인수·예외·다른 실행의 허용이 아니다.
+-- 같은 작업의 뒤 시도가 완료해 대체된 실행(B)은 도출이며 여기 적지 않는다. 결정 기록(`decision.kind =
+-- unknown_run_confirmation`)과 한 트랜잭션에 적는다.
+CREATE TABLE IF NOT EXISTS run_unknown_confirmation (
+    run_id             TEXT PRIMARY KEY REFERENCES run(run_id),
+    case_id            TEXT NOT NULL REFERENCES "case"(id),
+    decision_id        TEXT NOT NULL REFERENCES decision(id),
+    actor              TEXT NOT NULL,
+    reason             TEXT NOT NULL,
+    -- 작업공간 영향을 확인했다는 사람의 표시. 표시 없는 확인은 받지 않는다.
+    workspace_checked  INTEGER NOT NULL CHECK (workspace_checked = 1),
+    confirmed_at       TEXT NOT NULL,
+    CHECK (length(actor) <= 120),
+    CHECK (length(reason) BETWEEN 1 AND 200)
+);
+
+CREATE INDEX IF NOT EXISTS idx_run_unknown_confirmation_case ON run_unknown_confirmation(case_id);

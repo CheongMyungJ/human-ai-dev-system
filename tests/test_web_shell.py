@@ -2048,3 +2048,67 @@ def test_a_work_closed_by_its_criteria_shows_the_task_it_did_not_run(stack):
     page.click('[data-testid="open-work"]')
     expect(page.locator('[data-testid="work-task-not-run-T3"]')).to_contain_text("완료하지 않고 종료", timeout=20_000)
     page.context.close()
+
+
+
+def test_unknown_runs_are_superseded_or_confirmed_on_a_card_and_the_work_closes(stack):
+    """P4-PLAN-10d AC-7 (이슈 #10, D-98) — 검증의 첫 시도가 결과 모름(`unknown`)으로 끝나고 재시도가 완료하면 앞 시도는
+    대체돼 종료를 막지 않는다(작업 탭에 `대체됨`). 업무 단계의 논의 응답 하나가 결과 모름으로 끝나면(재시도가 없는 실행)
+    진행은 "처리 중" 으로 남지 않고 `unsettled_runs` 카드에서 멈춘다. 카드에서 작업공간 영향 확인 표시 + 사유로 확인하면
+    업무가 끝난다. 실제 Edge·실제 Runner·가짜 codex(실제 프로세스 트리).
+    """
+    project = stack.project("결과 모름")
+    _git_repo(project)
+    page = stack.page()
+    _open(stack, page, project["id"])
+    case_id = _new_conversation(page)
+    _send(page, "HADS_FAKE_WORK=feature HADS_FAKE_NO_QUESTION HADS_FAKE_VERIFY_UNKNOWN 필터를 구현해줘")
+    expect(page.locator('[data-testid="agreement-card"]')).to_be_visible(timeout=60_000)
+
+    # 업무 단계의 질문 하나 — 그 응답이 결과를 남기지 않고 끝난다(재시도 없는 실행).
+    _send(page, "HADS_FAKE_REPLY_UNKNOWN 진행 전에 하나만 묻자")
+
+    def reply_unknown() -> Any:
+        runs = stack.http.get(f"/api/cases/{case_id}").json()["runs"]
+        done = [r for r in runs if r["purpose"] == "discussion_reply" and r["outcome"] == "unknown"]
+        busy = [r for r in runs if r["status"] != "finished"]
+        return done[0] if done and not busy else None
+
+    reply = _wait(reply_unknown, 60, "결과 모름 논의 응답")
+    page.click('[data-testid="agreement-open"]')
+    expect(page.locator('[data-testid="agreement-agree"]')).to_be_enabled(timeout=30_000)
+    page.click('[data-testid="agreement-agree"]')
+
+    card = page.locator('[data-testid="wait-card-unsettled_runs"]')
+    expect(card).to_be_visible(timeout=180_000)
+    expect(card).to_have_attribute("data-count", "1")
+    row = card.locator(f'[data-testid="unsettled-run-{reply["run_id"]}"]')
+    expect(row).to_have_attribute("data-confirmable", "true")
+    # 요청은 "처리 중" 으로 남지 않는다.
+    requests = stack.http.get(f"/api/cases/{case_id}/conversation").json()["requests"]
+    assert not [r for r in requests if r["state"] == "processing"], requests
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    verify = [r for r in reversed(case["runs"]) if r["purpose"] == "verification_run"]
+    assert [r["outcome"] for r in verify] == ["unknown", "completed"]
+    assert verify[0]["unknown_settlement"] == {"kind": "superseded", "by_run_id": verify[1]["run_id"]}
+
+    # 작업 탭 — 대체된 검증 시도가 표시된다.
+    page.click('[data-testid="open-work"]')
+    expect(page.locator(f'[data-testid="work-run-settled-{verify[0]["run_id"]}"]')).to_have_attribute(
+        "data-kind", "superseded", timeout=20_000
+    )
+
+    # 카드에서 확인 — 표시와 사유가 있어야 버튼이 열린다.
+    card = page.locator('[data-testid="wait-card-unsettled_runs"]')
+    confirm = card.locator(f'[data-testid="unsettled-confirm-{reply["run_id"]}"]')
+    expect(confirm).to_be_disabled()
+    card.locator(f'[data-testid="unsettled-checked-{reply["run_id"]}"]').check()
+    card.locator(f'[data-testid="unsettled-reason-{reply["run_id"]}"]').fill("읽기 전용 응답이었고 작업 폴더에 변화가 없다")
+    expect(confirm).to_be_enabled()
+    confirm.click()
+    expect(page.locator('[data-testid="work-stage-banner"]')).to_have_attribute("data-progress", "done", timeout=60_000)
+    case = stack.http.get(f"/api/cases/{case_id}").json()
+    assert case["result"]["closure"]["closure_kind"] == "completed"
+    settled = stack.http.get(f"/api/runs/{reply['run_id']}").json()
+    assert settled["outcome"] == "unknown" and settled["unknown_settlement"]["kind"] == "confirmed"
+    page.context.close()

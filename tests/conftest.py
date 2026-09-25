@@ -397,6 +397,9 @@ class FakeCliExecutor:
         #: D-96(P4-10b). **읽기 전용 실행인데도** 작업 디렉터리에 쓸 파일 {상대경로: 내용} — 권한 확인을 건너뛰는 CLI 가
         #: 읽기 전용을 어기는 경우를 흉내 낸다(Runner 의 전후 대조가 그것을 알린다). 기본은 비어 있다.
         self.read_only_write_files: dict[str, str] = {}
+        #: P4-10d(D-98). 결과를 모르는 채 끝난 실행을 흉내 낸다 — 함수가 참을 돌려주는 호출은 `unknown`(끊긴 이유 없음)으로
+        #: 끝난다. 잔류 보고는 `residual_activity`·`residual_basis` 그대로다(트리 종료 확인 여부를 시험이 정한다).
+        self.unknown: Any = None
         self.calls: list[dict[str, Any]] = []
 
     def _session_ref(self, run_id: str) -> str:
@@ -518,6 +521,19 @@ class FakeCliExecutor:
         ]
         for event in events:
             event["ts"] = "2026-09-20T00:00:00.000000+00:00"
+        if self.unknown is not None and self.unknown(self.calls[-1]):
+            return ExecutionOutput(
+                events=events[:3],
+                output_body=f"fake run {run_id}\nresult unknown\n".encode("utf-8"),
+                outcome=RunOutcome.UNKNOWN,
+                exit_code=None,
+                usage=self.usage,
+                residual_activity=self.residual_activity,
+                residual_basis=self.residual_basis,
+                session_ref=self._session_ref(run_id),
+                observed_tool_version=f"{tool_id}/fake-for-tests",
+                final_message="",
+            )
         if timed_out:
             # 끊긴 데까지의 출력 — 끝 이벤트도 최종 메시지도 없다(실제 실행기의 시간 초과와 같은 모양).
             return ExecutionOutput(

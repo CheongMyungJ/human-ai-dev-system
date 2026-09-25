@@ -1355,8 +1355,11 @@ class Repository:
             "SELECT run_id FROM run WHERE case_id = ? ORDER BY created_at DESC", (case_id,)
         ).fetchall()
         runs = []
+        # P4-10d. 결과 모름 실행이 어떻게 풀렸는가(대체·사람 확인). 결과는 그대로다.
+        settlements = self.unknown_run_settlements(case_id) if rows else {}
         for row in rows:
             run = self.get_run(row["run_id"])
+            run["unknown_settlement"] = settlements.get(row["run_id"])
             # 무엇을 실제로 실행했는가(P3-03). 화면이 실행 목록에서 바로 보려면
             # 여기 있어야 한다 — 실행마다 따로 조회하게 하지 않는다(FR-14).
             run["commands"] = self.list_run_commands(row["run_id"])
@@ -5781,7 +5784,11 @@ class Repository:
         P4-10(D-95). **제한 시간에 걸려 시스템이 끊은 실행**(`unknown`, `stop_reason = timeout`)도 사람의 중단과 같다 —
         트리 종료가 확인되면 빠진다. 결과는 `unknown` 그대로이고 부분 결과는 판정에 쓰지 않는다(`apply_criteria_report`).
         빼지 않으면 시간 초과 뒤 다시 시도해 통과해도 업무가 영원히 닫히지 않는다. 다른 `unknown`(결과 유실 등)은 그대로다.
+
+        P4-10d(이슈 #10, D-98). 끝난 `unknown` 실행 중 **같은 작업의 뒤 시도가 완료해 대체된 것**(B, 도출)과 **사람이 확인을
+        적은 것**(A, `run_unknown_confirmation`)도 빠진다 — 결과는 `unknown` 그대로다(`unknown_run_settlements`).
         """
+        settled: dict[str, Any] | None = None  # 필요할 때만 계산한다(대부분의 Case 에는 결과 모름 실행이 없다)
         rows = self.conn.execute(
             "SELECT run_id, status, outcome, purpose, tool_id, residual_activity,"
             " not_started_reason, stop_reason FROM run"
@@ -5803,10 +5810,151 @@ class Repository:
             if stopped and run["status"] == RunStatus.FINISHED.value:
                 if not runctl.execution_unconfirmed(self._with_residual(dict(run))):
                     continue
+            if run["outcome"] == RunOutcome.UNKNOWN.value and run["status"] == RunStatus.FINISHED.value:
+                if settled is None:
+                    settled = self.unknown_run_settlements(case_id)
+                if run["run_id"] in settled:
+                    continue
             unsettled.append(
                 {k: run[k] for k in ("run_id", "status", "outcome", "purpose", "tool_id")}
             )
         return unsettled
+
+    # ------------------------------------------ P4-10d 결과 모름 실행의 해소 (이슈 #10, D-98)
+
+    def _case_runs_for_settlement(self, case_id: str) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            "SELECT run_id, task_id, purpose, status, outcome, created_at, finished_at, request_id,"
+            " residual_activity, not_started_reason, stop_reason FROM run WHERE case_id = ? ORDER BY created_at",
+            (case_id,),
+        ).fetchall()
+        return [self._with_residual(dict(r)) for r in rows]
+
+    def unknown_run_settlements(self, case_id: str) -> dict[str, dict[str, Any]]:
+        """결과를 모르는 채 **종료를 막지 않게 된** 실행 → 어떻게 풀렸는가. 결과는 바꾸지 않는다.
+
+            superseded  같은 작업·목적의 뒤 시도가 완료했고 이 실행의 트리 종료가 확인됐다(B, 도출 — 저장하지 않는다)
+            confirmed   사람이 실행과 작업공간 영향을 보고 확인을 적었다(A, `run_unknown_confirmation`)
+
+        사람의 확인이 있으면 그것을 앞세운다(기록이 도출보다 구체적이다).
+        """
+        runs = self._case_runs_for_settlement(case_id)
+        out: dict[str, dict[str, Any]] = {}
+        for run in runs:
+            by = runctl.superseding_run(run, runs)
+            if by is not None:
+                out[run["run_id"]] = {"kind": "superseded", "by_run_id": by}
+        for row in self.conn.execute(
+            "SELECT run_id, actor, reason, workspace_checked, confirmed_at, decision_id"
+            " FROM run_unknown_confirmation WHERE case_id = ?",
+            (case_id,),
+        ).fetchall():
+            out[row["run_id"]] = {
+                "kind": "confirmed",
+                "actor": row["actor"],
+                "reason": row["reason"],
+                "workspace_checked": bool(row["workspace_checked"]),
+                "confirmed_at": row["confirmed_at"],
+                "decision_id": row["decision_id"],
+            }
+        return out
+
+    def unsettled_run_details(self, case_id: str) -> list[dict[str, Any]]:
+        """미정리 실행의 카드용 사실. 본문 없음. `confirmable` = 사람이 확인을 적을 수 있다(끝났고 결과 모름이고 트리
+        종료가 확인됐다). 트리 종료를 모르는 실행은 PC 의 재확인을 기다린다(UI-02 — 사람이 대신 선언하지 않는다)."""
+        unsettled = {r["run_id"] for r in self.unsettled_runs(case_id)}
+        details = []
+        for run in self._case_runs_for_settlement(case_id):
+            if run["run_id"] not in unsettled:
+                continue
+            finished = run["status"] == RunStatus.FINISHED.value
+            ended = runctl.execution_confirmed_ended(run)
+            details.append(
+                {
+                    "run_id": run["run_id"],
+                    "task_id": run["task_id"],
+                    "purpose": run["purpose"],
+                    "status": run["status"],
+                    "outcome": run["outcome"],
+                    "stop_reason": run.get("stop_reason"),
+                    "finished_at": run.get("finished_at"),
+                    "request_id": run.get("request_id"),
+                    "ended_confirmed": bool(finished and ended),
+                    "confirmable": bool(
+                        finished and ended and run["outcome"] == RunOutcome.UNKNOWN.value
+                    ),
+                }
+            )
+        return details
+
+    def get_unknown_confirmation(self, run_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM run_unknown_confirmation WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None:
+            return None
+        record = dict(row)
+        record["workspace_checked"] = bool(record["workspace_checked"])
+        return record
+
+    def confirm_unknown_run(
+        self,
+        case_id: str,
+        run_id: str,
+        *,
+        actor: str,
+        reason: str,
+        workspace_checked: bool,
+    ) -> tuple[dict[str, Any], bool]:
+        """P4-10d(D-98 A). 사람이 결과를 모르는 끝난 실행과 작업공간 영향을 보고 **확인했다**를 적는다. (기록, 새로 적었나)
+
+        결과는 `unknown` 그대로이고 그 실행의 기준 보고는 여전히 판정에 쓰지 않는다. 이 확인은 인수·예외·다른 실행의
+        허용이 아니다. 같은 실행의 재전송은 처음 기록을 돌려준다(사유가 달라도 바꾸지 않는다).
+
+        거부: 종료된 Case · 다른 Case 의 실행(없음) · 작업공간 영향 확인 표시 없음 · 사유 없음 · 끝나지 않은 실행 ·
+        `unknown` 이 아닌 실행 · **트리 종료가 확인되지 않은 실행**(`execution_unconfirmed` — PC 의 재확인을 기다린다,
+        UI-02) · 뒤 시도로 이미 대체된 실행.
+        """
+        existing = self.get_unknown_confirmation(run_id)
+        if existing is not None and existing["case_id"] == case_id:
+            return existing, False
+        run = self.get_run(run_id)
+        if run["case_id"] != case_id:
+            raise NotFoundError(f"run not in case {case_id}: {run_id}")
+        self.guard_open_case(case_id)
+        if not workspace_checked:
+            raise ConflictError("workspace_not_checked: confirm that you checked the workspace effect")
+        reason = " ".join((reason or "").split())
+        if not reason:
+            raise ConflictError("reason_required: a confirmation needs a reason")
+        if run["status"] != RunStatus.FINISHED.value:
+            raise ConflictError("run_unfinished: the run has not finished")
+        if run["outcome"] != RunOutcome.UNKNOWN.value:
+            raise ConflictError(f"run_outcome_known: the run outcome is {run['outcome']}, not unknown")
+        if runctl.execution_unconfirmed(self._with_residual(dict(run))):
+            raise ConflictError(
+                "execution_unconfirmed: the run's end is not confirmed; wait for the PC to confirm it"
+                " (a person does not declare it ended)"
+            )
+        settled = self.unknown_run_settlements(case_id).get(run_id)
+        if settled is not None:
+            raise ConflictError(f"already_settled: the run is already {settled['kind']}")
+        now = utc_now()
+        decision_id = ids.new_decision_id()
+        with transaction(self.conn):
+            self.conn.execute(
+                "INSERT INTO decision (id, case_id, kind, subject_type, subject_id,"
+                " subject_revision, actor, decided_at, evidence_ref, subject_content_hash)"
+                " VALUES (?, ?, ?, 'run', ?, 0, ?, ?, NULL, NULL)",
+                (decision_id, case_id, DecisionKind.UNKNOWN_RUN_CONFIRMATION.value, run_id, actor, now),
+            )
+            self.conn.execute(
+                "INSERT INTO run_unknown_confirmation"
+                " (run_id, case_id, decision_id, actor, reason, workspace_checked, confirmed_at)"
+                " VALUES (?, ?, ?, ?, ?, 1, ?)",
+                (run_id, case_id, decision_id, actor, reason[:MAX_SUMMARY], now),
+            )
+        return self.get_unknown_confirmation(run_id), True
 
     # ----------------------------------------------------- 최종 결과 후보
 
@@ -14477,6 +14625,9 @@ class Repository:
             )
         if run.get("request_id"):
             self._evaluate_request(run["request_id"])
+        # P4-10d. 트리 종료가 확인되면 결과 모름·중단 실행이 종료를 막지 않게 될 수 있다 — 결과 보고와 같이 자동 완료를
+        # 시도한다(조건이 안 되면 아무 것도 하지 않는다).
+        self.maybe_auto_complete(run["case_id"])
         return {"run_id": run_id, "observations": self.residual_observations(run_id)}
 
     def request_residual_recheck(self, case_id: str, request_id: str) -> dict[str, Any]:
@@ -17227,6 +17378,9 @@ class Repository:
             finished_runs=finished,
             limits=self.effective_progress_limits(case_id),
             remediation=self.verification_remediation_state(case_id) if stage is CaseStage.WORK else {},
+            unsettled_detail=(
+                self.unsettled_run_details(case_id) if snapshot and snapshot["unsettled_runs"] else []
+            ),
         )
 
     def _instruction_of(self, run_id: str) -> tuple[str, int]:

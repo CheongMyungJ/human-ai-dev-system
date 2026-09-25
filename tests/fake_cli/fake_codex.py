@@ -31,6 +31,9 @@
                              건너뛰는 CLI 가 읽기 전용을 어기는 경우. Runner 의 전후 대조가 알린다
     HADS_FAKE_VERIFY_NOT_MET (P4-10) 검증이 C-02 를 명령·요약과 함께 `not_met` 으로 보고한다 — 작업 디렉터리에
                              `REMEDIATED.txt` 가 생기기 전까지. 미충족 블록을 받은 구현(수정 사이클)이 그 파일을 쓴다
+    HADS_FAKE_VERIFY_UNKNOWN (P4-10d, D-98) 그 작업 디렉터리의 **첫** 검증 실행이 끝 이벤트·최종 메시지 없이 끝난다 — 어댑터가
+                             결과를 `unknown` 으로 판정한다(트리는 끝났다). 다시 시도한 검증은 정상이다
+    HADS_FAKE_REPLY_UNKNOWN  (P4-10d) 사용자의 마지막 메시지에 이 표지가 있는 논의 응답이 같은 방식으로 `unknown` 으로 끝난다
 
 P4-05. **업무 단계 목적**(의도 초안·QG-01 검토·결합 기록·설계·계획·구현·검증·분석)은 지시문의
 머리(목적별 지시문)로 알아보고 `tests.conftest` 의 정해진 응답을 낸다. 구현은 작업 디렉터리의
@@ -175,6 +178,14 @@ def is_discussion(prompt: str) -> bool:
     return prompt[:60].startswith(templates.DISCUSSION_REPLY_PROMPT[:40])
 
 
+def last_user_message(prompt: str) -> str:
+    """사용자의 마지막 메시지(고정 컨텍스트 뒤의 지시 원문). 앞선 대화에 남은 표지를 다시 읽지 않는다."""
+    last = prompt.rsplit("--- 고정 컨텍스트 끝 ---", 1)[-1]
+    if "사용자의 마지막 메시지다." in last:
+        last = last.rsplit("사용자의 마지막 메시지다.", 1)[-1]
+    return last
+
+
 def is_verification(prompt: str) -> bool:
     if str(REPO_ROOT) not in sys.path:
         sys.path.insert(0, str(REPO_ROOT))
@@ -248,6 +259,18 @@ def main() -> int:
             emit({"type": "item.started", "item": {"id": "item_3", "type": "command_execution", "command": "sleep"}})
             time.sleep(seconds)
             child.wait()
+
+    if "HADS_FAKE_VERIFY_UNKNOWN" in prompt and is_verification(prompt):
+        # P4-10d. 이 작업 디렉터리의 첫 검증만 결과를 남기지 않고 끝난다(끝 이벤트·최종 메시지 없음 → `unknown`).
+        marker = Path(tempfile.gettempdir()) / (
+            "hads-fake-unknown-" + hashlib.sha1(os.getcwd().lower().encode("utf-8")).hexdigest()[:16]
+        )
+        if not marker.exists():
+            marker.write_text("unknown\n", encoding="utf-8")
+            return 0
+
+    if is_discussion(prompt) and "HADS_FAKE_REPLY_UNKNOWN" in last_user_message(prompt):
+        return 0  # P4-10d. 결과를 남기지 않고 끝난 논의 응답(`unknown`)
 
     if "HADS_FAKE_RO_WRITE" in prompt and is_discussion(prompt):
         Path("RO-STRAY.txt").write_text("a read-only run wrote this\n", encoding="utf-8")

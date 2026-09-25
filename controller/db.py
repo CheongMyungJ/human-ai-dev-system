@@ -20,7 +20,7 @@ from domain.knowledge import Decision as KnowledgeDecision
 from domain.models import NOT_STARTED_REASONS, REQUEST_OUTCOME_REASONS, REQUEST_STATES
 
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
-SCHEMA_VERSION = 29
+SCHEMA_VERSION = 30
 
 
 def utc_now() -> str:
@@ -623,6 +623,10 @@ def migrate(conn: sqlite3.Connection) -> None:
         "read_only_change_json",
         "TEXT CHECK (read_only_change_json IS NULL OR length(read_only_change_json) <= 500)",
     )
+
+    # v30: P4-10d — 이슈 #10(D-98) 결과 모름 실행의 해소. 새 표 `run_unknown_confirmation`(사람의 확인, 실행당 하나)은
+    #      `schema.sql` 이 만든다(`CREATE TABLE IF NOT EXISTS`). 기존 표 변경·데이터 이행 없음 — 뒤 시도로 대체된 실행은
+    #      도출이라 옛 Case 에도 곧바로 적용된다.
 
     row = conn.execute("SELECT MAX(version) AS v FROM schema_version").fetchone()
     current = row["v"] if row is not None else None

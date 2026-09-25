@@ -103,7 +103,9 @@ class WorkProgressor:
         if run.get("request_id"):
             # 요청에 묶인 실행은 처리기가 `continue_request` 로 넘긴다(요청 종료와 한 자리).
             return {"criteria": applied}
-        return self.advance(case_id, None)
+        # P4-10d. 요청 없는 실행이다. Case 에 열린 **진행 요청**이 있으면 그것을 넘긴다 — 사람 대기·완료로 끝나면 그 요청도
+        # 끝나야 한다(넘기지 않으면 "처리 중" 으로 남는다). 사용자 요청은 처리기가 끝낸다.
+        return self.advance(case_id, self._open_progress_request_id(case_id))
 
     def on_human_input(self, case_id: str, *, origin_ref: str) -> dict[str, Any] | None:
         """사람의 결정·답변 뒤. 활성 요청이 없으면 다음 걸음을 만든다(필요하면 진행 요청을 연다)."""
@@ -120,6 +122,20 @@ class WorkProgressor:
             # 끝날 때 본다.
             return None
         return self.advance(case_id, None, origin="human_decision", origin_ref=origin_ref)
+
+    def on_runs_settled(self, case_id: str) -> dict[str, Any] | None:
+        """P4-10d(이슈 #10). 미정리 실행이 풀렸을 수 있다(PC 의 잔류 재확인). 그 대기(`unsettled_runs`)에서 멈춰 있으면
+        다시 본다 — 자동 완료·다음 대기. 다른 상태면 아무 것도 하지 않는다(그 상태의 사건이 잇는다)."""
+        if not self.enabled:
+            return None
+        progress = self.repo.progress_state(case_id)
+        if progress is None or progress["state"] != workflow.ProgressState.WAITING_HUMAN:
+            return None
+        if not any(w.get("code") == workflow.WaitReason.UNSETTLED_RUNS for w in progress.get("wait") or []):
+            return None
+        if self.repo.active_request(case_id) is not None:
+            return None
+        return self.advance(case_id, None, origin="system_resume", origin_ref="runs_settled")
 
     def on_gate_reviewed(self, case_id: str) -> dict[str, Any] | None:
         """QG-01 독립 검토 결과가 붙은 뒤(결과 보고 **뒤에** 온다). 그 판정으로 다음 걸음을 본다."""
@@ -219,6 +235,16 @@ class WorkProgressor:
             # P4-09(e). 취소된 Case 에서는 아무 걸음도 만들지 않는다(늦은 결과·결정 무반응).
             return None
         outcome: dict[str, Any] = {"run_created": False, "steps": []}
+        self._note_settled_unknown_runs(case_id, request_id)
+        # P4-10d. 자동 완료는 결과 보고·기준 판정 때 스스로 시도된다. 그 밖에서 조건이 갖춰질 수 있다 — 결과 모름 실행의
+        # 대체·사람 확인·잔류 재확인, 그리고 **고치기 전에 걸린 Case 의 재시작 복구**(이슈 #10). 조건이 안 되면 아무 것도
+        # 하지 않는 함수다(후보도 만들지 않는다).
+        try:
+            self.repo.maybe_auto_complete(case_id)
+        except (ConflictError, NotFoundError) as exc:
+            self.repo.record_progress_event(
+                case_id, "auto_complete", "refused", request_id=request_id, detail=str(exc)[:200]
+            )
         for _ in range(MAX_STEPS_PER_ADVANCE):
             state = self.repo.flow_state(case_id)
             step = workflow.next_step(state)
@@ -354,6 +380,41 @@ class WorkProgressor:
                 return outcome
             return outcome
         return outcome
+
+    def _open_progress_request_id(self, case_id: str) -> str | None:
+        active = self.repo.active_request(case_id)
+        if (
+            active is None
+            or active.get("origin") == "user_message"
+            or active["state"] != RequestState.PROCESSING.value
+            or active.get("stop_requested_at")
+        ):
+            return None
+        return active["id"]
+
+    def _note_settled_unknown_runs(self, case_id: str, request_id: str | None) -> None:
+        """P4-10d(D-98 B). 뒤 시도로 대체된 결과 모름 실행을 진행 이력에 **한 번** 적는다(대체는 도출이라 기록이 따로
+        없다). 결과는 `unknown` 그대로다."""
+        settled = self.repo.unknown_run_settlements(case_id)
+        superseded = {k: v for k, v in settled.items() if v["kind"] == "superseded"}
+        if not superseded:
+            return
+        noted = {
+            e.get("run_id")
+            for e in self.repo.list_progress_events(case_id)
+            if e["step"] == "unknown_run_superseded"
+        }
+        for run_id, how in superseded.items():
+            if run_id in noted:
+                continue
+            self.repo.record_progress_event(
+                case_id, "unknown_run_superseded", "recorded", run_id=run_id, request_id=request_id,
+                detail=(
+                    f"결과를 모르는 {run_id} 는 같은 작업의 뒤 시도 {how['by_run_id']} 가 완료해 종료를 막지 않는다"
+                    " (결과는 unknown 그대로)"
+                )[:200],
+                codes=[how["by_run_id"]],
+            )
 
     # ------------------------------------------------------------- 실행 만들기
 

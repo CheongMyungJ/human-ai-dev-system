@@ -37,6 +37,7 @@ import {
   type ProgressWait,
   type StartBasis,
   type UncommittedList,
+  type UnsettledRunDetail,
 } from '../api'
 import { rulesLink } from '../lib/address'
 import { formatTimeout, minutesToSeconds, suggestedMinutes } from '../lib/timeout'
@@ -239,6 +240,8 @@ function WaitCard(props: {
       return <QualityGateCard {...props} />
     case 'run_timed_out':
       return <RunTimeoutCard {...props} />
+    case 'unsettled_runs':
+      return <UnsettledRunsCard {...props} />
     default:
       // P4-05b. 상한에 걸린 대기는 한도·사용 수를 싣는다 — "한도를 올리고 계속" 카드.
       if (wait.limit_key === 'repair_limit' || wait.limit_key === 'task_retry_limit') {
@@ -710,6 +713,100 @@ function RunTimeoutCard(props: { wait: ProgressWait; progress: ProgressView; cas
         </button>
       </div>
     </div>
+  )
+}
+
+// ------------------------------------------------------------------ 결과 모름 실행 (P4-10d, 이슈 #10, D-98)
+
+/**
+ * 끝났지만 결과를 모르는 실행이 종료를 막는다 — 같은 작업의 뒤 시도로 대체되지 않았다. 사람이 실행(출력·명령)과 작업
+ * 폴더를 보고 **작업공간 영향을 확인했다** + 사유를 적으면 그 실행은 종료를 막지 않는다. 결과는 `unknown` 그대로이고 그
+ * 실행의 기준 보고는 판정에 쓰지 않는다. 끝났는지 모르는 실행은 사람이 대신 확인하지 않는다 — PC 의 확인을 기다린다.
+ */
+function UnsettledRunsCard(props: { wait: ProgressWait; caseId: string; onChanged: () => void }) {
+  const runs = (props.wait.runs as UnsettledRunDetail[] | undefined) ?? []
+  const total = Number(props.wait.total ?? runs.length)
+  return (
+    <div className="sh-card sh-card-wait" data-testid="wait-card-unsettled_runs" data-count={total}>
+      <div className="sh-card-head">
+        <strong>결과를 모르는 실행</strong>
+        <span className="sh-muted"> · {total}건이 종료를 막는다</span>
+      </div>
+      <div className="sh-muted">
+        끝났지만 결과를 모르는 실행이 남았다. 작업 폴더를 건드렸을 수 있어 그대로는 종료를 확정하지 않는다. 실행 상세(출력·명령)와
+        작업 폴더를 보고 영향을 확인했으면 확인을 적는다 — 결과는 &quot;모름&quot; 그대로 남고 이 실행만 종료를 막지 않게 된다(인수·예외가
+        아니다). 같은 작업을 다시 해 완료한 실행은 자동으로 풀린다.
+      </div>
+      <ul className="sh-result-list">
+        {runs.map((run) => (
+          <UnsettledRunRow key={run.run_id} run={run} caseId={props.caseId} onChanged={props.onChanged} />
+        ))}
+      </ul>
+      {total > runs.length && <p className="sh-muted">그 밖 {total - runs.length}건은 작업·실행 탭에서 본다</p>}
+    </div>
+  )
+}
+
+function UnsettledRunRow(props: { run: UnsettledRunDetail; caseId: string; onChanged: () => void }) {
+  const action = useAction(props.onChanged)
+  const { run } = props
+  const [checked, setChecked] = useState(false)
+  const [reason, setReason] = useState('')
+  return (
+    <li
+      className="sh-plain-row"
+      data-testid={`unsettled-run-${run.run_id}`}
+      data-confirmable={String(Boolean(run.confirmable))}
+    >
+      <button
+        type="button"
+        className="sh-link sh-mono"
+        onClick={() => emit('hads:open-run', { caseId: props.caseId, runId: run.run_id })}
+        data-testid={`unsettled-open-${run.run_id}`}
+      >
+        {run.run_id}
+      </button>
+      {run.task_id && run.task_id !== 'conversation' ? ` · 작업 ${run.task_id}` : ''}
+      {run.purpose ? ` · ${run.purpose}` : ''} · 결과 {run.outcome ?? '없음'}
+      {run.finished_at ? ` · 끝남 ${run.finished_at.slice(0, 19).replace('T', ' ')}` : ''}
+      {!run.ended_confirmed && (
+        <div className="sh-notice sh-notice-info" data-testid={`unsettled-unconfirmed-${run.run_id}`}>
+          이 실행이 실제로 끝났는지 PC 가 아직 확인하지 않았다 — 사람이 대신 확인하지 않는다. PC 가 종료를 확인하면(연결되면
+          다시 확인한다) 확인을 적을 수 있다.
+        </div>
+      )}
+      {run.confirmable && (
+        <div className="sh-composer-bar">
+          <label className="sh-muted">
+            <input
+              type="checkbox"
+              checked={checked}
+              onChange={(e) => setChecked(e.target.checked)}
+              data-testid={`unsettled-checked-${run.run_id}`}
+            />{' '}
+            작업공간 영향을 확인했다
+          </label>
+          <input
+            className="sh-rule-input"
+            placeholder="무엇을 보고 확인했는가 (필수)"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            data-testid={`unsettled-reason-${run.run_id}`}
+          />
+          {action.error && <span className="sh-notice sh-notice-warn">{action.error}</span>}
+          <span className="sh-spacer" />
+          <button
+            type="button"
+            className="sh-primary"
+            disabled={action.busy || !checked || !reason.trim()}
+            onClick={() => void action.run(() => progressApi.confirmUnknownRun(props.caseId, run.run_id, reason.trim()))}
+            data-testid={`unsettled-confirm-${run.run_id}`}
+          >
+            확인했다 — 종료를 막지 않음
+          </button>
+        </div>
+      )}
+    </li>
   )
 }
 

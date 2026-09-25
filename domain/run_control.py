@@ -24,6 +24,7 @@ from domain.models import (
     RunExecutionState,
     RunnerConnection,
     RunOutcome,
+    RunPurpose,
     RunStatus,
 )
 
@@ -88,6 +89,39 @@ def execution_unconfirmed(run: dict[str, Any]) -> bool:
     if run.get("not_started_reason"):
         return False
     return run.get("outcome") in INTERRUPTED_OUTCOMES and effective_residual(run) != "none"
+
+
+#: P4-10d(D-98). 같은 작업의 재시도가 아닌 목적 — 논의 응답은 요청마다 다른 답이다.
+NOT_RETRIED_PURPOSES = frozenset({RunPurpose.DISCUSSION_REPLY.value})
+
+
+def superseding_run(run: dict[str, Any], case_runs: Iterable[dict[str, Any]]) -> str | None:
+    """P4-10d(D-98 B). 이 `unknown` 실행을 **대체한** 뒤 시도의 실행 id. 없으면 `None`.
+
+    대체는 셋이 모두 맞을 때다 — 결과를 모르는 실행이 끝났음이 확인됐고(트리가 남아 쓰고 있지 않다), 같은 Case·
+    같은 작업(`task_id`)·같은 목적의 **뒤에 만든** 실행이 `completed` 로 끝났고, 목적이 재시도가 있는 작업이다. 뒤
+    시도가 같은 작업 폴더에서 그 상태를 보고 끝까지 했고 그 뒤 검증이 최종 상태를 봤기 때문이다. 결과는 바꾸지
+    않는다(`unknown` 그대로) — 종료를 막지 않을 뿐이다. `case_runs` 는 같은 Case 의 실행(순서 무관, `created_at` 로 본다).
+    """
+    if run.get("status") != RunStatus.FINISHED.value or run.get("outcome") != RunOutcome.UNKNOWN.value:
+        return None
+    if run.get("purpose") in NOT_RETRIED_PURPOSES or execution_unconfirmed(run):
+        return None
+    created = run.get("created_at") or ""
+    later = sorted(
+        (
+            r
+            for r in case_runs
+            if r.get("run_id") != run.get("run_id")
+            and r.get("task_id") == run.get("task_id")
+            and r.get("purpose") == run.get("purpose")
+            and (r.get("created_at") or "") > created
+            and r.get("status") == RunStatus.FINISHED.value
+            and r.get("outcome") == RunOutcome.COMPLETED.value
+        ),
+        key=lambda r: r.get("created_at") or "",
+    )
+    return later[0]["run_id"] if later else None
 
 
 def run_execution_state(

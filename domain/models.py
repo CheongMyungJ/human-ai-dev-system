@@ -89,6 +89,9 @@ class DecisionKind(str, Enum):
     #: P4-09(e), 이슈 #4. **업무 취소** — 사람이 업무 수행을 중단하기로 한 결정(completion-lifecycle 2절).
     #: 성공도 예외 인수도 아니며 되돌리지 않는다. 사유·행위자가 종료 기록(`closure_record`)에 남는다.
     CASE_CANCELLATION = "case_cancellation"
+    #: P4-10d(D-98 A). 사람이 결과를 모르는(`unknown`) 끝난 실행과 작업공간 영향을 보고 "확인했다" 를 적었다 — 그 실행은
+    #: 종료를 막지 않는다. **결과를 바꾸지 않는다**(`unknown` 그대로). 인수·예외·다른 실행의 허용이 아니다.
+    UNKNOWN_RUN_CONFIRMATION = "unknown_run_confirmation"
 
 
 class RunStatus(str, Enum):

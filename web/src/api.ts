@@ -112,7 +112,28 @@ export interface Run {
   read_only_change?: ReadOnlyChange | null
   // P4-04: 무엇을 주려 했고(계획) 무엇을 실제로 읽었는가(영수증). 서버가 도출한 값이다.
   context?: RunContext
+  // P4-10d(D-98): 결과 모름 실행이 종료를 막지 않게 된 까닭(대체·사람 확인). 결과는 그대로다. 없으면 `null`.
+  unknown_settlement?: UnknownSettlement | null
 }
+
+// P4-10d(D-98). `superseded` = 같은 작업의 뒤 시도가 완료(자동), `confirmed` = 사람이 확인(사유). 표시는 lib/unknownRuns.
+import type { UnknownSettlement } from './lib/unknownRuns'
+export type { UnknownSettlement }
+
+// P4-10d. 미정리 실행 대기(`unsettled_runs`)가 싣는 실행 한 줄. 본문 없음.
+export interface UnsettledRunDetail {
+  run_id: string
+  task_id?: string | null
+  purpose?: string | null
+  status?: string
+  outcome?: string | null
+  stop_reason?: string | null
+  finished_at?: string | null
+  request_id?: string | null
+  ended_confirmed?: boolean
+  confirmable?: boolean
+}
+
 
 //: P4-04. `not_reported` 는 영수증이 없는 실행(P4-04 이전)이다 — 읽음으로 보이지 않는다.
 export type RunContextState = 'complete' | 'partial' | 'blocked' | 'not_reported'
@@ -3716,6 +3737,7 @@ export const WAIT_LABEL: Record<string, string> = {
   objective_without_criteria: '목적 의무에 기준 없음',
   quality_gate: '명시 품질 게이트 미통과',
   run_timed_out: '시간 초과 — 제한 시간 늘리기',
+  unsettled_runs: '결과를 모르는 실행 확인 필요',
   admission_refused: '진입 검사 거부',
   tool_unavailable: '도구를 쓸 수 없음',
   workspace_failed: '작업공간 준비 실패',
@@ -3793,6 +3815,17 @@ export const progressApi = {
     request<{ limits: ProgressLimitsView; progress: ProgressView | null }>(
       `/api/cases/${caseId}/progress/limits/${key}`,
       { method: 'DELETE' },
+    ),
+
+  // P4-10d(D-98 A). 결과를 모르는 끝난 실행을 사람이 확인한다 — 작업공간 영향 확인 표시와 사유가 필수다. 결과는
+  // `unknown` 그대로이고 그 실행이 종료를 막지 않을 뿐이다(인수·예외가 아니다).
+  confirmUnknownRun: (caseId: string, runId: string, reason: string) =>
+    request<{ confirmation: unknown; progress: ProgressView | null }>(
+      `/api/cases/${caseId}/runs/${runId}/unknown-confirmation`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ actor: 'owner', workspace_checked: true, reason }),
+      },
     ),
 
   // 멈춤·막힘·실패 뒤 **계속 진행**. 확인·동의·인수가 아니다 — 다음 걸음을 다시 보라는 요청이다.

@@ -137,6 +137,10 @@ class ProgressLimits:
         return dict(self.sources).get(key, "system_default")
 
 
+#: P4-10d. 미정리 실행 대기가 카드에 싣는 실행 수(대기 기록의 길이 제한 안).
+UNSETTLED_RUNS_SHOWN = 8
+
+
 # ================================================================ 진행 상태 값
 
 
@@ -176,6 +180,9 @@ class WaitReason(str):
     #: P4-10(이슈 #8, D-95). 실행이 제한 시간에 걸려 끊겼고 지금 제한이 그 실행의 제한보다 크지 않다 — 같은
     #: 제한으로 다시 돌리지 않고 사람이 제한을 늘린다.
     RUN_TIMED_OUT = "run_timed_out"
+    #: P4-10d(이슈 #10, D-98). 결과를 모르는 끝난 실행이 종료를 막는다 — 같은 작업의 뒤 시도로 대체되지 않았다. 사람이
+    #: 실행과 작업공간 영향을 보고 확인을 적는다(트리 종료를 모르는 실행은 PC 의 확인을 기다린다).
+    UNSETTLED_RUNS = "unsettled_runs"
 
 
 #: **환경이 막은 것**의 코드. 사람의 결정이 아니라 조치·재시도가 필요하다(D-79 조치 카드).
@@ -216,6 +223,10 @@ WAIT_DETAIL: dict[str, str] = {
     WaitReason.RUN_TIMED_OUT: (
         "실행이 제한 시간에 걸려 끊겼다(실패가 아니라 시간 초과 — 결과는 모름). 같은 제한으로 다시 돌리지 않는다."
         " 제한 시간을 늘려 다시 시도한다"
+    ),
+    WaitReason.UNSETTLED_RUNS: (
+        "결과를 모르는 실행이 남아 종료를 확정할 수 없다. 실행과 작업공간 영향을 보고 확인을 적는다"
+        " (끝났는지 모르는 실행은 PC 의 종료 확인을 기다린다)"
     ),
 }
 
@@ -464,6 +475,9 @@ class FlowState:
     #: P4-10(이슈 #9). 수정 사이클의 입력(`Repository.verification_remediation_state`) — 근거 있는 미충족 후보·제외 이유·
     #: 사용 수·이력. 없으면 사이클을 보지 않는다.
     remediation: dict[str, Any] = field(default_factory=dict)
+    #: P4-10d(D-98). 미정리 실행의 카드용 사실(`Repository.unsettled_run_details`) — 작업·끊긴 이유·끝난 시각·트리 종료
+    #: 확인 여부·사람 확인 가능 여부. 없으면 실행 id 만 싣는다.
+    unsettled_detail: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _limit_wait(
@@ -916,11 +930,19 @@ def _graph_phase(state: FlowState) -> Step | None:
 
 def _completion_phase(state: FlowState) -> Step:
     if state.unsettled_runs:
-        return Step(
-            "busy",
-            "runs_unsettled",
-            "결과를 확정할 수 없는 실행이 남아 있다: "
-            + ", ".join(r["run_id"] for r in state.unsettled_runs),
+        # P4-10d(이슈 #10). **사람 대기다** — 이 자리에 뒤따르는 보고가 없다(`busy` 였을 때 진행 요청이 "처리 중" 으로
+        # 영구히 남았다). 끝나지 않은 실행은 위(`runs_unfinished`)에서 걸리므로 여기 오는 것은 끝났지만 결과를 모르거나
+        # 끝났는지 모르는 실행이다. 트리 종료가 확인되면(잔류 재확인) 진행기가 다시 본다.
+        detail = {d["run_id"]: d for d in state.unsettled_detail}
+        # 대기 기록은 4000자 안이어야 한다 — 카드에 싣는 실행은 앞의 몇 개, 전체 수는 따로 싣는다.
+        runs = [detail.get(r["run_id"]) or {"run_id": r["run_id"]} for r in state.unsettled_runs]
+        return _wait(
+            WaitReason.UNSETTLED_RUNS,
+            detail=(
+                "결과를 모르는 실행이 종료를 막는다: " + ", ".join(r["run_id"] for r in state.unsettled_runs)
+            )[:200],
+            runs=runs[:UNSETTLED_RUNS_SHOWN],
+            total=len(runs),
         )
     unresolved = state.unresolved
     objectives = [u for u in unresolved if u.get("kind") == "objective_without_criteria"]

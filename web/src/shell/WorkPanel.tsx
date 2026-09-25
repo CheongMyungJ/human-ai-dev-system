@@ -35,6 +35,7 @@ import {
 import { emit } from './events'
 import type { ShellCaseDetail } from './useCaseData'
 import { formatTimeout, stopReasonText } from '../lib/timeout'
+import { unknownSettlementBadge, unknownSettlementText } from '../lib/unknownRuns'
 
 const KINDS: TaskKind[] = ['implementation', 'verification', 'investigation', 'experiment', 'integration']
 
@@ -713,6 +714,11 @@ function RunList(props: { runs: Run[]; graph: WorkGraphState | null; onOpen: (ru
                   {' '}· 시간 초과(제한 {formatTimeout(run.timeout_seconds)})
                 </span>
               )}
+              {run.unknown_settlement && (
+                <span className="sh-muted" data-testid={`work-run-settled-${run.run_id}`} data-kind={run.unknown_settlement.kind}>
+                  {' '}· {unknownSettlementBadge(run.unknown_settlement)}
+                </span>
+              )}
               {run.not_started_reason ? ' · 시작하지 않음' : ''} · {when(run.created_at)}
             </li>
           )
@@ -809,6 +815,11 @@ function RunDetail(props: {
                       ? '바뀌지 않음'
                       : '관측하지 못함(git 저장소가 아니거나 실패)'}
                   {run.read_only_change.unobserved.length > 0 && ` · 관측 못 함 ${run.read_only_change.unobserved.join(', ')}`}
+                </li>
+              )}
+              {run.unknown_settlement && (
+                <li className="sh-plain-row" data-testid="run-detail-settlement" data-kind={run.unknown_settlement.kind}>
+                  {unknownSettlementText(run.unknown_settlement)}
                 </li>
               )}
               <li className="sh-plain-row" data-testid="run-detail-timeout" data-stop-reason={run.stop_reason ?? ''}>
